@@ -42,8 +42,13 @@ export function useWire(onFrame: (frame: ServerFrame) => void, onState: (s: Conn
 					// 非 JSON 帧忽略
 				}
 			};
-			ws.onclose = () => {
+			ws.onclose = (ev) => {
 				if (closed) return;
+				// 4401 = 服务端鉴权失败（密码在别处被改）：刷新回登录门，别在这无谓重连
+				if (ev.code === 4401) {
+					location.reload();
+					return;
+				}
 				onStateRef.current("closed");
 				timer = setTimeout(connect, retryMs);
 				retryMs = Math.min(retryMs * 2, 10_000);

@@ -209,6 +209,31 @@ export default function App() {
 	const initialPanels = useMemo(loadPanelPrefs, []);
 	const [leftPanel, setLeftPanel] = useState<PanelId | AgentPanelId | null>(initialPanels.left);
 	const [rightPanel, setRightPanel] = useState<PanelId | null>(initialPanels.right);
+	// 手机（≤999px，与 CSS 抽屉断点一致）：左右栏是全屏抽屉，同时只能开一个。
+	// 用 ref 避免把它塞进每个 setter 的依赖；开一侧时若在手机上，先关另一侧。
+	const mobileRef = useRef(typeof matchMedia !== "undefined" && matchMedia("(max-width: 999px)").matches);
+	useEffect(() => {
+		if (typeof matchMedia === "undefined") return;
+		const mq = matchMedia("(max-width: 999px)");
+		const sync = () => {
+			mobileRef.current = mq.matches;
+			// 切到手机宽度时若两侧都开着，收起右侧只留左侧，回到「单开」不变量
+			if (mq.matches) setRightPanel((r) => (r && leftPanelRef.current ? null : r));
+		};
+		sync();
+		mq.addEventListener("change", sync);
+		return () => mq.removeEventListener("change", sync);
+	}, []);
+	/** 开左栏：手机上先关右栏（单开不变量）。传 null 或函数式更新按原样透传 */
+	const openLeft = useCallback((next: PanelId | AgentPanelId | null) => {
+		if (mobileRef.current && next !== null) setRightPanel(null);
+		setLeftPanel(next);
+	}, []);
+	/** 开右栏：手机上先关左栏 */
+	const openRight = useCallback((next: PanelId | null) => {
+		if (mobileRef.current && next !== null) setLeftPanel(null);
+		setRightPanel(next);
+	}, []);
 	/** 顶栏中央下拉：设置 | 面板 */
 	const [centerMenu, setCenterMenu] = useState<CenterMenu>(null);
 	/** 设置/面板坞保活：关下拉不卸 DOM，再开零冷启动 */
@@ -494,7 +519,7 @@ export default function App() {
 					const sel = leftPanelRef.current;
 					const fresh = next.find((p) => !prev.some((q) => q.name === p.name));
 					if (fresh) {
-						setLeftPanel(agentId(fresh.name));
+						openLeft(agentId(fresh.name));
 					} else {
 						const updated = next.find((p) => {
 							const q = prev.find((x) => x.name === p.name);
@@ -698,7 +723,7 @@ export default function App() {
 			openStoreModal();
 		} else if (/^\/line\s*$/i.test(typed) && pending.length === 0) {
 			setCenterMenu(null);
-			setLeftPanel("worldline");
+			openLeft("worldline");
 		} else {
 			ws.send({ type: "prompt", text });
 		}
@@ -851,13 +876,13 @@ export default function App() {
 		setCenterMenu(null);
 		if (LEFT_OPENABLE.includes(id)) {
 			const next = leftPanel === id ? null : id;
-			setLeftPanel(next);
+			openLeft(next);
 			if (next === "sessions") {
 				setSessions(null);
 				ws.send({ type: "sessions" });
 			}
 		} else {
-			setRightPanel(rightPanel === id ? null : id);
+			openRight(rightPanel === id ? null : id);
 		}
 	};
 
@@ -918,7 +943,7 @@ export default function App() {
 						}}
 						onCompact={() => ws.send({ type: "compact" })}
 						onWorldline={() => {
-							setLeftPanel("worldline");
+							openLeft("worldline");
 						}}
 						onStore={openStoreModal}
 						onRefresh={() => {
@@ -1075,10 +1100,10 @@ export default function App() {
 	) => {
 		// 不关欢迎区：面板与欢迎同屏
 		if (id === "card" || id === "lorebook" || id === "persona" || id === "codex") {
-			setRightPanel(id);
+			openRight(id);
 			return;
 		}
-		setLeftPanel(id);
+		openLeft(id);
 		if (id === "sessions") {
 			setSessions(null);
 			ws.send({ type: "sessions" });
@@ -1249,7 +1274,7 @@ export default function App() {
 										charName={charName}
 										activeAgent={activeAgentName}
 										onOpen={(name) => {
-											setLeftPanel(agentId(name));
+											openLeft(agentId(name));
 											setCenterMenu(null);
 										}}
 										toast={pushToast}
@@ -1287,7 +1312,7 @@ export default function App() {
 									onNew={newSessionFromWelcome}
 									onBrowseAll={() => {
 										dismissWelcome();
-										setLeftPanel("sessions");
+										openLeft("sessions");
 										setSessions(null);
 										ws.send({ type: "sessions" });
 									}}

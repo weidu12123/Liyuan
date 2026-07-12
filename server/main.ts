@@ -12,7 +12,7 @@
  */
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { dirname, extname, isAbsolute, join, normalize } from "node:path";
@@ -27,6 +27,18 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 } from "@liyuan/agent-runtime";
 
+import {
+	ACCESS_COOKIE,
+	clearPassword,
+	issueToken,
+	loadAccess,
+	parseCookies,
+	revokeToken,
+	setPassword,
+	verifyPassword,
+	verifyToken,
+	type AccessData,
+} from "../src/access.ts";
 import { loadCardFile } from "../src/card.ts";
 import { buildGreeting } from "../src/director.ts";
 import { activePanels, loadPanels, savePanels, writePanel } from "../src/panels.ts";
@@ -1145,8 +1157,125 @@ const MIME: Record<string, string> = {
 	".map": "application/json",
 };
 
+// ---------- 访问密码闸门（src/access.ts；设置面板「访问密码」区管理） ----------
+
+let accessData: AccessData | null = loadAccess(cwd);
+let accessFails = 0; // 连续失败计数：≥5 次后每次登录尝试强制延迟
+
+function requestAuthed(req: IncomingMessage): boolean {
+	if (!accessData) return true;
+	return verifyToken(accessData, parseCookies(req.headers.cookie)[ACCESS_COOKIE]);
+}
+
+/** 需过闸的路径：业务 API 与用户数据托管；静态前端壳放行（登录页就在壳里） */
+function accessGuarded(url: string): boolean {
+	if (url.startsWith("/api/")) return !url.startsWith("/api/access/");
+	return url.startsWith("/media/") || url.startsWith("/audio/") || url.startsWith("/uploads/");
+}
+
+function setAccessCookie(res: ServerResponse, token: string | null): void {
+	const base = `${ACCESS_COOKIE}=${token ?? ""}; Path=/; HttpOnly; SameSite=Strict`;
+	res.setHeader("set-cookie", token ? `${base}; Max-Age=31536000` : `${base}; Max-Age=0`);
+}
+
+function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		let size = 0;
+		req.on("data", (c: Buffer) => {
+			size += c.length;
+			if (size > 65536) {
+				reject(new Error("body 过大"));
+				req.destroy();
+				return;
+			}
+			chunks.push(c);
+		});
+		req.on("end", () => {
+			try {
+				resolve(chunks.length ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>) : {});
+			} catch (e) {
+				reject(e as Error);
+			}
+		});
+		req.on("error", reject);
+	});
+}
+
+async function handleAccessApi(req: IncomingMessage, res: ServerResponse, url: string): Promise<void> {
+	const json = (code: number, body: unknown, token?: string | null) => {
+		if (token !== undefined) setAccessCookie(res, token);
+		res.writeHead(code, { "content-type": "application/json" });
+		res.end(JSON.stringify(body));
+	};
+	try {
+		if (req.method === "GET" && url === "/api/access/status") {
+			json(200, { required: !!accessData, ok: requestAuthed(req) });
+			return;
+		}
+		if (req.method === "POST" && url === "/api/access/login") {
+			if (!accessData) {
+				json(400, { error: "未设置访问密码" });
+				return;
+			}
+			if (accessFails >= 5) await new Promise((r) => setTimeout(r, 1500)); // 暴力尝试限速
+			const body = await readJsonBody(req);
+			if (typeof body.password === "string" && verifyPassword(accessData, body.password)) {
+				accessFails = 0;
+				json(200, { ok: true }, issueToken(cwd, accessData));
+			} else {
+				accessFails++;
+				json(401, { error: "密码不正确" });
+			}
+			return;
+		}
+		if (req.method === "POST" && url === "/api/access/set") {
+			const body = await readJsonBody(req);
+			// 已有密码时，任何变更（改/关）都必须先验旧密码
+			if (accessData && (typeof body.oldPassword !== "string" || !verifyPassword(accessData, body.oldPassword))) {
+				json(403, { error: "当前密码不正确" });
+				return;
+			}
+			const next = typeof body.newPassword === "string" ? body.newPassword : "";
+			if (!next) {
+				clearPassword(cwd);
+				accessData = null;
+				json(200, { required: false }, null);
+				return;
+			}
+			if (next.length < 4) {
+				json(400, { error: "密码至少 4 位" });
+				return;
+			}
+			const r = setPassword(cwd, next);
+			accessData = r.data;
+			accessFails = 0;
+			json(200, { required: true }, r.token); // 旧 token 全部失效；当前设备用新 token 续座
+			return;
+		}
+		if (req.method === "POST" && url === "/api/access/logout") {
+			if (accessData) revokeToken(cwd, accessData, parseCookies(req.headers.cookie)[ACCESS_COOKIE]);
+			json(200, { ok: true }, null);
+			return;
+		}
+		json(404, { error: "unknown access endpoint" });
+	} catch (e) {
+		json(400, { error: (e as Error).message });
+	}
+}
+
 const httpServer = createServer((req, res) => {
 	void (async () => {
+		const urlPath = (req.url ?? "/").split("?")[0];
+		if (urlPath.startsWith("/api/access/")) {
+			await handleAccessApi(req, res, urlPath);
+			return;
+		}
+		if (accessGuarded(urlPath) && !requestAuthed(req)) {
+			res.writeHead(401, { "content-type": "application/json" });
+			res.end(JSON.stringify({ error: "需要登录" }));
+			return;
+		}
 		if (await handleApiRequest(req, res, restHost)) return;
 		const url = (req.url ?? "/").split("?")[0];
 		if (url === "/healthz") {
@@ -1528,7 +1657,12 @@ const assertListedSession = async (path: string) => {
 	return found;
 };
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+	// 访问密码闸门：WS 与 REST 同一套 Cookie 凭据
+	if (!requestAuthed(req)) {
+		ws.close(4401, "unauthorized");
+		return;
+	}
 	clients.add(ws);
 	ws.send(JSON.stringify(helloFrame()));
 	if (session.isStreaming) ws.send(JSON.stringify({ type: "agent", state: "start" } satisfies ServerFrame));

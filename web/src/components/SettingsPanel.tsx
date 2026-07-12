@@ -4,9 +4,91 @@
  */
 
 import { useEffect, useState } from "react";
-import { apiGet, apiPut, type RpConfigView } from "../api.ts";
+import { api, apiGet, apiPut, type RpConfigView } from "../api.ts";
 import { getTheme, setTheme, type ThemeMode } from "../theme.ts";
 import { PanelStatus, SliderField, Toggle, useAction, usePanelData } from "./kit.tsx";
+
+/** 访问密码区：未设置=开放（首次零门槛），设置后全端登录才可用 */
+function AccessSection({ toast }: { toast: (level: "info" | "warning" | "error", text: string) => void }) {
+	const [required, setRequired] = useState<boolean | null>(null);
+	const [oldPw, setOldPw] = useState("");
+	const [newPw, setNewPw] = useState("");
+	const [newPw2, setNewPw2] = useState("");
+	const { busy, run } = useAction(toast);
+
+	useEffect(() => {
+		void api<{ required: boolean }>("/api/access/status")
+			.then((r) => setRequired(r.required))
+			.catch(() => setRequired(false));
+	}, []);
+
+	const submit = (turningOff: boolean) =>
+		run(async () => {
+			if (!turningOff) {
+				if (newPw.length < 4) throw new Error("新密码至少 4 位");
+				if (newPw !== newPw2) throw new Error("两次输入的新密码不一致");
+			}
+			const r = await api<{ required: boolean }>("/api/access/set", {
+				method: "POST",
+				body: JSON.stringify({ oldPassword: oldPw, newPassword: turningOff ? "" : newPw }),
+			});
+			setRequired(r.required);
+			setOldPw("");
+			setNewPw("");
+			setNewPw2("");
+		}, turningOff ? "已关闭访问密码" : "已设置访问密码（其他设备需重新登录）");
+
+	return (
+		<section className="sp-section">
+			<h4>访问密码</h4>
+			<div className="field-hint">
+				{required
+					? "已开启：所有设备访问本站都需输入密码。修改或关闭需先验证当前密码。"
+					: "未开启：任何能连到本站的人都可直接使用。部署到公网 / 局域网共享时建议设置。"}
+			</div>
+			{required === null ? null : (
+				<>
+					{required && (
+						<input
+							className="field-input"
+							type="password"
+							placeholder="当前密码"
+							value={oldPw}
+							autoComplete="current-password"
+							onChange={(e) => setOldPw(e.target.value)}
+						/>
+					)}
+					<input
+						className="field-input"
+						type="password"
+						placeholder={required ? "新密码（至少 4 位）" : "设置密码（至少 4 位）"}
+						value={newPw}
+						autoComplete="new-password"
+						onChange={(e) => setNewPw(e.target.value)}
+					/>
+					<input
+						className="field-input"
+						type="password"
+						placeholder="再输一次新密码"
+						value={newPw2}
+						autoComplete="new-password"
+						onChange={(e) => setNewPw2(e.target.value)}
+					/>
+					<div className="access-actions">
+						<button className="drawer-btn save-btn" disabled={busy || !newPw} onClick={() => submit(false)}>
+							{required ? "修改密码" : "设置密码"}
+						</button>
+						{required && (
+							<button className="drawer-btn" disabled={busy || !oldPw} onClick={() => submit(true)}>
+								关闭密码
+							</button>
+						)}
+					</div>
+				</>
+			)}
+		</section>
+	);
+}
 
 export function SettingsPanel({ toast }: { toast: (level: "info" | "warning" | "error", text: string) => void }) {
 	const { data, error, loading, reload } = usePanelData(() => apiGet<{ config: RpConfigView }>("/api/config"), { cacheKey: "/api/config" });
@@ -62,6 +144,7 @@ export function SettingsPanel({ toast }: { toast: (level: "info" | "warning" | "
 				</div>
 				<div className="field-hint">白昼 / 黑夜立刻切换，偏好记在本机浏览器，与会话配置无关。</div>
 			</section>
+			<AccessSection toast={toast} />
 			{data && (
 				<>
 					<section className="sp-section">

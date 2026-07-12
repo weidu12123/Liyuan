@@ -5787,3 +5787,73 @@ label.drawer-btn {
 	outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
 	outline-offset: 2px;
 }
+
+/* ---------- 登录门（LoginGate）与访问密码设置 ---------- */
+.login-gate {
+	position: fixed;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	background: var(--bg);
+	background-image: radial-gradient(120% 90% at 50% -10%, var(--bg-glow), var(--bg) 70%);
+	padding: 24px;
+	z-index: 1000;
+}
+.login-gate-blank {
+	background: var(--bg);
+}
+.login-card {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	width: min(340px, 100%);
+	padding: 32px 28px;
+	background: var(--surface);
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius-l, 16px);
+	box-shadow: var(--shadow-2, 0 12px 40px rgba(0, 0, 0, 0.08));
+}
+.login-logo {
+	border-radius: 14px;
+}
+.login-title {
+	font-size: 22px;
+	font-weight: 700;
+	letter-spacing: 4px;
+	color: var(--text-strong);
+}
+.login-sub {
+	font-size: 13px;
+	color: var(--text-soft);
+	margin-bottom: 4px;
+}
+.login-input {
+	width: 100%;
+	box-sizing: border-box;
+	text-align: center;
+	letter-spacing: 2px;
+}
+.login-btn {
+	width: 100%;
+	margin-top: 4px;
+}
+.login-error {
+	font-size: 12.5px;
+	color: var(--accent-strong);
+	text-align: center;
+}
+/* 访问密码设置区 */
+.sp-section .field-input {
+	width: 100%;
+	box-sizing: border-box;
+	margin-top: 8px;
+}
+.access-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 10px;
+}
+.access-actions .drawer-btn {
+	flex: 1;
+}

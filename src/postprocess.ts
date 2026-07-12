@@ -2,12 +2,11 @@
  * 输出后处理
  *
  * 1) cleanAssistantText：送往 LLM 的历史卫生（D9 few-shot 防增殖；会话文件仍保留原文）
- * 2) displayAssistantText：Web 显示层卫生——ST 预设常用「假思维链 / 草稿 / 正文包装 / 状态块」
- *    靠正则隐去，梨园无 ST 正则，必须在展示通道剥脚手架，只露叙事正文（D10：不改写正文用字，
- *    只拆掉非叙事包装）。
+ * 2) displayAssistantText：Web 显示层——剥「假思维链/草稿/注释/正文包装」，
+ *    **保留状态栏标签**（StatusBlock / normal_status / special_status）给前端面板渲染。
  */
 
-/** 整块剥离（分析 / 假思维链 / 草稿 / 状态类，用户不应当正文读） */
+/** 送模历史：整块剥离（含状态栏，避免 few-shot 增殖） */
 export const STRIP_BLOCK_TAGS = [
 	"descriptive_analysis",
 	"normal_status",
@@ -22,6 +21,19 @@ export const STRIP_BLOCK_TAGS = [
 	"StatusBlock",
 	"status_block",
 	"statusblock",
+];
+
+/**
+ * 仅显示层剥掉的脚手架（用户不该当正文读的假思维/草稿）。
+ * 注意：不含 StatusBlock / normal_status / special_status——那些要进状态面板。
+ */
+export const DISPLAY_STRIP_SCAFFOLD_TAGS = [
+	"descriptive_analysis",
+	"thinking",
+	"think",
+	"draft_notes",
+	"draft",
+	"reasoning",
 ];
 
 /** 只拆包装保留内容（正文容器类） */
@@ -58,7 +70,7 @@ function tidyWhitespace(text: string): string {
 		.trim();
 }
 
-/** 历史送模用：剥脚手架，拆正文包装 */
+/** 历史送模用：剥脚手架+状态栏，拆正文包装 */
 export function cleanAssistantText(text: string): string {
 	let t = stripBlocks(text, STRIP_BLOCK_TAGS);
 	t = unwrapBlocks(t, UNWRAP_BLOCK_TAGS);
@@ -66,30 +78,28 @@ export function cleanAssistantText(text: string): string {
 }
 
 /**
- * 显示层用：在 clean 基础上再处理 ST 预设常见噪音。
- * - HTML 注释（如 <!-- Prism: ... -->）
- * - 「### 正文」类分隔标题
- * - 残留的单独标签行
+ * 显示层用：
+ * - 剥假思维链 / 草稿 / 分析
+ * - 拆 content/plot 包装，只留叙事
+ * - **保留** StatusBlock / normal_status / special_status 给 RichContent 画状态面板
+ * - 去掉 HTML 注释与「### 正文」分隔行
  */
 export function displayAssistantText(text: string): string {
 	let t = text;
-	// 先抽出假思维/草稿整块（与 STRIP 一致）
-	t = stripBlocks(t, STRIP_BLOCK_TAGS);
-	// 正文容器拆包
+	t = stripBlocks(t, DISPLAY_STRIP_SCAFFOLD_TAGS);
 	t = unwrapBlocks(t, UNWRAP_BLOCK_TAGS);
-	// ST/预设常用 HTML 注释作导演旁注
+	// ST/预设常用 HTML 注释作导演旁注（Prism 等）
 	t = t.replace(/<!--[\s\S]*?-->/g, "");
 	// 常见分隔标题（单独成行）
 	t = t.replace(/^\s*#{1,6}\s*正文\s*$/gim, "");
-	t = t.replace(/^\s*#{1,6}\s*(thinking|draft|notes?|status)\s*$/gim, "");
-	// 残留空标签行
+	t = t.replace(/^\s*#{1,6}\s*(thinking|draft|notes?)\s*$/gim, "");
+	// 残留空标签行（勿误伤 StatusBlock 等有内容的块——只删整行空标签）
 	t = t.replace(/^\s*<\/?[A-Za-z][\w-]*\s*>\s*$/gm, "");
 	return tidyWhitespace(t);
 }
 
 /**
  * 从助手原文中抽出应折叠展示的「假思维链」块（供 UI ThinkingBlock）。
- * 不改写叙事，只额外提供可折叠元信息。
  */
 export function extractScaffoldThinking(text: string): string {
 	const parts: string[] = [];

@@ -41,7 +41,7 @@ test("悬挂开标签剥到末尾；无结构块的文本只做空白收敛", ()
 	assert.equal(cleanAssistantText("行尾空白   \n\n\n\n下一段。"), "行尾空白\n\n下一段。");
 });
 
-test("displayAssistantText：假思维链/草稿/content 包装/HTML 注释/### 正文", () => {
+test("displayAssistantText：假思维链/草稿隐去，状态栏保留，content 拆包", () => {
 	const raw = `<draft_notes>
 本轮分析：用户要润墨
 </draft_notes>
@@ -58,6 +58,7 @@ test("displayAssistantText：假思维链/草稿/content 包装/HTML 注释/### 
 
 <StatusBlock>
 地点:御书房
+姓名:文舒婉
 </StatusBlock>`;
 	const out = displayAssistantText(raw);
 	assert.ok(!out.includes("draft_notes"), "草稿块应隐去");
@@ -66,7 +67,8 @@ test("displayAssistantText：假思维链/草稿/content 包装/HTML 注释/### 
 	assert.ok(!out.includes("</content>"));
 	assert.ok(!out.includes("Prism"), "HTML 注释应隐去");
 	assert.ok(!out.includes("### 正文"), "分隔标题应隐去");
-	assert.ok(!out.includes("StatusBlock"), "StatusBlock 整块剥离（显示层）");
+	assert.ok(out.includes("<StatusBlock>"), "状态栏保留给前端面板");
+	assert.ok(out.includes("地点:御书房"));
 	assert.ok(out.includes("文舒婉听话了"));
 	assert.ok(out.includes("她拿起墨条"));
 });

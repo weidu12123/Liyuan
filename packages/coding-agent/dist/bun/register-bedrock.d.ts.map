@@ -1,0 +1,1 @@
+{"version":3,"file":"register-bedrock.d.ts","sourceRoot":"","sources":["../../src/bun/register-bedrock.ts"],"names":[],"mappings":"","sourcesContent":["import { bedrockProviderModule } from \"@liyuan/ai/bedrock-provider\";\nimport { setBedrockProviderModule } from \"@liyuan/ai/compat\";\n\nsetBedrockProviderModule(bedrockProviderModule);\n"]}

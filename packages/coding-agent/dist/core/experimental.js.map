@@ -1,0 +1,1 @@
+{"version":3,"file":"experimental.js","sourceRoot":"","sources":["../../src/core/experimental.ts"],"names":[],"mappings":"AAAA,MAAM,UAAU,8BAA8B,GAAY;IACzD,OAAO,OAAO,CAAC,GAAG,CAAC,eAAe,KAAK,GAAG,CAAC;AAAA,CAC3C","sourcesContent":["export function areExperimentalFeaturesEnabled(): boolean {\n\treturn process.env.PI_EXPERIMENTAL === \"1\";\n}\n"]}

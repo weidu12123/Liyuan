@@ -1,0 +1,1 @@
+{"version":3,"file":"oauth.d.ts","sourceRoot":"","sources":["../src/oauth.ts"],"names":[],"mappings":"AAAA,cAAc,wBAAwB,CAAC","sourcesContent":["export * from \"./utils/oauth/index.ts\";\n"]}

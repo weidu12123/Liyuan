@@ -1,0 +1,14 @@
+{
+	"card": "assets/cards/default_Qingwu.json",
+	"lorebooks": [],
+	"userName": "旅人",
+	"userPersona": "",
+	"language": "中文",
+	"scanDepth": 4,
+	"maxLoreInjections": 3,
+	"greeting": true,
+	"backendControl": true,
+	"creationMode": "ask",
+	"importStripTags": [],
+	"greetingIndex": 0
+}

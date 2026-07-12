@@ -1,0 +1,38 @@
+{
+	"name": "梨园",
+	"short_name": "梨园",
+	"description": "角色扮演 Agent",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"orientation": "any",
+	"background_color": "#f7f4f0",
+	"theme_color": "#f7f4f0",
+	"lang": "zh-CN",
+	"icons": [
+		{
+			"src": "/logo-192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/logo-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/logo-maskable-192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "maskable"
+		},
+		{
+			"src": "/logo-maskable-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "maskable"
+		}
+	]
+}

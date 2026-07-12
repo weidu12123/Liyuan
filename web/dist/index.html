@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+		<meta name="theme-color" content="#f7f4f0" media="(prefers-color-scheme: light)" />
+		<meta name="theme-color" content="#1a1614" media="(prefers-color-scheme: dark)" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+		<meta name="apple-mobile-web-app-title" content="梨园" />
+		<meta name="application-name" content="梨园" />
+		<link rel="manifest" href="/site.webmanifest" />
+		<link rel="icon" href="/favicon.png" type="image/png" sizes="32x32" />
+		<link rel="icon" href="/logo-192.png" type="image/png" sizes="192x192" />
+		<link rel="apple-touch-icon" href="/logo-180.png" sizes="180x180" />
+		<link rel="apple-touch-icon" href="/logo-192.png" sizes="192x192" />
+		<link rel="apple-touch-icon" href="/logo-512.png" sizes="512x512" />
+		<title>梨园</title>
+		<script>
+			/* 尽早应用主题，避免白昼闪一下 */
+			try {
+				var t = localStorage.getItem("liyuan.theme");
+				if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+			} catch (e) {}
+		</script>
+		<script type="module" crossorigin src="/assets/index-Bse6NIne.js"></script>
+		<link rel="stylesheet" crossorigin href="/assets/index-Bd8-t29M.css">
+	</head>
+	<body>
+		<div id="root"></div>
+	</body>
+</html>

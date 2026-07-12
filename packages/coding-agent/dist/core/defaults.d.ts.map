@@ -1,0 +1,1 @@
+{"version":3,"file":"defaults.d.ts","sourceRoot":"","sources":["../../src/core/defaults.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,oBAAoB,CAAC;AAExD,eAAO,MAAM,sBAAsB,EAAE,aAAwB,CAAC","sourcesContent":["import type { ThinkingLevel } from \"@liyuan/agent-core\";\n\nexport const DEFAULT_THINKING_LEVEL: ThinkingLevel = \"medium\";\n"]}

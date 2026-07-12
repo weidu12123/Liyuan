@@ -1,0 +1,16 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"paths": {
+			"@liyuan/agent-runtime": ["./src/index.ts"],
+			"@liyuan/agent-runtime/hooks": ["./src/core/hooks/index.ts"],
+			"@liyuan/tui": ["../tui/src/index.ts"],
+			"@liyuan/ai": ["../ai/src/index.ts"],
+			"typebox": ["../../node_modules/typebox"]
+		},
+		"skipLibCheck": true
+	},
+	"include": ["examples/**/*.ts"],
+	"exclude": ["node_modules", "dist"]
+}

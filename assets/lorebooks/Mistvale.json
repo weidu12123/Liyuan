@@ -1,0 +1,68 @@
+{
+	"entries": {
+		"0": {
+			"uid": 0,
+			"key": ["Gloomhound", "hound"],
+			"keysecondary": [],
+			"comment": "gloomhound",
+			"content": "The Gloomhound is a black beast that stalks the mist at the edge of Mistvale. Legend says it carries an old curse: those who meet its eyes see only darkness for three days. Hunters leave the deep paths alone after dusk because of it.",
+			"constant": false,
+			"selective": false,
+			"order": 100,
+			"position": 0,
+			"disable": false,
+			"addMemo": true,
+			"excludeRecursion": false,
+			"probability": 100,
+			"useProbability": false
+		},
+		"1": {
+			"uid": 1,
+			"key": ["Mistvale", "wood", "vale"],
+			"keysecondary": [],
+			"comment": "mistvale",
+			"content": "Mistvale is a fog-bound valley of old pines and mossy stone. Travelers say the fog thickens at dusk until the far side of the road disappears. The village at its mouth trades in resin, timber and dried mushrooms.",
+			"constant": false,
+			"selective": false,
+			"order": 100,
+			"position": 0,
+			"disable": false,
+			"addMemo": true,
+			"excludeRecursion": false,
+			"probability": 100,
+			"useProbability": false
+		},
+		"2": {
+			"uid": 2,
+			"key": ["glade", "clearing"],
+			"keysecondary": [],
+			"comment": "glade",
+			"content": "Deep in the valley lies a quiet glade where the fog never enters. Wildflowers grow there in every season, and the air stays warm even in winter. The villagers treat the clearing as neutral ground for meetings and oaths.",
+			"constant": false,
+			"selective": false,
+			"order": 100,
+			"position": 0,
+			"disable": false,
+			"addMemo": true,
+			"excludeRecursion": false,
+			"probability": 100,
+			"useProbability": false
+		},
+		"3": {
+			"uid": 3,
+			"key": ["wardstone", "magic"],
+			"keysecondary": [],
+			"comment": "wardstone",
+			"content": "Wardstones are waist-high pillars carved with spiral marks, planted along the valley road. Each stone holds a mild protective power that keeps the fog and the beasts at bay. When a wardstone cracks, the nearest village must send a mason within a season.",
+			"constant": false,
+			"selective": false,
+			"order": 100,
+			"position": 0,
+			"disable": false,
+			"addMemo": true,
+			"excludeRecursion": false,
+			"probability": 100,
+			"useProbability": false
+		}
+	}
+}

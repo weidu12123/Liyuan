@@ -1,0 +1,64 @@
+# deps
+node_modules/
+web/node_modules/
+packages/**/node_modules/
+
+# runtime / user data (never ship)
+# 例外：.liyuan/extensions/ 是产品接线层源码，必须进仓库
+.liyuan/*
+!.liyuan/extensions/
+!.liyuan/extensions/**
+.liyuan-artifacts/
+.liyuan-cache/
+.liyuan-codex/
+.liyuan-lore/
+.liyuan-media/
+.liyuan-skills/
+.liyuan-state/
+.liyuan-uploads/
+.liyuan-audio/
+.liyuan-personas.json
+.rp-media/
+.rp-uploads/
+.playwright-mcp/
+
+# local secrets & personal config
+liyuan.agent.json
+liyuan.agent.meta.json
+liyuan.config.json
+liyuan-preset.json
+rp.config*.json
+liyuan-profiles/
+*.bak
+.env
+.env.*
+
+# logs / build noise
+*.log
+_web-*.log
+web/tsconfig.tsbuildinfo
+**/*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# local-only assets (personal / copyright cards — keep defaults only)
+assets/cards/凡人*
+assets/cards/大乾*
+assets/cards/-.png
+assets/lorebooks/大乾*
+assets/lorebooks/第九*
+assets/ab-test/
+assets/import-test/
+assets/personas/
+
+# local debug screenshots (not for testers)
+web/shot-*.png
+web/bug-*.png
+web/fix-*.png
+web/latest-ui.png
+scripts/tmp-test-image.png
+
+# optional: keep web/dist for easier clone-and-run; uncomment to force rebuild
+# web/dist/

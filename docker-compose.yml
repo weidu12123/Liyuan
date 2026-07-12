@@ -1,0 +1,57 @@
+# Liyuan Agent 1.0 — Docker Compose
+# 用法：
+#   docker compose up -d --build
+#   浏览器 http://localhost:7620
+#   编辑密钥：把本地 liyuan.agent.json 挂进去，或 docker exec 进容器改
+
+services:
+  liyuan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: liyuan:1.0.0
+    container_name: liyuan
+    restart: unless-stopped
+    ports:
+      - "${LIYUAN_PORT:-7620}:7620"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "7620"
+      # 可选：把 TTS 等密钥用环境变量注入（见 src/tts.ts）
+      # OPENAI_API_KEY: ""
+      # DEEPSEEK_API_KEY: ""
+    volumes:
+      # 持久化 agent 会话 / 用户数据
+      - liyuan-agent:/root/.liyuan
+      - liyuan-state:/app/.liyuan-state
+      - liyuan-uploads:/app/.liyuan-uploads
+      - liyuan-media:/app/.liyuan-media
+      - liyuan-audio:/app/.liyuan-audio
+      - liyuan-artifacts:/app/.liyuan-artifacts
+      - liyuan-codex:/app/.liyuan-codex
+      - liyuan-lore:/app/.liyuan-lore
+      # 可选：挂载自己的配置（取消注释并准备文件）
+      # - ./liyuan.agent.json:/app/liyuan.agent.json:ro
+      # - ./liyuan.config.json:/app/liyuan.config.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:7620/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+volumes:
+  liyuan-agent:
+  liyuan-state:
+  liyuan-uploads:
+  liyuan-media:
+  liyuan-audio:
+  liyuan-artifacts:
+  liyuan-codex:
+  liyuan-lore:

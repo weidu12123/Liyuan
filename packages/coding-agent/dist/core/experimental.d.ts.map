@@ -1,0 +1,1 @@
+{"version":3,"file":"experimental.d.ts","sourceRoot":"","sources":["../../src/core/experimental.ts"],"names":[],"mappings":"AAAA,wBAAgB,8BAA8B,IAAI,OAAO,CAExD","sourcesContent":["export function areExperimentalFeaturesEnabled(): boolean {\n\treturn process.env.PI_EXPERIMENTAL === \"1\";\n}\n"]}

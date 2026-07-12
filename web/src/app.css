@@ -457,6 +457,16 @@ svg {
 }
 .tb-drop-body .panel-body {
 	padding: 8px 14px 4px;
+	/* 下拉里唯一的滚动容器是 .tb-drop-body：此处不再嵌套滚动，
+	   让内容自然撑高、由外层滚（侧栏里 .panel-body 仍自带滚动，不受影响）。 */
+	overflow: visible;
+	flex: none;
+	min-height: auto;
+}
+/* 下拉里 .panel-body 不是滚动容器，保存条改为随流（否则 sticky 参照系错位会遮内容） */
+.tb-drop-body .sticky-save {
+	position: static;
+	background: none;
 }
 .dock-list {
 	display: flex;

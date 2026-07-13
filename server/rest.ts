@@ -113,6 +113,8 @@ export interface CurrentModelInfo {
 	availableLevels: string[];
 	/** 当前模型上下文窗口（来自 models.json / 连接配置；默认 128000） */
 	contextWindow: number;
+	/** 单次最大输出（来自 models.json / 连接配置；缺省时 registry 用 16384） */
+	maxTokens?: number;
 }
 
 export interface ModelInfo {
@@ -124,6 +126,7 @@ export interface ModelInfo {
 	/** 支持图片输入（上传图片可被该模型看见） */
 	vision: boolean;
 	contextWindow: number;
+	maxTokens?: number;
 }
 
 export interface AuthProviderInfo {
@@ -499,15 +502,15 @@ function loadOrSeedAgentConfig(host: RestHost): { path: string; exists: boolean;
 	const loaded = loadAgentConfig(host.cwd);
 
 	// 已有配置：把残留 $ENV 收成配置文件明文（Agent 只读自己的配置文件）
+	// 并始终把 liyuan.agent.json 同步到 models.json，避免手改 agent.json 后重启/重开面板仍用旧 maxTokens
 	if (Object.keys(loaded.config.providers).length > 0) {
 		const cfg = loaded.config;
 		if (materializeEnvKeysInConfig(cfg)) {
 			saveAgentConfig(host.cwd, cfg);
-			syncAgentConfigToRuntime(host.cwd, host.agentDir(), cfg);
-			host.refreshModels();
-			return { path: loaded.path, exists: true, config: cfg, seeded: false };
 		}
-		return { ...loaded, seeded: false };
+		syncAgentConfigToRuntime(host.cwd, host.agentDir(), cfg);
+		host.refreshModels();
+		return { path: loaded.path, exists: true, config: cfg, seeded: false };
 	}
 
 	const { current } = host.listModels();
@@ -551,14 +554,43 @@ function persistAgentConfig(host: RestHost, config: LiyuanAgentConfig): LiyuanAg
 	return normalized;
 }
 
-/** models.json 刷新后，把会话里的 model 对象换成新条目（contextWindow 等字段才生效） */
-async function rebindCurrentModel(host: RestHost): Promise<void> {
+/** 从 Agent 配置解析某模型的思考档：模型条目 > defaultThinkingLevel */
+function thinkingLevelFromConfig(
+	config: LiyuanAgentConfig,
+	provider: string,
+	modelId: string,
+): string | undefined {
+	const p = config.providers?.[provider];
+	const list = Array.isArray(p?.models) ? p.models : [];
+	const m = list.find((x) => String(x.id) === modelId);
+	const per = typeof m?.thinkingLevel === "string" ? m.thinkingLevel.trim() : "";
+	if (per) return per;
+	const def = typeof config.defaultThinkingLevel === "string" ? config.defaultThinkingLevel.trim() : "";
+	return def || undefined;
+}
+
+/**
+ * models.json 刷新后：重绑当前模型（contextWindow / maxTokens）
+ * 并把配置里的思考档写回会话（配置 → 当前生效，双向里「从配置上来」这一侧）
+ */
+async function rebindCurrentModel(host: RestHost, config?: LiyuanAgentConfig): Promise<void> {
 	const cur = host.listModels().current;
 	if (!cur) return;
 	try {
 		await host.selectModel(cur.provider, cur.id);
 	} catch {
 		// 模型可能暂不可用；配置已落盘，下次切换仍会带上新字段
+	}
+	const cfg = config ?? loadAgentConfig(host.cwd).config;
+	const after = host.listModels().current;
+	if (!after) return;
+	const think = thinkingLevelFromConfig(cfg, after.provider, after.id);
+	if (think) {
+		try {
+			host.setThinkingLevel(think);
+		} catch {
+			/* 模型不认该档位名时忽略 */
+		}
 	}
 }
 
@@ -2050,6 +2082,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
 			// ---- 模型 ----
 			case "GET /api/models": {
+				// 打开连接面板时：agent.json → models.json，并重绑当前模型（手改 maxTokens 等无需整进程重启）
+				loadOrSeedAgentConfig(host);
+				await rebindCurrentModel(host);
 				sendJson(res, 200, host.listModels());
 				return true;
 			}
@@ -2177,10 +2212,19 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				});
 				return true;
 			}
-			case "POST /api/agent-profiles/enable": {
+			case "POST /api/agent-profiles/enable":
+			case "POST /api/agent-profiles/refresh": {
+				// enable：启用仓库配置；refresh：已启用时从仓库/磁盘重读并重传到 models.json（不必先关再开）
+				const isRefresh = route === "POST /api/agent-profiles/refresh";
 				const body = JSON.parse(await readBody(req)) as { id?: string };
 				const id = (body.id ?? "").trim();
 				if (!id) throw new Error("缺少 id");
+				if (isRefresh) {
+					const active = listProfiles(host.cwd).find((p) => p.active);
+					if (active?.id !== id) {
+						throw new Error("只能刷新「启用中」的配置；其它配置请先点启用");
+					}
+				}
 				const config = enableProfile(host.cwd, host.agentDir(), id);
 				host.refreshModels();
 				// 切换到配置里的默认模型
@@ -2190,17 +2234,13 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					} catch {
 						/* 模型可能暂不可用 */
 					}
-					if (config.defaultThinkingLevel) {
-						try {
-							host.setThinkingLevel(config.defaultThinkingLevel);
-						} catch {
-							/* */
-						}
-					}
 				}
-				host.notify("info", `已启用配置「${id}」`);
+				// 模型条目 thinkingLevel > defaultThinkingLevel → 会话当前生效
+				await rebindCurrentModel(host, config);
+				host.notify("info", isRefresh ? `已刷新配置「${id}」并重传到运行时` : `已启用配置「${id}」`);
 				sendJson(res, 200, {
 					ok: true,
+					refreshed: isRefresh,
 					config,
 					profiles: listProfiles(host.cwd),
 					current: host.listModels().current,
@@ -2219,6 +2259,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// ---- 当前启用的 Agent 配置（liyuan.agent.json）----
 			case "GET /api/agent-config": {
 				const { path, exists, config, seeded } = loadOrSeedAgentConfig(host);
+				await rebindCurrentModel(host);
 				if (seeded) host.notify("info", "已将当前使用中的渠道收编进梨园 Agent 配置");
 				sendJson(res, 200, {
 					path,

@@ -568,8 +568,19 @@ function buildParams(
 	}
 
 	if (options?.maxTokens) {
-		if (compat.maxTokensField === "max_tokens") {
+		// 官方 OpenAI 新模型偏 max_completion_tokens；国内/自建中转多数只认 max_tokens。
+		// 非官方端点：只发 max_tokens（双发时部分网关会丢/忽略）。
+		const base = model.baseUrl || "";
+		const official =
+			base.includes("api.openai.com") ||
+			base.includes("openai.azure.com") ||
+			base.includes("cognitiveservices.azure.com");
+		const field = compat.maxTokensField ?? (official ? "max_completion_tokens" : "max_tokens");
+		if (field === "max_tokens" || !official) {
 			(params as any).max_tokens = options.maxTokens;
+			if (official && field !== "max_tokens") {
+				params.max_completion_tokens = options.maxTokens;
+			}
 		} else {
 			params.max_completion_tokens = options.maxTokens;
 		}

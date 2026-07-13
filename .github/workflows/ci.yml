@@ -1,0 +1,99 @@
+# Smoke tests for release readiness (incl. macOS without local Apple hardware)
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "server/**"
+      - "src/**"
+      - "web/**"
+      - "packages/**"
+      - "test/**"
+      - "scripts/smoke-web.mjs"
+      - "start.sh"
+      - "start.command"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "server/**"
+      - "src/**"
+      - "web/**"
+      - "packages/**"
+      - "test/**"
+      - "scripts/smoke-web.mjs"
+      - "start.sh"
+      - "start.command"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: unit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm install
+
+      - name: Domain unit tests
+        run: npm test
+
+  smoke-web:
+    name: smoke-web (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install root
+        run: npm install
+
+      - name: Build frontend
+        run: npm run web:build
+
+      - name: Web smoke (no LLM)
+        run: node scripts/smoke-web.mjs
+        timeout-minutes: 8
+
+  launcher-unix:
+    name: launcher scripts (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: start.sh / start.command are executable text
+        run: |
+          test -f start.sh
+          test -f start.command
+          head -n1 start.sh | grep -q '#!/usr/bin/env bash'
+          head -n1 start.command | grep -q '#!/bin/bash'
+          # LF only (no CR)
+          ! grep -q $'\r' start.sh
+          ! grep -q $'\r' start.command
+          bash -n start.sh
+          bash -n start.command

@@ -39,6 +39,7 @@ import {
 	verifyToken,
 	type AccessData,
 } from "../src/access.ts";
+import { loadAgentConfig, normalizeAgentConfig, syncAgentConfigToRuntime } from "../src/agent-config.ts";
 import { loadCardFile } from "../src/card.ts";
 import { buildGreeting } from "../src/director.ts";
 import { activePanels, loadPanels, savePanels, writePanel } from "../src/panels.ts";
@@ -763,6 +764,7 @@ const currentModelInfo = (): CurrentModelInfo | null => {
 		thinkingLevel: session.thinkingLevel,
 		availableLevels: session.getAvailableThinkingLevels(),
 		contextWindow: m.contextWindow ?? 0,
+		maxTokens: typeof m.maxTokens === "number" && m.maxTokens > 0 ? m.maxTokens : undefined,
 	};
 };
 
@@ -779,6 +781,7 @@ const restHost: RestHost = {
 			reasoning: m.reasoning === true,
 			vision: Array.isArray(m.input) && m.input.includes("image"),
 			contextWindow: m.contextWindow ?? 0,
+			maxTokens: typeof m.maxTokens === "number" && m.maxTokens > 0 ? m.maxTokens : undefined,
 		})),
 	}),
 	async selectModel(provider, id) {
@@ -1153,6 +1156,42 @@ const restHost: RestHost = {
 		return { src: saved.src, bytes: saved.bytes };
 	},
 };
+
+// 启动时：liyuan.agent.json → models.json，重绑模型 + 应用思考档（配置 → 当前生效）
+try {
+	const loaded = loadAgentConfig(cwd);
+	if (loaded.exists && Object.keys(loaded.config.providers).length > 0) {
+		const cfg = normalizeAgentConfig(loaded.config);
+		syncAgentConfigToRuntime(cwd, getAgentDir(), cfg);
+		session.modelRegistry.refresh();
+		const cur = session.model;
+		if (cur) {
+			const next = session.modelRegistry.find(cur.provider, cur.id);
+			if (next) await session.setModel(next);
+			const p = cfg.providers[cur.provider];
+			const entry = Array.isArray(p?.models) ? p.models.find((m) => String(m.id) === cur.id) : undefined;
+			const per =
+				typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()
+					? entry.thinkingLevel.trim()
+					: "";
+			const def =
+				typeof cfg.defaultThinkingLevel === "string" && cfg.defaultThinkingLevel.trim()
+					? cfg.defaultThinkingLevel.trim()
+					: "";
+			const think = per || def;
+			if (think) {
+				try {
+					session.setThinkingLevel(think as never);
+				} catch {
+					/* 档位名不支持时忽略 */
+				}
+			}
+		}
+		console.log("[liyuan] 已从 liyuan.agent.json 同步 models.json 与思考档");
+	}
+} catch (err) {
+	console.error(`[liyuan] 启动同步 agent 配置失败：${err instanceof Error ? err.message : String(err)}`);
+}
 
 // ---------- HTTP：REST /api/* + 托管 web/dist（存在时）+ 健康检查 ----------
 

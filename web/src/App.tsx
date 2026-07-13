@@ -83,6 +83,13 @@ interface Toast {
 	text: string;
 }
 
+/** 通知气泡自动消散时间；仍可点击立即关闭 */
+const TOAST_TTL_MS: Record<Toast["level"], number> = {
+	info: 4000,
+	warning: 6000,
+	error: 8000,
+};
+
 /** 审计告警留存（原状态面板一栏，去中心化后进顶栏铃铛） */
 interface WarnEntry {
 	ts: number;
@@ -350,9 +357,9 @@ export default function App() {
 	const pushToast = useCallback((level: Toast["level"], text: string) => {
 		const id = ++toastSeq.current;
 		setToasts((ts) => [...ts, { id, level, text }]);
-		if (level === "info") {
-			setTimeout(() => setToasts((ts) => ts.filter((t) => t.id !== id)), 5000);
-		}
+		window.setTimeout(() => {
+			setToasts((ts) => ts.filter((t) => t.id !== id));
+		}, TOAST_TTL_MS[level]);
 	}, []);
 
 	const doTts = useCallback(

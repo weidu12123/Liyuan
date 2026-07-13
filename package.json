@@ -1,6 +1,6 @@
 {
   "name": "liyuan",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "梨园（Liyuan）— 以 AI 为主演的角色扮演剧院",
   "scripts": {
     "test": "node --test test/*.test.ts",
@@ -8,7 +8,10 @@
     "web:new": "node server/main.ts --new",
     "web:build": "npm --prefix web run build",
     "web:dev": "npm --prefix web run dev",
-    "pack:release": "powershell -NoProfile -File scripts/pack-release.ps1"
+    "pack:release": "powershell -NoProfile -File scripts/pack-release.ps1 -Target all",
+    "pack:release:windows": "powershell -NoProfile -File scripts/pack-release.ps1 -Target windows",
+    "pack:release:linux": "powershell -NoProfile -File scripts/pack-release.ps1 -Target linux",
+    "pack:release:macos": "powershell -NoProfile -File scripts/pack-release.ps1 -Target macos"
   },
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",

@@ -604,7 +604,24 @@ export class ModelRegistry {
 				const baseUrl = modelDef.baseUrl ?? providerConfig.baseUrl ?? builtInDefaults?.baseUrl;
 				if (!baseUrl) continue;
 
-				const compat = mergeCompat(providerConfig.compat, modelDef.compat);
+				let compat = mergeCompat(providerConfig.compat, modelDef.compat);
+				// 自定义 openai-completions 渠道：默认用 max_tokens（中转站广泛支持）。
+				// 未显式写 compat.maxTokensField 时，避免走官方默认 max_completion_tokens 导致上限失效。
+				if (
+					(api === "openai-completions" || api === "openai-responses") &&
+					!(compat && "maxTokensField" in compat && (compat as { maxTokensField?: string }).maxTokensField)
+				) {
+					const official =
+						baseUrl.includes("api.openai.com") ||
+						baseUrl.includes("openai.azure.com") ||
+						baseUrl.includes("cognitiveservices.azure.com");
+					if (!official && api === "openai-completions") {
+						compat = {
+							...(compat ?? {}),
+							maxTokensField: "max_tokens",
+						} as Model<Api>["compat"];
+					}
+				}
 				this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
 				const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };

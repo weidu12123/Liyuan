@@ -10,8 +10,7 @@
 					"id": "deepseek-chat",
 					"name": "DeepSeek Chat",
 					"reasoning": false,
-					"contextWindow": 128000,
-					"maxTokens": 8192
+					"contextWindow": 128000
 				}
 			]
 		}

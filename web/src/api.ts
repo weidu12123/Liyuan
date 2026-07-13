@@ -186,6 +186,8 @@ export interface CurrentModelInfo {
 	availableLevels: string[];
 	/** 当前模型上下文窗口 token 数（连接配置可改） */
 	contextWindow: number;
+	/** 单次最大输出 tokens（连接配置可改；未配置时运行时默认 16384） */
+	maxTokens?: number;
 }
 
 export interface ModelInfo {
@@ -196,6 +198,7 @@ export interface ModelInfo {
 	reasoning: boolean;
 	vision: boolean;
 	contextWindow: number;
+	maxTokens?: number;
 }
 
 export interface ModelsResponse {

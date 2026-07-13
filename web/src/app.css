@@ -4422,8 +4422,8 @@ input.panel-search.num {
 	padding: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	max-height: 220px;
+	gap: 8px;
+	max-height: min(420px, 55vh);
 	overflow-y: auto;
 }
 .conn-model-row {
@@ -4434,17 +4434,60 @@ input.panel-search.num {
 	border-radius: var(--radius-s);
 	background: var(--surface-dim);
 }
+/* 已选模型卡片：名称一行，下方三字段带标签，避免挤成一团 */
+.conn-model-card {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px 10px 12px;
+	border-radius: var(--radius-s);
+	background: var(--surface-dim);
+	border: 1px solid var(--hairline);
+}
+.conn-model-card-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-width: 0;
+}
 .conn-model-id {
 	flex: 1;
 	min-width: 0;
 	font-size: 12.5px;
+	font-weight: 600;
 	font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
-	display: flex;
-	align-items: center;
-	gap: 6px;
+	display: block;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	color: var(--text-strong);
+}
+.conn-model-fields {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.conn-model-field {
+	display: grid;
+	grid-template-columns: 4.5em minmax(0, 1fr);
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	min-width: 0;
+}
+.conn-model-field-label {
+	font-size: 12px;
+	color: var(--text-soft);
+	font-weight: 500;
+	white-space: nowrap;
+}
+.conn-model-field .panel-search {
+	width: 100%;
+	min-width: 0;
+	font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+	font-size: 12px;
+	padding: 5px 8px;
 }
 .conn-model-rm {
 	flex: none;

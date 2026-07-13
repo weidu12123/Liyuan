@@ -440,8 +440,17 @@ function buildParams(model, context, options, compat = getCompat(model), cacheRe
         params.store = false;
     }
     if (options?.maxTokens) {
-        if (compat.maxTokensField === "max_tokens") {
+        // 官方偏 max_completion_tokens；中转多数只认 max_tokens。非官方只发 max_tokens。
+        const base = model.baseUrl || "";
+        const official = base.includes("api.openai.com") ||
+            base.includes("openai.azure.com") ||
+            base.includes("cognitiveservices.azure.com");
+        const field = compat.maxTokensField ?? (official ? "max_completion_tokens" : "max_tokens");
+        if (field === "max_tokens" || !official) {
             params.max_tokens = options.maxTokens;
+            if (official && field !== "max_tokens") {
+                params.max_completion_tokens = options.maxTokens;
+            }
         }
         else {
             params.max_completion_tokens = options.maxTokens;

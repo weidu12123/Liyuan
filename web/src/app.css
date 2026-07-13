@@ -4594,6 +4594,29 @@ input.panel-search.num {
 .card-lore-actions {
 	justify-content: flex-end;
 }
+/* 删卡弹窗：勾选行 */
+.card-del-opt {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 8px 0;
+	font-size: 13px;
+	cursor: pointer;
+	line-height: 1.5;
+}
+.card-del-opt input {
+	margin-top: 3px;
+	accent-color: var(--accent);
+}
+/* 详情页删除钮：警示描边 */
+.card-delete-btn {
+	color: var(--accent-strong);
+	border-color: var(--accent-wash-strong);
+	margin-left: auto;
+}
+.card-delete-btn:hover:not(:disabled) {
+	background: var(--accent-wash);
+}
 .conn-model-add {
 	display: flex;
 	flex-wrap: wrap;

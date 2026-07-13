@@ -267,10 +267,12 @@ function CardDetail({
 	toast,
 	onBack,
 	libItem,
+	onDelete,
 }: {
 	toast: (level: "info" | "warning" | "error", text: string) => void;
 	onBack: () => void;
 	libItem: CardLibItem | undefined;
+	onDelete: () => void;
 }) {
 	const { data, error, loading, reload } = usePanelData(() => apiGet<CardResponse>("/api/card"), { cacheKey: "/api/card" });
 	const { busy, run } = useAction(toast);
@@ -360,6 +362,9 @@ function CardDetail({
 							</button>
 							<button type="button" className="drawer-btn" disabled={busy} onClick={() => doExport("png")}>
 								导出 PNG
+							</button>
+							<button type="button" className="drawer-btn card-delete-btn" disabled={busy} onClick={onDelete}>
+								删除角色卡
 							</button>
 						</div>
 						<div className="field-hint">
@@ -458,16 +463,16 @@ function CardItem({
 				<IconStar size={14} filled={c.fav} />
 			</button>
 			{!current && (
-				<ConfirmButton
+				<button
+					type="button"
 					className="card-fav card-del"
 					disabled={busy}
-					confirmText="确认"
-					title="删除这张卡（文件从卡库移除，不影响已有会话记录）"
+					title="删除这张卡…"
 					aria-label={`删除角色卡「${c.name}」`}
-					onConfirm={() => onDelete(c)}
+					onClick={() => onDelete(c)}
 				>
 					<IconClose size={13} />
-				</ConfirmButton>
+				</button>
 			)}
 		</div>
 	);
@@ -484,17 +489,24 @@ export function CardPanel({
 	toast,
 	/** 点卡/换卡后离开主页进入对话（学 ST） */
 	onEnterChat,
+	/** 删除当前使用中的卡后回主页 */
+	onGoHome,
 	/** 侧栏是否正在显示本面板；每次重新打开时若有当前卡则进详情 */
 	active = true,
 }: {
 	toast: (level: "info" | "warning" | "error", text: string) => void;
 	onEnterChat?: () => void;
+	onGoHome?: () => void;
 	active?: boolean;
 }) {
 	const lib = usePanelData(() => apiGet<CardsResponse>("/api/cards"), { cacheKey: "/api/cards" });
 	const { busy, run } = useAction(toast);
 	const [detail, setDetail] = useState(true);
 	const [lorePrompt, setLorePrompt] = useState<LorePrompt | null>(null);
+	/** 删除确认弹窗：目标卡 + 两个勾选 */
+	const [deletePrompt, setDeletePrompt] = useState<CardLibItem | null>(null);
+	const [delLore, setDelLore] = useState(false);
+	const [delData, setDelData] = useState(false);
 	/** 本地「当前卡」覆盖：换卡后不立刻 reload 整库（避免封面重刷） */
 	const [currentPath, setCurrentPath] = useState<string | null>(null);
 	const wasActive = useRef(active);
@@ -643,11 +655,30 @@ export function CardPanel({
 			lib.reload();
 		});
 
-	const del = (c: CardLibItem) =>
+	const del = (c: CardLibItem) => {
+		setDelLore(false);
+		setDelData(false);
+		setDeletePrompt(c);
+	};
+
+	const confirmDelete = () =>
 		run(async () => {
-			await apiDelete(`/api/cards?path=${encodeURIComponent(c.path)}`);
+			if (!deletePrompt) return;
+			const c = deletePrompt;
+			const wasCurrent = c.path === effectiveCurrent;
+			const qs = `path=${encodeURIComponent(c.path)}${delLore ? "&lore=1" : ""}${delData ? "&data=1" : ""}`;
+			const r = await apiDelete<{ ok: boolean; switchedTo: string | null }>(`/api/cards?${qs}`);
+			setDeletePrompt(null);
+			clearLorePending(c.path);
+			if (wasCurrent) {
+				// 删的是正在对话的卡：回主页（后端已自动切到剩余卡）
+				setCurrentPath(r.switchedTo ?? null);
+				setDetail(false);
+				onGoHome?.();
+			}
 			lib.reload();
-		}, `已删除「${c.name}」`);
+			bumpWatchPanels();
+		}, `已删除「${deletePrompt?.name ?? ""}」${delData ? "" : "（数据保留，重新导入可续玩）"}`);
 
 	const doImport = async (files: FileList | File[]) => {
 		setImporting(true);
@@ -716,6 +747,38 @@ export function CardPanel({
 		</div>
 	);
 
+	const deleteModal = deletePrompt && (
+		<div className="card-lore-modal" role="dialog" aria-modal="true" aria-labelledby="card-del-title">
+			<div className="card-lore-dialog">
+				<button type="button" className="icon-btn card-lore-x" title="取消" aria-label="关闭" onClick={() => setDeletePrompt(null)}>
+					<IconClose size={18} />
+				</button>
+				<h3 id="card-del-title">删除角色卡「{deletePrompt.name}」？</h3>
+				<p>
+					卡片文件将从卡库移除
+					{deletePrompt.path === effectiveCurrent ? "；这是当前对话中的卡，删除后将回到主页" : ""}。
+				</p>
+				<label className="card-del-opt">
+					<input type="checkbox" checked={delLore} onChange={(e) => setDelLore(e.target.checked)} />
+					同时删除配套世界书（以这张卡命名导入的书）
+				</label>
+				<label className="card-del-opt">
+					<input type="checkbox" checked={delData} onChange={(e) => setDelData(e.target.checked)} />
+					同时删除相关数据（该卡全部会话记录与补充设定）
+				</label>
+				<p className="field-hint">不勾「相关数据」时数据保留在本机：日后重新导入同一张卡，会话与设定无缝衔接。</p>
+				<div className="panel-row card-lore-actions">
+					<button type="button" className="drawer-btn save-btn" disabled={busy} onClick={() => void confirmDelete()}>
+						删除
+					</button>
+					<button type="button" className="drawer-btn" disabled={busy} onClick={() => setDeletePrompt(null)}>
+						取消
+					</button>
+				</div>
+			</div>
+		</div>
+	);
+
 	// 卡库与详情同挂载：返回仓库时不卸载封面 DOM，避免重新请求图片
 	return (
 		<div
@@ -727,6 +790,7 @@ export function CardPanel({
 			}}
 		>
 			{loreModal}
+			{deleteModal}
 			<div className="card-lib-pane" hidden={detail} style={detail ? { display: "none" } : undefined}>
 				<PanelStatus loading={lib.loading} error={lib.error} hasData={!!lib.data} />
 				{lib.data && (
@@ -839,7 +903,14 @@ export function CardPanel({
 			</div>
 			{detail && (
 				<div className="card-detail-pane">
-					<CardDetail toast={toast} onBack={() => setDetail(false)} libItem={currentLibItem} />
+					<CardDetail
+						toast={toast}
+						onBack={() => setDetail(false)}
+						libItem={currentLibItem}
+						onDelete={() => {
+							if (currentLibItem) del(currentLibItem);
+						}}
+					/>
 				</div>
 			)}
 		</div>

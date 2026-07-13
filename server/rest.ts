@@ -199,6 +199,8 @@ export interface RestHost {
 	sessions(): Promise<SessionInfoLite[]>;
 	renameSession(path: string, name: string): Promise<void>;
 	deleteSession(path: string): Promise<void>;
+	/** 删除绑定某张卡的全部会话文件（删卡「相关数据」用；当前打开的会话不动） */
+	deleteCardSessions(cardRel: string): Promise<number>;
 	readSessionFile(path: string): Promise<string>;
 	searchSessions(q: string): Promise<SessionSearchHit[]>;
 	/** 世界状态用户主权编辑（applyPatch 语义，落盘+树快照经命令桥） */
@@ -1430,21 +1432,106 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				}
 				return true;
 			}
+			/**
+			 * 删除角色卡。query：
+			 * - path：卡库内相对路径（必填）
+			 * - lore=1：连同配套世界书（assets/lorebooks/<卡名>.json 及 -N 变体）一起删并取消挂载
+			 * - data=1：连同相关数据（该卡全部会话、补充设定集、persona 卡锁定）一起删；
+			 *   不带则数据保留，重新导入同路径同名卡可无缝续玩
+			 * 删除当前使用中的卡：先自动切到默认卡（或卡库剩余第一张），最后一张卡拒删。
+			 */
 			case "DELETE /api/cards": {
+				if (refuseWhileStreaming()) return true;
 				const p = query.get("path") ?? "";
-				const config = loadConfig(host.cwd);
+				const wantLore = query.get("lore") === "1";
+				const wantData = query.get("data") === "1";
+				let config = loadConfig(host.cwd);
 				const abs = assertLibraryCard(host.cwd, config, p);
-				if (config.card && resolvePath(host.cwd, config.card) === abs) {
-					throw new Error("不能删除当前使用中的角色卡：请先切换到其它卡");
+				let cardName = basename(p).replace(/\.(png|json)$/i, "");
+				try {
+					cardName = loadCardFile(abs).name || cardName;
+				} catch {
+					// 坏卡也允许删，名字退回文件名
 				}
+				const isCurrent = !!config.card && resolvePath(host.cwd, config.card) === abs;
+
+				// 删当前卡：先切走（默认卡优先，其次卡库剩余第一张；没有可去处则拒绝）
+				let switchedTo: string | null = null;
+				if (isCurrent) {
+					const others = listCardLibrary(host.cwd, config).filter((c) => resolvePath(host.cwd, c.path) !== abs);
+					const fallback = others.find((c) => c.path === DEFAULT_CONFIG.card) ?? others[0];
+					if (!fallback) throw new Error("这是卡库里最后一张卡，删掉就没有可用角色了：请先导入其它卡");
+					const raw = config as unknown as Record<string, unknown>;
+					delete raw.displayName;
+					delete raw.greetingIndex;
+					raw.card = fallback.path;
+					writeJsonWithBackup(configPath(host.cwd), raw);
+					const persona = personaForCard(loadPersonas(host.cwd), fallback.path);
+					if (persona) projectPersonaToConfig(host.cwd, persona);
+					await host.switchToCard();
+					switchedTo = fallback.path;
+					config = loadConfig(host.cwd);
+				}
+
+				// 卡本体
 				unlinkSync(abs);
 				cardMetaCache.delete(abs);
 				const favs = loadFavs(host.cwd);
 				if (favs.includes(p)) {
 					saveFavs(host.cwd, favs.filter((f) => f !== p));
 				}
-				host.notify("info", `已删除角色卡「${basename(p)}」`);
-				sendJson(res, 200, { ok: true });
+
+				// 配套世界书：与 import-embedded-lore 同一命名推导（<卡名>.json / <卡名>-N.json）
+				let deletedLore = 0;
+				if (wantLore) {
+					const safeBase = cardName.replace(/[\\/:*?"<>|]/g, "-").trim() || "card-lore";
+					const rx = new RegExp(`^${safeBase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(-\\d+)?\\.json$`, "i");
+					const dir = join(host.cwd, LOREBOOKS_DIR);
+					const gone: string[] = [];
+					if (existsSync(dir)) {
+						for (const f of readdirSync(dir)) {
+							if (!rx.test(f)) continue;
+							try {
+								unlinkSync(join(dir, f));
+								gone.push(`${LOREBOOKS_DIR}/${f}`);
+							} catch {
+								// 删不掉的留着，挂载也别拆
+							}
+						}
+					}
+					if (gone.length > 0) {
+						const mounted = mountedLorebookPaths(config).filter((m) => !gone.includes(m));
+						writeJsonWithBackup(configPath(host.cwd), setMountedLorebooks(config, mounted));
+						await host.softRefreshConfig();
+					}
+					deletedLore = gone.length;
+				}
+
+				// 相关数据：会话 + 补充设定集 + persona 卡锁定（保留则重新导入同路径卡即无缝续玩）
+				let deletedSessions = 0;
+				if (wantData) {
+					deletedSessions = await host.deleteCardSessions(p);
+					const overlay = overlayPathFor(host.cwd, cardName);
+					if (existsSync(overlay)) {
+						try {
+							unlinkSync(overlay);
+						} catch {
+							/* 不挡 */
+						}
+					}
+					const pstore = loadPersonas(host.cwd);
+					if (pstore.byCard[p]) {
+						const byCard = { ...pstore.byCard };
+						delete byCard[p];
+						savePersonas(host.cwd, { ...pstore, byCard });
+					}
+				}
+
+				host.notify(
+					"info",
+					`已删除角色卡「${cardName}」${wantLore && deletedLore > 0 ? `，配套世界书 ${deletedLore} 本` : ""}${wantData ? `，相关数据（会话 ${deletedSessions} 个）` : "（数据保留，重新导入可续玩）"}${switchedTo ? `；已切换到「${basename(switchedTo)}」` : ""}`,
+				);
+				sendJson(res, 200, { ok: true, deletedLore, deletedSessions, switchedTo });
 				return true;
 			}
 			case "POST /api/cards/fav": {

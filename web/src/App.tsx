@@ -1036,7 +1036,7 @@ export default function App() {
 			case "settings":
 				return <SettingsPanel toast={pushToast} />;
 			case "card":
-				return <CardPanel toast={pushToast} onEnterChat={dismissWelcome} active={rightPanel === "card"} />;
+				return <CardPanel toast={pushToast} onEnterChat={dismissWelcome} onGoHome={showWelcome} active={rightPanel === "card"} />;
 			case "lorebook":
 				return <LorebookPanel toast={pushToast} />;
 			case "persona":

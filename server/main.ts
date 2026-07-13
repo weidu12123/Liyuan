@@ -1052,6 +1052,28 @@ const restHost: RestHost = {
 		cardCache.delete(path);
 		previewCache.delete(path);
 	},
+	// 删卡「相关数据」用：删除绑定某张卡的全部会话文件（rp-card 标记匹配）。
+	// 调用方须保证当前打开的会话已不属于该卡（删当前卡先切走再调本方法）。
+	async deleteCardSessions(cardRel) {
+		const all = await SessionManager.list(cwd);
+		let n = 0;
+		for (const s of all) {
+			if (isSameSessionPath(s.path, session.sessionFile)) continue;
+			const mtime = s.modified instanceof Date ? s.modified.getTime() : Number(s.modified) || 0;
+			const info = readSessionCard(s.path, mtime);
+			if (!info || info.card !== cardRel) continue;
+			try {
+				unlinkSync(s.path);
+				cardCache.delete(s.path);
+				previewCache.delete(s.path);
+				n += 1;
+			} catch {
+				// 单个文件删不掉（占用等）不挡整体
+			}
+		}
+		if (n > 0) broadcast(await listSessions());
+		return n;
+	},
 	async readSessionFile(path) {
 		await assertListedSession(path);
 		return readFileSync(path, "utf8");

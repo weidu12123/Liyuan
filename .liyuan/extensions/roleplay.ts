@@ -154,9 +154,8 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 	let codexIndexCache: string | null = null;
 	/** 项目根（工具执行时无 ctx.cwd，session_start 捕获） */
 	let appCwd = process.cwd();
-	// 场记/审计：进行中标志（防重入）与待注入的一致性告警
+	// 场记记账：进行中标志（防重入）；连续性审查已关闭
 	let scribeBusy = false;
-	let pendingWarnings: string[] = [];
 	// 世界书中文别名：一次性生成 + 磁盘缓存的懒初始化
 	let aliasPromise: Promise<void> | null = null;
 	// MCP 外设（柱 4）：本会话启用集 + 已注册工具（agent 绑对话，新对话=新窗口）
@@ -1105,13 +1104,13 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 			name: ASK_TOOL,
 			label: "请用户定夺",
 			description:
-				"Pause the story and ask the user to decide a PIVOTAL, hard-to-reverse creative point before you commit it to the narrative. Use for: defining a NEW important character (name/identity/personality), a major plot turn (death, betrayal, a relationship's nature changing, a big time-skip), locking down a piece of the world's canon, or anywhere the user has signalled they want a say. Do NOT use for trivia or routine beats — asking about small things is worse than not asking. CRITICAL: whenever you want to offer the user a set of choices about the story, you MUST do it by calling this tool — NEVER list options as narrative prose in your reply. Provide 2-4 concrete options in the story's language; the user may also type their own answer or stop. After the user answers, continue the narrative following their choice.",
+				"IN-STORY co-creation gate (not OOC assistant chat). Pause narrative and show a choice card so the user picks the next beat. MUST call FIRST when: (1) user seeks direction — 该做什么/怎么办/怎么走/下一步/给选项, even inside IC prose; (2) user asks to generate/define identity or persona — 生成身份/开始生成身份/建档/捏角色/人设 — do NOT write a full identity dossier yourself, split key choices into options; (3) scene has 2+ clear forks that change the next turns; (4) new important character, major irreversible plot turn, or locking world-canon. Do NOT write option lists in narrative prose — only this tool shows clickable cards. Provide 2-4 concrete IC options in the story language; user may type custom or stop. After answer, continue as the character/world, never as a system assistant. Skip only pure atmosphere with no real fork.",
 			parameters: Type.Object({
 				question: Type.String({
-					description: "The decision to put to the user, in the story's language, e.g. '这位新登场的女官，你想她是什么性格？'",
+					description: "Question on the choice card, in story language, e.g. '御书房里文舒婉请试墨——你想这一步怎么走？'",
 				}),
 				options: Type.Array(Type.String(), {
-					description: "2-4 concrete, distinct options in the story's language. Do not pad with filler options.",
+					description: "2-4 concrete, distinct in-scene options (actions/attitudes), not abstract meta labels.",
 					minItems: 2,
 					maxItems: 4,
 				}),
@@ -1171,10 +1170,19 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 			entries = applyDisabledLore(mergeEntries(fileEntries, overlayEntries), config.disabledLore);
 
 			// 转换后的预设（可选）：system 块进 system prompt，postHistory 块进末端注入
+			// 工作草稿（preset-override.json）优先，与 hotReload 一致
 			preset = null;
 			if (config.preset) {
+				const overridePath = join(ctx.cwd, ".liyuan", "preset-override.json");
 				const presetPath = resolvePath(ctx.cwd, config.preset);
-				if (existsSync(presetPath)) {
+				if (existsSync(overridePath)) {
+					try {
+						preset = normalizeRpPreset(JSON.parse(readFileSync(overridePath, "utf8")));
+					} catch {
+						preset = null;
+					}
+				}
+				if (!preset && existsSync(presetPath)) {
 					preset = normalizeRpPreset(JSON.parse(readFileSync(presetPath, "utf8")));
 				}
 			}
@@ -1201,7 +1209,6 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				snapshotMcpEnabled();
 			}
 			scribeBusy = false;
-			pendingWarnings = [];
 			aliasPromise = null; // 素材可能已变，允许重新初始化（有磁盘缓存，代价极低）
 
 			// MCP 外设：按本会话启用集连接；索引写进 system prompt（D8：会话内字节稳定）
@@ -1359,14 +1366,10 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 			? detectsLanguageMismatch(extractText(lastNarrative), config.language)
 			: false;
 
-		// 姿态检测（PLAN-PHASE3 §6.1）：最后一条用户消息带场外标记 = 戏外轮（对助手说话）。
-		// 无标记的场外话由模型自行分辨（system prompt 已授权），harness 不越俎代庖。
+		// 姿态：仅显式场外标记 → 戏外；无标记一律戏内（模型不得自行改判）
 		const lastUser = [...messages].reverse().find((m) => m.role === "user");
-		const stance: "onstage" | "backstage" = lastUser && isBackstageText(extractText(lastUser)) ? "backstage" : "onstage";
-
-		// 审计告警只在戏内轮消费（戏外轮不写正文，提醒保留到下一个戏内轮）
-		const auditWarnings = stance === "onstage" ? pendingWarnings : [];
-		if (stance === "onstage") pendingWarnings = [];
+		const lastUserText = lastUser ? extractText(lastUser) : "";
+		const stance: "onstage" | "backstage" = lastUserText && isBackstageText(lastUserText) ? "backstage" : "onstage";
 
 		messages.push({
 			role: "custom",
@@ -1378,11 +1381,11 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				config,
 				stance,
 				languageMismatch,
-				auditWarnings,
 				presetPostHistoryBlocks: preset ? enabledBlocks(preset, "postHistory") : undefined,
 				panelIndex: formatPanelIndex(panels) ?? undefined,
 				codexIndex: codexIndexCache ?? undefined,
 				uploadIndex: formatUploadIndex(listUploads(appCwd)) ?? undefined,
+				userText: stance === "onstage" ? lastUserText : undefined,
 			}),
 			display: false,
 			timestamp: Date.now(),
@@ -1399,7 +1402,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		return { ...(payload as Record<string, unknown>), ...preset.samplers };
 	});
 
-	// 场记 + 一致性审计（每个用户轮结束后一次旁侧调用；D10：产出是状态数据与元信息告警，绝不碰正文）
+	// 场记记账（每用户轮结束后一次旁侧调用；只写状态补丁，不做连续性/先斩后奏审查）
 	pi.on("agent_end", async (event, ctx) => {
 		if (!rpMode || !card || scribeBusy) return;
 		const msgs = event.messages as Array<{ role?: string; content?: unknown; customType?: string }>;
@@ -1412,7 +1415,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		}
 		if (lastUserIdx === -1) return;
 		const userText = extractText(msgs[lastUserIdx]);
-		// 戏外轮（场外标记）不是剧情：不记账、不审计
+		// 戏外轮不是剧情：不记账
 		if (isBackstageText(userText)) return;
 		const assistantText = msgs
 			.slice(lastUserIdx + 1)
@@ -1422,13 +1425,6 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 			.join("\n");
 		if (!assistantText.trim()) return;
 
-		// 决策门禁第二层地板（ask 档）：本轮若已经过 ask_director 询问则豁免，
-		// 否则让场记顺带检测「先斩后奏的重大转折」（同一次旁侧调用，零额外成本）
-		const askedThisTurn = msgs
-			.slice(lastUserIdx + 1)
-			.some((m) => (m as { role?: string; toolName?: string }).role === "toolResult" && (m as { toolName?: string }).toolName === "ask_director");
-		const detectUnaskedTurn = config.creationMode === "ask" && !askedThisTurn;
-
 		scribeBusy = true;
 		try {
 			const prompt = buildScribeTurnPrompt({
@@ -1437,9 +1433,9 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				assistantText,
 				charName: card.name,
 				userName: config.userName,
-				detectUnaskedTurn,
 			});
-			const text = await sideComplete(ctx, prompt.systemPrompt, prompt.userText, 2048);
+			// 只抽 patch，输出短，token 上限收紧
+			const text = await sideComplete(ctx, prompt.systemPrompt, prompt.userText, 1024);
 			if (!text) return;
 			const result = parseScribeResult(text);
 			if (!result) {
@@ -1455,18 +1451,6 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				if (process.env.RP_DEBUG) {
 					console.error(`[rp-scribe] ${applied.applied.join("；") || "（无变更）"}`);
 				}
-			}
-			if (result.warnings.length > 0) {
-				pendingWarnings = result.warnings.slice(0, 5);
-				notify(ctx, `⚠ 连续性告警（下一轮注入提醒；如需修正本轮正文请重 roll）：\n${pendingWarnings.map((w) => `- ${w}`).join("\n")}`, "warning");
-			}
-			// 决策门禁地板：检测到先斩后奏的重大转折 → 告警上屏 + rewind 建议（正文由用户裁夺，D10 不改写）
-			if (result.unaskedTurn) {
-				notify(
-					ctx,
-					`⚠ 这一轮似乎单方面推进了一个重大转折，没有先征询你：\n${result.unaskedTurn}\n如果这不是你想要的走向，可以 /rewind 1 退回这轮重来（决策门禁开启时，这类转折本应先问你）。`,
-					"warning",
-				);
 			}
 		} catch (err) {
 			if (process.env.RP_DEBUG) {
@@ -1616,13 +1600,17 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 					break;
 				}
 			}
-			if (lastUserIdx <= 0) {
-				notify(ctx, "没有可重新生成的回合（或已在会话起点）", "error");
+			if (lastUserIdx < 0) {
+				notify(ctx, "没有可重新生成的回合（需要先有一条用户输入）", "error");
 				return;
 			}
 			await waitForScribe();
-			// 有参：编辑用户输入后整轮重来——退到 user 之前，再发新文案（旧 user+回复进旁支）
-			const result = await ctx.navigateTree(branch[lastUserIdx - 1].id, { summarize: false });
+			// 有参：编辑用户输入后整轮重来。
+			// 必须 navigateTree(最后一条 user)：pi 会把 leaf 设为该 user 的 parent，
+			// 保留开场白/此前各轮；旧 user+回复进旁支。
+			// 切勿 navigateTree(user 的前一条)：若前一条是 rp-greeting（custom_message），
+			// navigateTree 会对 custom 再退一层到 parent=null，前面的对话整段消失。
+			const result = await ctx.navigateTree(branch[lastUserIdx].id, { summarize: false });
 			if (result.cancelled) return;
 			pi.sendUserMessage(newText);
 			notify(ctx, "已按编辑后的消息重新生成；原输入与回复保留在会话树。");
@@ -1649,13 +1637,10 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				return;
 			}
 			const targetUserIdx = userIdxs[userIdxs.length - n];
-			if (targetUserIdx === 0) {
-				notify(ctx, "已到剧情起点，无法再回退", "error");
-				return;
-			}
 			await waitForScribe();
-			const target = branch[targetUserIdx - 1];
-			const result = await ctx.navigateTree(target.id, { summarize: false });
+			// 导航到目标用户消息本身：leaf → 该 user 的 parent（保留开场白与更早轮次）。
+			// 旧实现 navigateTree(前一条) 在前一条为 greeting/custom 时会多退一层到 root。
+			const result = await ctx.navigateTree(branch[targetUserIdx].id, { summarize: false });
 			if (!result.cancelled) {
 				notify(ctx, `已回退 ${n} 个用户轮。被回退的内容保留在会话树里（可再导航回去），从这里继续。`);
 			}
@@ -2050,8 +2035,17 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		entries = applyDisabledLore(mergeEntries(fileEntries, overlayEntries), config.disabledLore);
 		preset = null;
 		if (config.preset) {
+			// 工作草稿优先（面板改开关/正文立即生效但不写盘）；无草稿才读预设文件
+			const overridePath = join(cwd, ".liyuan", "preset-override.json");
 			const presetPath = resolvePath(cwd, config.preset);
-			if (existsSync(presetPath)) {
+			if (existsSync(overridePath)) {
+				try {
+					preset = normalizeRpPreset(JSON.parse(readFileSync(overridePath, "utf8")));
+				} catch {
+					preset = null;
+				}
+			}
+			if (!preset && existsSync(presetPath)) {
 				preset = normalizeRpPreset(JSON.parse(readFileSync(presetPath, "utf8")));
 			}
 		}

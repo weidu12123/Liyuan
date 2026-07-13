@@ -23,11 +23,39 @@
 				var t = localStorage.getItem("liyuan.theme");
 				if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
 			} catch (e) {}
+			/* rebuild 后 SW 若仍用旧 HTML 指已删 JS，会白屏：探测 root 为空则卸 SW 强刷一次 */
+			window.addEventListener("load", function () {
+				setTimeout(function () {
+					try {
+						var root = document.getElementById("root");
+						if (!root || root.childNodes.length > 0) return;
+						if (sessionStorage.getItem("liyuan.sw-rescue") === "1") return;
+						sessionStorage.setItem("liyuan.sw-rescue", "1");
+						var done = function () {
+							location.reload();
+						};
+						if (!("serviceWorker" in navigator)) return done();
+						navigator.serviceWorker
+							.getRegistrations()
+							.then(function (regs) {
+								return Promise.all(regs.map(function (r) { return r.unregister(); }));
+							})
+							.then(function () {
+								return caches.keys();
+							})
+							.then(function (keys) {
+								return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+							})
+							.then(done)
+							.catch(done);
+					} catch (e) {}
+				}, 2500);
+			});
 		</script>
-		<script type="module" crossorigin src="/assets/index-JLG6iK8v.js"></script>
-		<link rel="stylesheet" crossorigin href="/assets/index-DcCffTOT.css">
+		<script type="module" crossorigin src="/assets/index-tNxW5U1Z.js"></script>
+		<link rel="stylesheet" crossorigin href="/assets/index-CRHnW4MG.css">
 	</head>
 	<body>
-		<div id="root"></div>
+		<div id="root"></div>
 	</body>
 </html>

@@ -49,6 +49,11 @@ assets/cards/大乾*
 assets/cards/-.png
 assets/lorebooks/大乾*
 assets/lorebooks/第九*
+assets/cards/Living With Slaves.png
+assets/cards/淫宫*
+assets/lorebooks/Living With Slaves.json
+assets/lorebooks/淫宫*
+assets/presets/
 assets/ab-test/
 assets/import-test/
 assets/personas/
@@ -59,6 +64,10 @@ web/bug-*.png
 web/fix-*.png
 web/latest-ui.png
 scripts/tmp-test-image.png
+white-screen-check.png
+
+# local VPS / gateway debug scripts (personal ops, not product)
+scripts/_*
 
 # optional: keep web/dist for easier clone-and-run; uncomment to force rebuild
 # web/dist/

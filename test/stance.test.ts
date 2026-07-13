@@ -20,4 +20,6 @@ test("场外标记：剧情输入不误判", () => {
 	assert.ok(!isBackstageText("（他抬起头）随后说道：你来了"), "开头括号但未包裹整条");
 	assert.ok(!isBackstageText(""));
 	assert.ok(!isBackstageText("   "));
+	assert.ok(!isBackstageText("我该做什么"), "求方向无标记=戏内");
+	assert.ok(!isBackstageText("下一步怎么办？"), "元问题无标记仍戏内");
 });

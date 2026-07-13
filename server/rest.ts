@@ -111,6 +111,8 @@ export interface CurrentModelInfo {
 	name: string;
 	thinkingLevel: string;
 	availableLevels: string[];
+	/** 当前模型上下文窗口（来自 models.json / 连接配置；默认 128000） */
+	contextWindow: number;
 }
 
 export interface ModelInfo {
@@ -547,6 +549,17 @@ function persistAgentConfig(host: RestHost, config: LiyuanAgentConfig): LiyuanAg
 	return normalized;
 }
 
+/** models.json 刷新后，把会话里的 model 对象换成新条目（contextWindow 等字段才生效） */
+async function rebindCurrentModel(host: RestHost): Promise<void> {
+	const cur = host.listModels().current;
+	if (!cur) return;
+	try {
+		await host.selectModel(cur.provider, cur.id);
+	} catch {
+		// 模型可能暂不可用；配置已落盘，下次切换仍会带上新字段
+	}
+}
+
 function resolveProbeKey(apiKey?: string): string | undefined {
 	if (!apiKey || apiKey === "placeholder") return undefined;
 	if (apiKey.startsWith("$")) {
@@ -593,6 +606,8 @@ async function probeModelsEndpoint(
 // ---------- 多预设管理（PLAN-PANELS-V2 §2.6：assets/presets/ 存多份，config.preset 指向当前） ----------
 
 const PRESETS_DIR = "assets/presets";
+/** 面板未点「保存」时的运行时草稿（立即进 system；切换预设时丢弃） */
+const PRESET_OVERRIDE_REL = ".liyuan/preset-override.json";
 
 const presetSlug = (name: string) => name.trim().replace(/[\\/:*?"<>|\s]+/g, "-").replace(/^-+|-+$/g, "") || "preset";
 
@@ -603,6 +618,80 @@ function validatePresetPath(p: string): string {
 	const base = norm.startsWith(`${PRESETS_DIR}/`) ? norm.slice(PRESETS_DIR.length + 1) : "";
 	if (!base || base.includes("/") || base.includes("..") || !base.endsWith(".json")) throw new Error("非法预设路径");
 	return norm;
+}
+
+function presetOverridePath(cwd: string): string {
+	return join(cwd, PRESET_OVERRIDE_REL);
+}
+
+function clearPresetOverride(cwd: string): void {
+	const p = presetOverridePath(cwd);
+	if (existsSync(p)) {
+		try {
+			unlinkSync(p);
+		} catch {
+			/* ignore */
+		}
+	}
+}
+
+/** 磁盘上的已保存预设（不含草稿） */
+function loadDiskPreset(cwd: string): { path: string; preset: RpPreset } | null {
+	const config = loadConfig(cwd);
+	if (!config.preset) return null;
+	const p = resolvePath(cwd, config.preset);
+	if (!existsSync(p)) return null;
+	return { path: config.preset, preset: normalizeRpPreset(JSON.parse(readFileSync(p, "utf8"))) };
+}
+
+/** 运行时生效：草稿优先，否则磁盘 */
+function loadEffectivePreset(cwd: string): { path: string | null; preset: RpPreset | null; fromOverride: boolean } {
+	const config = loadConfig(cwd);
+	if (!config.preset) return { path: null, preset: null, fromOverride: false };
+	const ovr = presetOverridePath(cwd);
+	if (existsSync(ovr)) {
+		try {
+			return {
+				path: config.preset,
+				preset: normalizeRpPreset(JSON.parse(readFileSync(ovr, "utf8"))),
+				fromOverride: true,
+			};
+		} catch {
+			/* fall through */
+		}
+	}
+	const disk = loadDiskPreset(cwd);
+	if (!disk) return { path: config.preset, preset: null, fromOverride: false };
+	return { path: disk.path, preset: disk.preset, fromOverride: false };
+}
+
+function mergePresetPatches(
+	base: RpPreset,
+	body: {
+		samplers?: Record<string, number>;
+		blocks?: Array<{
+			id: string;
+			enabled?: boolean;
+			name?: string;
+			content?: string;
+			channel?: "system" | "postHistory";
+		}>;
+	},
+): RpPreset {
+	return {
+		...base,
+		samplers: sanitizeSamplers(body.samplers) ?? base.samplers,
+		blocks: base.blocks.map((b) => {
+			const patch = body.blocks?.find((x) => x.id === b.id);
+			if (!patch) return b;
+			const out = { ...b };
+			if (typeof patch.enabled === "boolean") out.enabled = patch.enabled;
+			if (typeof patch.name === "string") out.name = patch.name.trim() || b.name;
+			if (typeof patch.content === "string") out.content = patch.content;
+			if (patch.channel === "system" || patch.channel === "postHistory") out.channel = patch.channel;
+			return out;
+		}),
+	};
 }
 
 function listPresetFiles(cwd: string): Array<{ file: string; name: string }> {
@@ -1341,6 +1430,23 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				}
 				return true;
 			}
+			case "DELETE /api/cards": {
+				const p = query.get("path") ?? "";
+				const config = loadConfig(host.cwd);
+				const abs = assertLibraryCard(host.cwd, config, p);
+				if (config.card && resolvePath(host.cwd, config.card) === abs) {
+					throw new Error("不能删除当前使用中的角色卡：请先切换到其它卡");
+				}
+				unlinkSync(abs);
+				cardMetaCache.delete(abs);
+				const favs = loadFavs(host.cwd);
+				if (favs.includes(p)) {
+					saveFavs(host.cwd, favs.filter((f) => f !== p));
+				}
+				host.notify("info", `已删除角色卡「${basename(p)}」`);
+				sendJson(res, 200, { ok: true });
+				return true;
+			}
 			case "POST /api/cards/fav": {
 				const body = JSON.parse(await readBody(req)) as { path?: string; fav?: boolean };
 				if (!body.path) throw new Error("缺少 path");
@@ -1497,6 +1603,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { file?: string | null };
 				const config = loadConfig(host.cwd) as unknown as Record<string, unknown>;
+				// 切换预设：丢弃未保存草稿
+				clearPresetOverride(host.cwd);
 				if (body.file === null || body.file === "") {
 					delete config.preset; // 不用预设
 				} else {
@@ -1515,13 +1623,16 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const name = (body.name ?? "").trim();
 				if (!name) throw new Error("缺少预设名");
 				const config = loadConfig(host.cwd);
-				const current: RpPreset = config.preset
-					? normalizeRpPreset(JSON.parse(readFileSync(resolvePath(host.cwd, config.preset), "utf8")))
-					: { name, samplers: {}, blocks: [] };
+				// 另存：取当前生效内容（含未保存草稿）
+				const current: RpPreset = loadEffectivePreset(host.cwd).preset
+					?? (config.preset
+						? normalizeRpPreset(JSON.parse(readFileSync(resolvePath(host.cwd, config.preset), "utf8")))
+						: { name, samplers: {}, blocks: [] });
 				const file = `${PRESETS_DIR}/${presetSlug(name)}.json`;
 				const abs = resolvePath(host.cwd, file);
 				if (existsSync(abs)) throw new Error(`同名预设文件已存在：${file}`);
 				mkdirSync(join(host.cwd, PRESETS_DIR), { recursive: true });
+				clearPresetOverride(host.cwd);
 				writeJsonWithBackup(abs, { ...current, name });
 				writeJsonWithBackup(configPath(host.cwd), { ...loadConfig(host.cwd), preset: file });
 				await host.softRefreshConfig();
@@ -1547,6 +1658,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				unlinkSync(abs);
 				const config = loadConfig(host.cwd) as unknown as Record<string, unknown>;
 				if (config.preset === file) {
+					clearPresetOverride(host.cwd);
 					delete config.preset;
 					writeJsonWithBackup(configPath(host.cwd), config);
 					await host.softRefreshConfig();
@@ -1567,6 +1679,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const file = `${PRESETS_DIR}/${presetSlug(name)}.json`;
 				const abs = resolvePath(host.cwd, file);
 				mkdirSync(join(host.cwd, PRESETS_DIR), { recursive: true });
+				clearPresetOverride(host.cwd);
 				writeJsonWithBackup(abs, preset);
 				writeJsonWithBackup(configPath(host.cwd), { ...loadConfig(host.cwd), preset: file });
 				await host.softRefreshConfig();
@@ -1962,13 +2075,19 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				materializeEnvKeysInConfig(config);
 				const name = (body.name ?? prev.name).trim();
 				const rec = saveProfile(host.cwd, id, name, config);
-				// 若正在启用这份，同步到 runtime
+				// 若正在启用这份，同步到 runtime 并重绑当前模型（contextWindow 等）
 				const active = listProfiles(host.cwd).find((p) => p.active);
 				if (active?.id === id) {
 					persistAgentConfig(host, config);
+					await rebindCurrentModel(host);
 				}
 				host.notify("info", `配置「${rec.name}」已更新`);
-				sendJson(res, 200, { ok: true, profile: { id: rec.id, name: rec.name, updatedAt: rec.updatedAt }, profiles: listProfiles(host.cwd) });
+				sendJson(res, 200, {
+					ok: true,
+					profile: { id: rec.id, name: rec.name, updatedAt: rec.updatedAt },
+					profiles: listProfiles(host.cwd),
+					current: host.listModels().current,
+				});
 				return true;
 			}
 			case "POST /api/agent-profiles/enable": {
@@ -2039,12 +2158,14 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					throw new Error("缺少 text 或 config");
 				}
 				const config = persistAgentConfig(host, normalizeAgentConfig(parsed));
+				await rebindCurrentModel(host);
 				host.notify("info", "当前 Agent 配置已保存");
 				sendJson(res, 200, {
 					ok: true,
 					path: loadAgentConfig(host.cwd).path,
 					config,
 					text: `${JSON.stringify(config, null, "\t")}\n`,
+					current: host.listModels().current,
 				});
 				return true;
 			}
@@ -2610,20 +2731,32 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 
 			// ---- 预设 ----
+			/**
+			 * GET：默认读**磁盘已保存**版（切换回来应看到原样）。
+			 * ?full=1 附带每块 content；?working=1 则返回当前运行时草稿（若有）。
+			 */
 			case "GET /api/preset": {
 				const config = loadConfig(host.cwd);
 				if (!config.preset) {
-					sendJson(res, 200, { preset: null });
+					sendJson(res, 200, { preset: null, dirty: false });
 					return true;
 				}
-				const p = resolvePath(host.cwd, config.preset);
-				if (!existsSync(p)) {
-					sendJson(res, 200, { preset: null, missing: config.preset });
+				const wantWorking = query.get("working") === "1";
+				const full = query.get("full") === "1";
+				const loaded = wantWorking ? loadEffectivePreset(host.cwd) : (() => {
+					const d = loadDiskPreset(host.cwd);
+					return d
+						? { path: d.path, preset: d.preset, fromOverride: false }
+						: { path: config.preset, preset: null, fromOverride: false };
+				})();
+				if (!loaded.preset) {
+					sendJson(res, 200, { preset: null, missing: config.preset, dirty: existsSync(presetOverridePath(host.cwd)) });
 					return true;
 				}
-				const preset = normalizeRpPreset(JSON.parse(readFileSync(p, "utf8")));
+				const preset = loaded.preset;
 				sendJson(res, 200, {
-					path: config.preset,
+					path: loaded.path,
+					dirty: existsSync(presetOverridePath(host.cwd)),
 					preset: {
 						name: preset.name,
 						samplers: preset.samplers,
@@ -2634,32 +2767,108 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 							role: b.role,
 							enabled: b.enabled,
 							chars: b.content.length,
+							...(full ? { content: b.content } : {}),
 						})),
 					},
 				});
 				return true;
 			}
+			/** 单块全文：优先草稿，否则磁盘 */
+			case "GET /api/preset/block": {
+				const id = (query.get("id") ?? "").trim();
+				if (!id) throw new Error("缺少 id");
+				const { preset, path } = loadEffectivePreset(host.cwd);
+				if (!preset) throw new Error(path ? `预设文件不存在：${path}` : "当前未配置预设文件");
+				const block = preset.blocks.find((b) => b.id === id);
+				if (!block) throw new Error(`找不到提示词块：${id}`);
+				sendJson(res, 200, {
+					id: block.id,
+					name: block.name,
+					channel: block.channel,
+					role: block.role,
+					enabled: block.enabled,
+					content: block.content,
+					chars: block.content.length,
+				});
+				return true;
+			}
+			/**
+			 * PUT：只写入运行时草稿并热更新（**不落盘**）。
+			 * 开关/改字立刻影响下一轮生成；点「保存」才写预设文件。
+			 */
 			case "PUT /api/preset": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as {
 					samplers?: Record<string, number>;
-					blocks?: Array<{ id: string; enabled: boolean }>;
+					blocks?: Array<{
+						id: string;
+						enabled?: boolean;
+						name?: string;
+						content?: string;
+						channel?: "system" | "postHistory";
+					}>;
+					/** 完整替换草稿（前端持有全文时用） */
+					preset?: unknown;
 				};
 				const config = loadConfig(host.cwd);
 				if (!config.preset) throw new Error("当前未配置预设文件");
-				const p = resolvePath(host.cwd, config.preset);
-				const preset = normalizeRpPreset(JSON.parse(readFileSync(p, "utf8")));
-				const next: RpPreset = {
-					...preset,
-					samplers: sanitizeSamplers(body.samplers) ?? preset.samplers,
-					blocks: preset.blocks.map((b) => {
-						const patch = body.blocks?.find((x) => x.id === b.id);
-						return patch ? { ...b, enabled: patch.enabled === true } : b;
-					}),
-				};
-				writeJsonWithBackup(p, next);
+				let next: RpPreset;
+				if (body.preset !== undefined) {
+					next = normalizeRpPreset(body.preset);
+				} else {
+					const base = loadEffectivePreset(host.cwd).preset ?? loadDiskPreset(host.cwd)?.preset;
+					if (!base) throw new Error(`预设文件不存在：${config.preset}`);
+					next = mergePresetPatches(base, body);
+				}
+				const ovr = presetOverridePath(host.cwd);
+				mkdirSync(join(host.cwd, ".liyuan"), { recursive: true });
+				writeFileSync(ovr, `${JSON.stringify(next, null, "\t")}\n`, "utf8");
 				await host.softRefreshConfig();
-				sendJson(res, 200, { ok: true });
+				sendJson(res, 200, { ok: true, dirty: true, saved: false });
+				return true;
+			}
+			/** 把当前草稿（或请求体）写入磁盘预设文件，并清除草稿标记 */
+			case "POST /api/preset/save": {
+				if (refuseWhileStreaming()) return true;
+				const rawBody = await readBody(req).catch(() => "");
+				const body = JSON.parse(rawBody.trim() || "{}") as {
+					preset?: unknown;
+					samplers?: Record<string, number>;
+					blocks?: Array<{
+						id: string;
+						enabled?: boolean;
+						name?: string;
+						content?: string;
+						channel?: "system" | "postHistory";
+					}>;
+				};
+				const config = loadConfig(host.cwd);
+				if (!config.preset) throw new Error("当前未配置预设文件");
+				const filePath = resolvePath(host.cwd, config.preset);
+				let next: RpPreset;
+				if (body.preset !== undefined) {
+					next = normalizeRpPreset(body.preset);
+				} else if (body.blocks || body.samplers) {
+					const base = loadEffectivePreset(host.cwd).preset ?? loadDiskPreset(host.cwd)?.preset;
+					if (!base) throw new Error(`预设文件不存在：${config.preset}`);
+					next = mergePresetPatches(base, body);
+				} else {
+					const eff = loadEffectivePreset(host.cwd).preset;
+					if (!eff) throw new Error(`预设文件不存在：${config.preset}`);
+					next = eff;
+				}
+				writeJsonWithBackup(filePath, next);
+				clearPresetOverride(host.cwd);
+				await host.softRefreshConfig();
+				sendJson(res, 200, { ok: true, dirty: false, saved: true, path: config.preset });
+				return true;
+			}
+			/** 丢弃未保存草稿，从磁盘重载 */
+			case "POST /api/preset/revert": {
+				if (refuseWhileStreaming()) return true;
+				clearPresetOverride(host.cwd);
+				await host.softRefreshConfig();
+				sendJson(res, 200, { ok: true, dirty: false });
 				return true;
 			}
 			case "POST /api/preset/convert": {

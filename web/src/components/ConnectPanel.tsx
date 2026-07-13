@@ -86,19 +86,33 @@ function emptyDraft(): Draft {
 function draftToConfig(d: Draft): LiyuanAgentConfig {
 	const name = d.name.trim();
 	const providers: LiyuanAgentConfig["providers"] = {};
+	const models = d.models.map((m) => {
+		const out: ModelEntry = { ...m, id: String(m.id) };
+		const cw = out.contextWindow;
+		if (typeof cw === "string") {
+			try {
+				out.contextWindow = parseContextWindow(cw);
+			} catch {
+				delete out.contextWindow;
+			}
+		} else if (typeof cw === "number" && (!Number.isFinite(cw) || cw < 1024)) {
+			delete out.contextWindow;
+		}
+		return out;
+	});
 	if (name) {
 		providers[name] = {
 			baseUrl: d.baseUrl.trim(),
 			api: d.api.trim() || "openai-completions",
 			apiKey: d.apiKey.trim() || "placeholder",
-			models: d.models,
+			models,
 		};
 	}
-	const firstThink = d.models.find((m) => typeof m.thinkingLevel === "string" && m.thinkingLevel.trim());
+	const firstThink = models.find((m) => typeof m.thinkingLevel === "string" && m.thinkingLevel.trim());
 	return {
 		version: 1,
 		defaultProvider: name || undefined,
-		defaultModel: d.models[0]?.id,
+		defaultModel: models[0]?.id,
 		defaultThinkingLevel:
 			typeof firstThink?.thinkingLevel === "string" ? firstThink.thinkingLevel.trim() : undefined,
 		providers,
@@ -133,6 +147,34 @@ function modelThinkingOf(cfg: LiyuanAgentConfig, provider: string, modelId: stri
 	return typeof m?.thinkingLevel === "string" ? m.thinkingLevel.trim() : "";
 }
 
+function modelContextOf(cfg: LiyuanAgentConfig, provider: string, modelId: string): number | undefined {
+	const p = cfg.providers?.[provider];
+	const list = Array.isArray(p?.models) ? p.models : [];
+	const m = list.find((x) => String(x.id) === modelId);
+	const n = m?.contextWindow;
+	return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** 解析 128000 / 500k / 1.5m 等 */
+export function parseContextWindow(raw: string): number {
+	const s = raw.trim().toLowerCase().replace(/,/g, "").replace(/\s/g, "");
+	const m = /^(\d+(?:\.\d+)?)(k|m)?$/.exec(s);
+	if (!m) throw new Error("请输入数字，如 128000、500k、1m");
+	let n = Number(m[1]);
+	if (m[2] === "k") n *= 1000;
+	if (m[2] === "m") n *= 1_000_000;
+	n = Math.round(n);
+	if (!Number.isFinite(n) || n < 1024) throw new Error("上下文至少 1024");
+	if (n > 10_000_000) throw new Error("上下文过大（上限 10M）");
+	return n;
+}
+
+const fmtCtx = (n: number) => {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+	if (n >= 1000) return `${Math.round(n / 1000)}k`;
+	return String(n);
+};
+
 // ---------- widgets ----------
 
 function StatusLine({ status }: { status: { ok: boolean; detail: string } | null }) {
@@ -160,6 +202,9 @@ function ThinkingInput({
 	};
 	return (
 		<div className="conn-thinking">
+			<div className="field-label" style={{ marginBottom: 4 }}>
+				思考档
+			</div>
 			<div className="conn-thinking-row">
 				<input
 					className="panel-search"
@@ -183,6 +228,73 @@ function ThinkingInput({
 			<div className="field-hint">
 				英文档位名，因模型而异
 				{hints && hints.length > 0 ? ` · 常见：${hints.join(" / ")}` : ""}
+			</div>
+		</div>
+	);
+}
+
+/** 当前模型上下文窗口（影响底栏占用百分比与压缩阈值） */
+function ContextWindowInput({
+	value,
+	busy,
+	onCommit,
+}: {
+	value: number;
+	busy: boolean;
+	onCommit: (n: number) => void;
+}) {
+	const [text, setText] = useState(value > 0 ? String(value) : "128000");
+	useEffect(() => setText(value > 0 ? String(value) : "128000"), [value]);
+	const commit = () => {
+		try {
+			const n = parseContextWindow(text);
+			if (n === value) return;
+			onCommit(n);
+		} catch {
+			// 非法输入时恢复显示
+			setText(value > 0 ? String(value) : "128000");
+		}
+	};
+	return (
+		<div className="conn-thinking" style={{ marginTop: 8 }}>
+			<div className="field-label" style={{ marginBottom: 4 }}>
+				上下文窗口
+			</div>
+			<div className="conn-thinking-row">
+				<input
+					className="panel-search"
+					value={text}
+					disabled={busy}
+					placeholder="如 128000 / 500k / 1m"
+					spellCheck={false}
+					onChange={(e) => setText(e.target.value)}
+					onBlur={commit}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							commit();
+						}
+					}}
+				/>
+				<button
+					type="button"
+					className="drawer-btn"
+					disabled={busy}
+					onClick={() => {
+						try {
+							const n = parseContextWindow(text);
+							if (n !== value) onCommit(n);
+						} catch {
+							setText(value > 0 ? String(value) : "128000");
+						}
+					}}
+				>
+					应用
+				</button>
+			</div>
+			<div className="field-hint">
+				当前生效 {value > 0 ? fmtCtx(value) : "128k（默认）"} · 写入连接配置；中转站宣称 500k 时请填 500000 或
+				500k，否则占用百分比会按 128k 虚高
 			</div>
 		</div>
 	);
@@ -292,6 +404,30 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			if (active) await apiPut("/api/agent-profiles", { id: active.id, name: active.name, config: cfg });
 			reloadAll();
 		}, `思考档 ${level.trim()}`);
+
+	/** 改当前模型 contextWindow → 写 agent 配置 + models.json，重绑会话模型 */
+	const setContextWindow = (n: number) =>
+		run(async () => {
+			if (!current) throw new Error("尚未启用模型");
+			if (!Number.isFinite(n) || n < 1024) throw new Error("上下文至少 1024");
+			const cfg: LiyuanAgentConfig = {
+				...activeConfig,
+				providers: { ...activeConfig.providers },
+			};
+			const prev = cfg.providers[current.provider];
+			const models = Array.isArray(prev?.models) ? [...prev.models] : [];
+			const idx = models.findIndex((m) => String(m.id) === current.id);
+			if (idx >= 0) {
+				models[idx] = { ...models[idx], id: current.id, contextWindow: n };
+			} else {
+				models.push({ id: current.id, contextWindow: n });
+			}
+			cfg.providers[current.provider] = { ...(prev ?? {}), models };
+			await apiPut("/api/agent-config", { config: cfg });
+			const active = profiles.find((p) => p.active);
+			if (active) await apiPut("/api/agent-profiles", { id: active.id, name: active.name, config: cfg });
+			reloadAll();
+		}, `上下文窗口 ${fmtCtx(n)}（${n.toLocaleString()}）`);
 
 	const enableProfile = (id: string) =>
 		run(async () => {
@@ -458,7 +594,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 				<div className="conn-models">
 					<div className="conn-models-head">
 						<span className="field-label">已选清单（{draft.models.length}）</span>
-						<span className="field-hint">每模型单独思考档</span>
+						<span className="field-hint">每模型：思考档 + 上下文窗口</span>
 					</div>
 					{draft.models.length === 0 ? (
 						<div className="sp-empty">检查模型后点 ＋，或手填</div>
@@ -477,6 +613,56 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 												models: draft.models.map((x) => (x.id === m.id ? { ...x, thinkingLevel: e.target.value } : x)),
 											})
 										}
+									/>
+									<input
+										className="panel-search conn-model-thinking"
+										placeholder="上下文 如 500k"
+										spellCheck={false}
+										title="模型 contextWindow；空=默认 128k"
+										value={
+											typeof m.contextWindow === "number" && Number.isFinite(m.contextWindow) && m.contextWindow > 0
+												? String(m.contextWindow)
+												: typeof m.contextWindow === "string"
+													? m.contextWindow
+													: ""
+										}
+										onChange={(e) => {
+											const raw = e.target.value.trim();
+											patchDraft({
+												models: draft.models.map((x) => {
+													if (x.id !== m.id) return x;
+													if (!raw) {
+														const { contextWindow: _drop, ...rest } = x as ModelEntry & { contextWindow?: unknown };
+														void _drop;
+														return { ...rest, id: x.id };
+													}
+													try {
+														return { ...x, contextWindow: parseContextWindow(raw) };
+													} catch {
+														// 输入中：暂存字符串，保存时再规范化
+														return { ...x, contextWindow: raw };
+													}
+												}),
+											});
+										}}
+										onBlur={() => {
+											const raw = m.contextWindow;
+											if (raw === undefined || raw === "" || raw === null) return;
+											if (typeof raw === "number" && raw > 0) return;
+											try {
+												const n = parseContextWindow(String(raw));
+												patchDraft({
+													models: draft.models.map((x) => (x.id === m.id ? { ...x, contextWindow: n } : x)),
+												});
+											} catch {
+												const { contextWindow: _drop, ...rest } = m as ModelEntry & { contextWindow?: unknown };
+												void _drop;
+												patchDraft({
+													models: draft.models.map((x) => (x.id === m.id ? { ...rest, id: x.id } : x)),
+												});
+												toast("warning", `「${m.id}」上下文无效，已清空（可用 500k）`);
+											}
+										}}
 									/>
 									<button
 										type="button"
@@ -559,15 +745,25 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 							<span className="auth-dot ok" />
 							<div className="connect-current-info">
 								<div className="model-current">{current.name}</div>
+								<div className="field-hint">
+									{current.provider} · 窗口{" "}
+									{current.contextWindow > 0 ? fmtCtx(current.contextWindow) : "128k 默认"}
+								</div>
 							</div>
 						</div>
 						<ThinkingInput value={current.thinkingLevel} hints={current.availableLevels} busy={busy} onCommit={(lv) => void setThinking(lv)} />
+						<ContextWindowInput
+							value={current.contextWindow > 0 ? current.contextWindow : 128000}
+							busy={busy}
+							onCommit={(n) => void setContextWindow(n)}
+						/>
 						{activeProviders.length > 0 && (
 							<ul className="conn-pick-list" style={{ marginTop: 10 }}>
 								{activeProviders.flatMap((pk) =>
 									modelsOfActive(pk).map((m) => {
 										const on = current.provider === m.provider && current.id === m.id;
 										const think = modelThinkingOf(activeConfig, m.provider, m.id);
+										const ctx = modelContextOf(activeConfig, m.provider, m.id) ?? m.contextWindow;
 										return (
 											<li key={`${m.provider}/${m.id}`}>
 												<button
@@ -580,6 +776,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 													<span className="conn-pick-meta">
 														{on && <span className="chip chip-cap">使用中</span>}
 														{think ? <span className="chip chip-cap">{think}</span> : null}
+														{ctx > 0 ? <span className="chip chip-cap">{fmtCtx(ctx)}</span> : null}
 													</span>
 												</button>
 											</li>

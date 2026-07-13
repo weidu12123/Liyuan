@@ -187,12 +187,15 @@ const broadcast = (frame: ServerFrame) => {
 const safeStats = (): WireStats | null => {
 	try {
 		const s = session.getSessionStats();
+		const cu = s.contextUsage;
 		return {
 			userMessages: s.userMessages,
 			assistantMessages: s.assistantMessages,
 			totalTokens: s.tokens.total,
 			cost: s.cost,
-			contextPercent: s.contextUsage?.percent ?? null,
+			contextPercent: cu?.percent ?? null,
+			contextTokens: cu?.tokens ?? null,
+			contextWindow: cu?.contextWindow ?? session.model?.contextWindow ?? null,
 		};
 	} catch {
 		return null;
@@ -696,7 +699,12 @@ const bindSession = async () => {
 			case "message_end": {
 				const wire = toWireMsg(event.message, names, { backstage: backstageTurn });
 				// user 消息在 prompt 受理时已回显，这里跳过防重
-				if (wire && wire.channel !== "user") broadcast({ type: "message", message: wire });
+				if (wire && wire.channel !== "user") {
+					broadcast({ type: "message", message: wire });
+				} else if ((event.message as { role?: string } | undefined)?.role === "assistant") {
+					// 中间 tool 轮 / 纯工具轮被过滤：清掉前端流式半成品，整轮只保留一个角色气泡
+					broadcast({ type: "stream", state: "clear" });
+				}
 				break;
 			}
 			case "tool_execution_start": {
@@ -754,6 +762,7 @@ const currentModelInfo = (): CurrentModelInfo | null => {
 		name: m.name || m.id,
 		thinkingLevel: session.thinkingLevel,
 		availableLevels: session.getAvailableThinkingLevels(),
+		contextWindow: m.contextWindow ?? 0,
 	};
 };
 

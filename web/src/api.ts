@@ -32,10 +32,16 @@ export function apiGetPeek<T>(path: string): T | null {
 /** 写接口路径 → 需要失效的 GET 前缀（精细化，避免牵连无关面板） */
 function invalidateAfterWrite(writePath: string): void {
 	const p = writePath.split("?")[0];
+	// 更具体的规则须排在前面（先匹配先清；可多规则命中）
 	const rules: Array<{ test: RegExp; prefixes: string[] }> = [
+		// 卡内嵌世界书另存并挂载：同时改 lorebooks 文件列表 + config 挂载
+		{
+			test: /^\/api\/card\/import-embedded-lore$/,
+			prefixes: ["/api/lorebook", "/api/lorebooks", "/api/config", "/api/card", "/api/cards"],
+		},
 		{ test: /^\/api\/cards?/, prefixes: ["/api/card", "/api/cards"] },
 		{ test: /^\/api\/persona/, prefixes: ["/api/personas", "/api/config"] },
-		{ test: /^\/api\/lorebook/, prefixes: ["/api/lorebook", "/api/lorebooks"] },
+		{ test: /^\/api\/lorebook/, prefixes: ["/api/lorebook", "/api/lorebooks", "/api/config"] },
 		{ test: /^\/api\/codex/, prefixes: ["/api/codex"] },
 		{ test: /^\/api\/preset/, prefixes: ["/api/preset", "/api/presets"] },
 		{ test: /^\/api\/mcp/, prefixes: ["/api/mcp"] },
@@ -51,6 +57,8 @@ function invalidateAfterWrite(writePath: string): void {
 		if (r.test.test(p)) {
 			for (const pref of r.prefixes) apiGetCacheClear(pref);
 			hit = true;
+			// 具体规则已处理完则不必再吃宽松 cards? 规则的重复清（仍允许其它规则叠加）
+			if (r.test.source.includes("import-embedded-lore")) break;
 		}
 	}
 	// 未识别的写：整表清，保守
@@ -75,8 +83,23 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 	return data as T;
 }
 
+/**
+ * 面板重拉期间递增：其内的 apiGet 一律走网络（仍回写缓存供 peek）。
+ * 内存缓存只负责「首帧秒开」，不负责「刷新/reload 结果」——否则右上角刷新会假成功。
+ */
+let panelFetchBypassDepth = 0;
+
+/** @internal 由 usePanelData 包一层；业务代码勿直接调 */
+export function runWithPanelFetchBypass<T>(fn: () => Promise<T>): Promise<T> {
+	panelFetchBypassDepth += 1;
+	return fn().finally(() => {
+		panelFetchBypassDepth -= 1;
+	});
+}
+
 export async function apiGet<T>(path: string, opts?: { bypassCache?: boolean }): Promise<T> {
-	if (!opts?.bypassCache) {
+	const bypass = !!opts?.bypassCache || panelFetchBypassDepth > 0;
+	if (!bypass) {
 		const hit = getCache.get(path);
 		if (hit && Date.now() - hit.at < GET_TTL_MS) return hit.data as T;
 		const inflight = getInflight.get(path);
@@ -87,13 +110,35 @@ export async function apiGet<T>(path: string, opts?: { bypassCache?: boolean }):
 		getInflight.delete(path);
 		return d;
 	});
-	if (!opts?.bypassCache) getInflight.set(path, p);
+	if (!bypass) getInflight.set(path, p);
 	try {
 		return await p;
 	} catch (e) {
 		getInflight.delete(path);
 		throw e;
 	}
+}
+
+/** 按面板 id 清相关 GET 缓存（手动刷新按钮用，避免 remount 后 peek 仍是旧数据） */
+export function apiGetCacheClearForPanel(panelId: string): void {
+	const map: Record<string, string[]> = {
+		card: ["/api/card", "/api/cards"],
+		lorebook: ["/api/lorebook", "/api/lorebooks", "/api/config"],
+		codex: ["/api/codex"],
+		persona: ["/api/personas", "/api/config"],
+		preset: ["/api/preset", "/api/presets"],
+		connect: ["/api/models", "/api/agent-config", "/api/agent-profiles"],
+		powers: ["/api/mcp", "/api/skills"],
+		settings: ["/api/config"],
+		uploads: ["/api/uploads", "/api/media"],
+		worldline: ["/api/worldline"],
+	};
+	const prefixes = map[panelId];
+	if (!prefixes) {
+		// 未知面板：保守不整表清，仅无 cacheKey 的组件靠 bypass 拉新
+		return;
+	}
+	for (const pref of prefixes) apiGetCacheClear(pref);
 }
 
 export const apiPost = <T,>(path: string, body: unknown) =>
@@ -139,6 +184,8 @@ export interface CurrentModelInfo {
 	name: string;
 	thinkingLevel: string;
 	availableLevels: string[];
+	/** 当前模型上下文窗口 token 数（连接配置可改） */
+	contextWindow: number;
 }
 
 export interface ModelInfo {
@@ -319,13 +366,20 @@ export interface PresetBlockView {
 	chars: number;
 }
 
+/** GET /api/preset/block 单块全文（编辑用） */
+export interface PresetBlockDetail extends PresetBlockView {
+	content: string;
+}
+
 export interface PresetResponse {
 	path?: string;
 	missing?: string;
+	/** 是否有未写入磁盘的运行时草稿 */
+	dirty?: boolean;
 	preset: {
 		name: string;
 		samplers: Record<string, number>;
-		blocks: PresetBlockView[];
+		blocks: Array<PresetBlockView & { content?: string }>;
 	} | null;
 }
 

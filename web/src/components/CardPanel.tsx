@@ -15,7 +15,7 @@ import {
 	type CardsResponse,
 } from "../api.ts";
 import { IconBack, IconClose, IconGrid, IconList, IconStar, IconUploads } from "./icons.tsx";
-import { ConfirmButton, Field, PanelStatus, SearchInput, useAction, usePanelData } from "./kit.tsx";
+import { bumpWatchPanels, ConfirmButton, Field, PanelStatus, SearchInput, useAction, usePanelData } from "./kit.tsx";
 
 type CardSort = "recent" | "name" | "fav";
 type CardView = "grid" | "list";
@@ -413,6 +413,7 @@ function CardItem({
 	busy,
 	onPick,
 	onFav,
+	onDelete,
 }: {
 	c: CardLibItem;
 	current: boolean;
@@ -420,6 +421,7 @@ function CardItem({
 	busy: boolean;
 	onPick: (c: CardLibItem) => void;
 	onFav: (c: CardLibItem) => void;
+	onDelete: (c: CardLibItem) => void;
 }) {
 	return (
 		<div className={`card-item card-item-${view} ${current ? "current" : ""}`}>
@@ -455,6 +457,18 @@ function CardItem({
 			>
 				<IconStar size={14} filled={c.fav} />
 			</button>
+			{!current && (
+				<ConfirmButton
+					className="card-fav card-del"
+					disabled={busy}
+					confirmText="确认"
+					title="删除这张卡（文件从卡库移除，不影响已有会话记录）"
+					aria-label={`删除角色卡「${c.name}」`}
+					onConfirm={() => onDelete(c)}
+				>
+					<IconClose size={13} />
+				</ConfirmButton>
+			)}
 		</div>
 	);
 }
@@ -574,11 +588,22 @@ export function CardPanel({
 		run(async () => {
 			if (!lorePrompt) return;
 			const path = lorePrompt.cardPath;
-			await apiPost("/api/card/import-embedded-lore", { card: path });
+			const r = await apiPost<{ path?: string; entryCount?: number; name?: string }>("/api/card/import-embedded-lore", {
+				card: path,
+			});
 			clearLorePending(path);
 			setLorePrompt(null);
 			setDetail(true);
 			onEnterChat?.();
+			// 世界书面板多半已保活挂载：清缓存（api 层）后主动 bump，避免必须整页刷新
+			bumpWatchPanels();
+			if (r.path) {
+				try {
+					sessionStorage.setItem("liyuan.lore.focus", r.path);
+				} catch {
+					/* ignore */
+				}
+			}
 		}, "配套世界书已导入并加入挂载（可与其它书并存）");
 
 	// ST 交互：点卡即切换并进对话；同卡再点也进对话（不重复 switch）
@@ -617,6 +642,12 @@ export function CardPanel({
 			await apiPost("/api/cards/fav", { path: c.path, fav: !c.fav });
 			lib.reload();
 		});
+
+	const del = (c: CardLibItem) =>
+		run(async () => {
+			await apiDelete(`/api/cards?path=${encodeURIComponent(c.path)}`);
+			lib.reload();
+		}, `已删除「${c.name}」`);
 
 	const doImport = async (files: FileList | File[]) => {
 		setImporting(true);
@@ -776,6 +807,7 @@ export function CardPanel({
 									busy={busy}
 									onPick={pick}
 									onFav={fav}
+									onDelete={del}
 								/>
 							))}
 						</div>

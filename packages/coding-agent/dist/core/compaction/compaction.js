@@ -72,11 +72,21 @@ export const DEFAULT_COMPACTION_SETTINGS = {
 // Token calculation
 // ============================================================================
 /**
- * Calculate total context tokens from usage.
- * Uses the native totalTokens field when available, falls back to computing from components.
+ * Context-window occupancy from a turn's usage (prompt side only).
+ * Excludes completion output; totalTokens is usually prompt+completion.
  */
 export function calculateContextTokens(usage) {
-    return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    const input = usage.input || 0;
+    const cacheRead = usage.cacheRead || 0;
+    const cacheWrite = usage.cacheWrite || 0;
+    const promptSide = input + cacheRead + cacheWrite;
+    if (promptSide > 0)
+        return promptSide;
+    const total = usage.totalTokens || 0;
+    const output = usage.output || 0;
+    if (total > output)
+        return total - output;
+    return total;
 }
 /**
  * Get usage from an assistant message if available.

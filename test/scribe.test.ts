@@ -6,7 +6,7 @@ import { withAliases } from "../src/lorebook.ts";
 import { defaultState } from "../src/state.ts";
 import type { LorebookEntry } from "../src/types.ts";
 
-test("场记提示词：含账本、双方正文、否定性事件要求", () => {
+test("场记提示词：只记账，不含连续性审查", () => {
 	const { systemPrompt, userText } = buildScribeTurnPrompt({
 		state: defaultState(),
 		userText: "*我递出怀表* 收下吧。",
@@ -15,16 +15,16 @@ test("场记提示词：含账本、双方正文、否定性事件要求", () =>
 		userName: "阿远",
 	});
 	assert.ok(systemPrompt.includes("patch"));
-	assert.ok(systemPrompt.includes("warnings"));
+	assert.ok(!systemPrompt.includes('"warnings"'), "不再要求输出 warnings 字段");
+	assert.ok(!systemPrompt.includes("连续性"), "不再做连续性审查");
+	assert.ok(!systemPrompt.includes("unasked_turn"), "不再做先斩后奏检测");
 	assert.ok(systemPrompt.includes("否定性事件"), "拒收类事件必须显式要求记账");
 	assert.ok(systemPrompt.includes("青梧"));
 	assert.ok(userText.includes("【当前账本】"));
 	assert.ok(userText.includes("阿远：*我递出怀表*"));
-	// 默认不开决策门禁检测
-	assert.ok(!systemPrompt.includes("unasked_turn"));
 });
 
-test("场记提示词：detectUnaskedTurn 开时追加先斩后奏检测项", () => {
+test("场记提示词：detectUnaskedTurn 已忽略", () => {
 	const { systemPrompt } = buildScribeTurnPrompt({
 		state: defaultState(),
 		userText: "我们继续。",
@@ -33,17 +33,16 @@ test("场记提示词：detectUnaskedTurn 开时追加先斩后奏检测项", ()
 		userName: "阿远",
 		detectUnaskedTurn: true,
 	});
-	assert.ok(systemPrompt.includes("unasked_turn"));
-	assert.ok(systemPrompt.includes("三项工作"));
-	assert.ok(systemPrompt.includes("先斩后奏"));
+	assert.ok(!systemPrompt.includes("unasked_turn"));
+	assert.ok(!systemPrompt.includes("先斩后奏"));
 });
 
-test("场记输出解析：裸 JSON、围栏 JSON、垃圾输出", () => {
+test("场记输出解析：只取 patch，丢弃审查字段", () => {
 	const bare = parseScribeResult('{"patch":{"time":"第二天清晨"},"warnings":["正文说怀表在她手中 vs 账本记录阿远持有"]}');
 	assert.ok(bare);
 	assert.equal((bare.patch as { time?: string }).time, "第二天清晨");
-	assert.equal(bare.warnings.length, 1);
-	assert.equal(bare.unaskedTurn, null, "无 unasked_turn 字段时为 null");
+	assert.equal(bare.warnings.length, 0, "warnings 一律清空");
+	assert.equal(bare.unaskedTurn, null);
 
 	const fenced = parseScribeResult('好的，以下是结果：\n```json\n{"patch":{},"warnings":[]}\n```');
 	assert.ok(fenced);
@@ -54,19 +53,13 @@ test("场记输出解析：裸 JSON、围栏 JSON、垃圾输出", () => {
 	const malformed = parseScribeResult('{"patch": "不是对象", "warnings": [42, "有效告警", ""]}');
 	assert.ok(malformed);
 	assert.deepEqual(malformed.patch, {}, "非对象 patch 应回退为空");
-	assert.deepEqual(malformed.warnings, ["有效告警"], "非字符串与空白告警应过滤");
+	assert.deepEqual(malformed.warnings, []);
 });
 
-test("场记输出解析：unasked_turn 字符串提取与空值过滤", () => {
+test("场记输出解析：unasked_turn 即使返回也丢弃", () => {
 	const hit = parseScribeResult('{"patch":{},"warnings":[],"unasked_turn":"未经询问即让盟友背叛"}');
 	assert.ok(hit);
-	assert.equal(hit.unaskedTurn, "未经询问即让盟友背叛");
-	const empty = parseScribeResult('{"patch":{},"warnings":[],"unasked_turn":"  "}');
-	assert.ok(empty);
-	assert.equal(empty.unaskedTurn, null, "空白字符串按无违规处理");
-	const nulled = parseScribeResult('{"patch":{},"warnings":[],"unasked_turn":null}');
-	assert.ok(nulled);
-	assert.equal(nulled.unaskedTurn, null);
+	assert.equal(hit.unaskedTurn, null);
 });
 
 test("别名提示词与解析", () => {

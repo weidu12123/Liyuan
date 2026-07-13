@@ -82,17 +82,40 @@ const isEmptyState = (s: WorldState) =>
 	Object.keys(s.flags).length === 0 &&
 	s.plot_threads.length === 0;
 
+const fmtK = (n: number) => {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+	if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+	return String(n);
+};
+
 /** 输入框下方：会话用量（无费用） */
 export function SessionStatsBar({ stats }: { stats: WireStats | null }) {
 	if (!stats) return null;
 	const msgs = stats.userMessages + stats.assistantMessages;
+	const win = stats.contextWindow && stats.contextWindow > 0 ? stats.contextWindow : null;
+	const used = typeof stats.contextTokens === "number" && stats.contextTokens >= 0 ? stats.contextTokens : null;
+	// 累计 = 本分支各轮 input+output+cache 相加（每轮都会重发 system，会比「上下文」大很多）
+	// 上下文 = 上一轮请求的 prompt 侧占用（不含生成输出）
+	const ctxLabel =
+		stats.contextPercent !== null
+			? win
+				? `上下文 ${Math.round(stats.contextPercent)}%（${used != null ? fmtK(used) : "?"} / ${fmtK(win)}）`
+				: `上下文 ${Math.round(stats.contextPercent)}%`
+			: null;
 	const parts = [
 		`${msgs} 条消息`,
-		`${stats.totalTokens.toLocaleString()} token`,
-		stats.contextPercent !== null ? `上下文 ${Math.round(stats.contextPercent)}%` : null,
+		`累计 ${fmtK(stats.totalTokens)}`,
+		ctxLabel,
 	].filter(Boolean);
+	const title = [
+		"累计：本会话各轮请求 token 相加（每轮重发 system+历史，数字会远大于单次上下文）",
+		win
+			? `上下文：上一轮装进模型窗口的 prompt 量 / 窗口 ${fmtK(win)}（不含回复输出；连接面板可改窗口）`
+			: "上下文：当前窗口占用",
+	].join("\n");
 	return (
-		<div className="session-stats-bar" title="本会话用量（费用不显示，难以精确）">
+		<div className="session-stats-bar" title={title}>
 			{parts.join(" · ")}
 		</div>
 	);

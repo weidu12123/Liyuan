@@ -130,11 +130,23 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 // ============================================================================
 
 /**
- * Calculate total context tokens from usage.
- * Uses the native totalTokens field when available, falls back to computing from components.
+ * Context-window occupancy from a turn's usage (prompt side only).
+ *
+ * Must NOT include completion `output`: that does not sit in the next prompt's
+ * window the same way, and `usage.totalTokens` is usually prompt+completion.
+ * Prefer input + cacheRead + cacheWrite (= provider prompt_tokens when split).
  */
 export function calculateContextTokens(usage: Usage): number {
-	return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+	const input = usage.input || 0;
+	const cacheRead = usage.cacheRead || 0;
+	const cacheWrite = usage.cacheWrite || 0;
+	const promptSide = input + cacheRead + cacheWrite;
+	if (promptSide > 0) return promptSide;
+	// Fallback when only totalTokens is filled (some proxies)
+	const total = usage.totalTokens || 0;
+	const output = usage.output || 0;
+	if (total > output) return total - output;
+	return total;
 }
 
 /**

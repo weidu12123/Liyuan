@@ -112,6 +112,10 @@ export interface WireStats {
 	cost: number;
 	/** 上下文占用百分比（0-100），未知为 null */
 	contextPercent: number | null;
+	/** 当前估计已装入窗口的 token（与 percent 同源） */
+	contextTokens?: number | null;
+	/** 当前模型 contextWindow（连接配置可改；未配置时 registry 默认 128000） */
+	contextWindow?: number | null;
 }
 
 /** 过程活动（过程条 v0：工具调用；F3 扩展场记/审计） */
@@ -139,6 +143,8 @@ export type ServerFrame =
 	  }
 	| { type: "message"; message: WireMsg }
 	| { type: "delta"; kind: "text" | "thinking"; delta: string }
+	/** 丢弃当前流式半成品（中间 tool 轮被过滤后，避免计划旁白叠进下一轮 / 误落本地气泡） */
+	| { type: "stream"; state: "clear" }
 	| { type: "agent"; state: "start" | "end" }
 	| { type: "activity"; activity: WireActivity }
 	| { type: "state"; state: WorldState }
@@ -191,7 +197,6 @@ interface MsgLike {
 	details?: unknown;
 	toolName?: unknown;
 	isError?: unknown;
-	details?: unknown;
 }
 
 /** show_image 工具结果 → image 消息（图片通道 §6.5）；非该工具或出错返回 null */
@@ -292,9 +297,17 @@ function thinkingOf(content: unknown): string {
 		.join("\n");
 }
 
+/** content 是否含 toolCall 块（agent 中间轮会夹带计划旁白 + 工具调用） */
+function hasToolCall(content: unknown): boolean {
+	if (!Array.isArray(content)) return false;
+	return content.some(
+		(p) => p && typeof p === "object" && (p as { type?: unknown }).type === "toolCall",
+	);
+}
+
 /**
  * 单条 AgentMessage → WireMsg。不属于叙事流的消息（rp-inject、toolResult、
- * 纯工具轮 assistant、未知类型）返回 null，调用方跳过。
+ * 纯工具轮 / 带 toolCall 的中间 assistant、未知类型）返回 null，调用方跳过。
  * opts.backstage：该轮用户以 // 开头（幕后轮），助手回复走 backstage 通道
  * （PLAN-PHASE3 §6.1 显示通道——排版区隔，非上下文切割）。
  */
@@ -312,6 +325,10 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: { backstage?: boo
 	if (msg.role === "assistant") {
 		// 纯工具/思考轮无正文：整条跳过（D9 同款判断）
 		if (!text) return null;
+		// 含 toolCall 的中间轮：模型常写「先查 X 再落笔」类计划旁白；若进 narrative
+		// 会叠出多条角色气泡。工具过程条由 activity 帧承担，最终 stop 正文单独展示。
+		// （会话文件仍保留原文；仅影响 Web 显示层。）
+		if (hasToolCall(msg.content)) return null;
 		const channel: WireChannel = opts?.backstage ? "backstage" : "narrative";
 		// 模型原生 thinking 块 + 预设假思维链（<thinking>/<draft_notes>…）折叠展示
 		const modelThinking = thinkingOf(msg.content).trim();
@@ -380,6 +397,50 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: { backstage?: boo
 	return null; // bash / 未知类型
 }
 
+/**
+ * 同一用户输入下的多条 narrative/backstage 折叠进一个气泡。
+ * agent 多步工具轮若仍漏出多段正文，重放时也应是一泡而非叠楼。
+ * 插图/选择卡等其它通道插在中间不打断「本轮角色泡」归属。
+ */
+export function foldTurnNarratives(msgs: WireMsg[]): WireMsg[] {
+	const out: WireMsg[] = [];
+	/** out 内当前剧情轮（上一条非 backstage user 之后）的 narrative/backstage 下标 */
+	let turnRoleIdx = -1;
+	let turnChannel: "narrative" | "backstage" | null = null;
+
+	const join = (a?: string, b?: string) => [a, b].map((s) => (s ?? "").trim()).filter(Boolean).join("\n\n");
+
+	for (const m of msgs) {
+		if (m.channel === "user" && !m.backstage) {
+			turnRoleIdx = -1;
+			turnChannel = null;
+			out.push({ ...m });
+			continue;
+		}
+		if (m.channel === "narrative" || m.channel === "backstage") {
+			if (turnRoleIdx >= 0 && turnChannel === m.channel) {
+				const prev = out[turnRoleIdx];
+				const thinking = join(prev.thinking, m.thinking);
+				out[turnRoleIdx] = {
+					...prev,
+					text: join(prev.text, m.text),
+					...(thinking ? { thinking } : {}),
+					// 变体元数据以最后一段为准（annotateSwipes 挂在末条）
+					...(m.swipe ? { swipe: m.swipe } : prev.swipe ? { swipe: prev.swipe } : {}),
+					...(m.name ? { name: m.name } : {}),
+				};
+				continue;
+			}
+			turnRoleIdx = out.length;
+			turnChannel = m.channel;
+			out.push({ ...m });
+			continue;
+		}
+		out.push({ ...m });
+	}
+	return out;
+}
+
 /** 全量历史 → wire 消息列表（hello 帧用）；沿途跟踪场外标记轮，助手回复分道 */
 export function toWireHistory(messages: unknown[], names: WireNames): WireMsg[] {
 	const out: WireMsg[] = [];
@@ -392,7 +453,7 @@ export function toWireHistory(messages: unknown[], names: WireNames): WireMsg[] 
 		const w = toWireMsg(m, names, { backstage });
 		if (w) out.push(w);
 	}
-	return out;
+	return foldTurnNarratives(out);
 }
 
 /**

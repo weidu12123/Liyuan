@@ -175,9 +175,10 @@ function extractText(messages: AgentMessage[]): string {
 // ============================================================================
 
 describe("Token calculation", () => {
-	it("should calculate total context tokens from usage", () => {
+	it("should count prompt-side tokens only (exclude output)", () => {
 		const usage = createMockUsage(1000, 500, 200, 100);
-		expect(calculateContextTokens(usage)).toBe(1800);
+		// input + cacheRead + cacheWrite = 1300（不含 output 500）
+		expect(calculateContextTokens(usage)).toBe(1300);
 	});
 
 	it("should handle zero values", () => {
@@ -248,10 +249,11 @@ describe("estimateContextTokens", () => {
 
 		const estimate = estimateContextTokens(messages);
 
-		expect(estimate.usageTokens).toBe(150);
+		// createMockUsage(100, 50) → prompt-side = 100（不含 output 50）
+		expect(estimate.usageTokens).toBe(100);
 		expect(estimate.lastUsageIndex).toBe(1);
 		expect(estimate.trailingTokens).toBeGreaterThan(0);
-		expect(estimate.tokens).toBe(150 + estimate.trailingTokens);
+		expect(estimate.tokens).toBe(100 + estimate.trailingTokens);
 	});
 });
 

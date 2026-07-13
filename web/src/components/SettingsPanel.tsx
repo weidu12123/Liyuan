@@ -189,7 +189,7 @@ export function SettingsPanel({ toast }: { toast: (level: "info" | "warning" | "
 							开启后 agent 能操作本机（调用你的其他项目、查资料）；全部调用都会显示在过程条。仅在自己的设备上开启。
 						</div>
 						<div className="toggle-row">
-							<span>决策门禁（重大剧情决策先询问）</span>
+							<span>决策门禁（戏内选择卡）</span>
 							<Toggle
 								checked={askMode}
 								onChange={(v) => {
@@ -199,7 +199,7 @@ export function SettingsPanel({ toast }: { toast: (level: "info" | "warning" | "
 							/>
 						</div>
 						<div className="field-hint">
-							开=询问档：新重要角色定型、关键设定定死、重大转折前 agent 停笔弹选择卡问你。关=静默档：agent 自行推进。
+							开=询问档：剧情相关（含「我该怎么办」）一律戏内，用选择卡共创；关=静默档自行推进。戏外只办系统事，不处理剧情。
 						</div>
 					</section>
 

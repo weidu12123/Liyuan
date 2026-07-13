@@ -20,7 +20,7 @@ import {
 	type LoreEntryView,
 	type LoreSearchHit,
 } from "../api.ts";
-import { ConfirmButton, Field, PanelStatus, SearchInput, Toggle, useAction, usePanelData } from "./kit.tsx";
+import { bumpWatchPanels, ConfirmButton, Field, PanelStatus, SearchInput, Toggle, useAction, usePanelData } from "./kit.tsx";
 
 const SOURCE_LABEL: Record<LoreEntryView["source"], string> = {
 	card: "卡内嵌",
@@ -307,16 +307,32 @@ function BooksSection({
 	onView: (v: ViewTarget) => void;
 	onMountChanged: () => void;
 }) {
-	const { data, error, loading, reload } = usePanelData(() => apiGet<LorebooksResponse>("/api/lorebooks"), { cacheKey: "/api/lorebooks" });
+	// watchAgent：配套世界书导入 / agent 写书后由 bumpWatchPanels·agentTick 自动重拉书单
+	const { data, error, loading, reload } = usePanelData(() => apiGet<LorebooksResponse>("/api/lorebooks"), {
+		cacheKey: "/api/lorebooks",
+		watchAgent: true,
+	});
 	const { busy, run } = useAction(toast);
 	const [importing, setImporting] = useState(false);
 
 	const active = useMemo(() => normalizeActiveLorebooks(data?.active ?? null), [data?.active]);
 	const activeSet = useMemo(() => new Set(active), [active]);
 
+	// 配套导入后 focus 到新书；否则无选中时默认第一本
 	useEffect(() => {
-		if (view) return;
 		if (!data?.books.length) return;
+		let focus: string | null = null;
+		try {
+			focus = sessionStorage.getItem("liyuan.lore.focus");
+			if (focus) sessionStorage.removeItem("liyuan.lore.focus");
+		} catch {
+			/* ignore */
+		}
+		if (focus && data.books.some((b) => b.path === focus)) {
+			onView({ kind: "file", path: focus });
+			return;
+		}
+		if (view) return;
 		onView({ kind: "file", path: data.books[0].path });
 	}, [data, view, onView]);
 
@@ -378,6 +394,8 @@ function BooksSection({
 			toast("info", `已导入（${r.entryCount} 条）——点书名看条目，勾选才挂进会话`);
 			reload();
 			onView({ kind: "file", path: r.path });
+			// 条目区等其它 watch 订阅一并刷新
+			bumpWatchPanels();
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
 		} finally {

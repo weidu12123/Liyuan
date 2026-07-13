@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
 import {
 	apiGet,
+	apiGetCacheClearForPanel,
 	apiPost,
 	personaAvatarUrl,
 	prefetchPanelApis,
@@ -59,7 +60,6 @@ import {
 	Bubble,
 	ChoiceCard,
 	MsgAvatar,
-	Paragraphs,
 	RichContent,
 	ThinkingBlock,
 	toolLabel,
@@ -382,6 +382,39 @@ export default function App() {
 		setStreamThinking("");
 	};
 
+	/**
+	 * 同一条用户输入只对应一个角色气泡：若本轮（最近一条剧情 user 之后）已有
+	 * narrative/backstage，则合并正文/思维链/过程条，而不是再 append 一条。
+	 */
+	const upsertTurnReply = (ms: ChatMsg[], incoming: ChatMsg): ChatMsg[] => {
+		const channel = incoming.channel;
+		if (channel !== "narrative" && channel !== "backstage") return [...ms, incoming];
+
+		let lastStoryUser = -1;
+		for (let i = ms.length - 1; i >= 0; i--) {
+			if (ms[i].channel === "user" && !ms[i].backstage) {
+				lastStoryUser = i;
+				break;
+			}
+		}
+		for (let i = ms.length - 1; i > lastStoryUser; i--) {
+			if (ms[i].channel !== channel) continue;
+			const prev = ms[i];
+			const text = [prev.text, incoming.text].map((s) => (s ?? "").trim()).filter(Boolean).join("\n\n");
+			const thinking = [prev.thinking, incoming.thinking].map((s) => (s ?? "").trim()).filter(Boolean).join("\n\n");
+			const activities = [...(prev.activities ?? []), ...(incoming.activities ?? [])];
+			const merged: ChatMsg = {
+				...prev,
+				...incoming,
+				text,
+				...(thinking ? { thinking } : {}),
+				...(activities.length ? { activities } : {}),
+			};
+			return [...ms.slice(0, i), merged, ...ms.slice(i + 1)];
+		}
+		return [...ms, incoming];
+	};
+
 	/** 拉角色卡立绘 + 当前身份头像（hello / 切卡后） */
 	const refreshAvatars = useCallback(() => {
 		void (async () => {
@@ -450,10 +483,14 @@ export default function App() {
 				case "message":
 					if (frame.message.channel === "narrative" || frame.message.channel === "backstage") {
 						clearStream();
+						setToolNote(null);
 						// 过程条 v0：把本轮积累的工具活动挂到定稿消息上（不持久化，刷新即失）
+						// 注意：同轮可能先有中间段再有定稿——活动只在「本条 message」挂载一次，
+						// upsert 会把多次 activities 拼进同一泡。
 						const acts = turnActsRef.current;
 						turnActsRef.current = [];
-						setMessages((ms) => [...ms, acts.length ? { ...frame.message, activities: acts } : frame.message]);
+						const incoming: ChatMsg = acts.length ? { ...frame.message, activities: acts } : frame.message;
+						setMessages((ms) => upsertTurnReply(ms, incoming));
 					} else if (frame.message.channel === "greeting") {
 						// 未开聊时切换开场白：替换已有开场白气泡，禁止往下叠楼
 						setMessages((ms) => {
@@ -477,6 +514,13 @@ export default function App() {
 						setStreamThinking(streamThinkingRef.current);
 					}
 					break;
+				case "stream":
+					// 中间 tool 轮被 server 过滤：立刻丢掉计划旁白流式半成品
+					if (frame.state === "clear") {
+						clearStream();
+						setThinkingLive(false);
+					}
+					break;
 				case "agent":
 					if (frame.state === "start") {
 						setBusy(true);
@@ -487,23 +531,30 @@ export default function App() {
 						setToolNote(null);
 						// 本轮 agent 可能写了技能/知识库/世界书等资产：通知 watchAgent 面板重拉
 						setAgentTick((t) => t + 1);
-						// 中断/异常遗留的半截正文落为本地消息（内容仍是模型原始输出），刷新后以会话文件为准
+						// 中断/异常遗留的半截正文：并入本轮同一角色泡（不新开泡）
 						if (streamRef.current.trim()) {
 							const text = streamRef.current;
 							const thinking = streamThinkingRef.current.trim();
 							const acts = turnActsRef.current;
 							turnActsRef.current = [];
 							clearStream();
-							setMessages((ms) => [
-								...ms,
-								{ channel: "narrative", text, ...(thinking ? { thinking } : {}), ...(acts.length ? { activities: acts } : {}) },
-							]);
+							const leftover: ChatMsg = {
+								channel: "narrative",
+								text,
+								...(thinking ? { thinking } : {}),
+								...(acts.length ? { activities: acts } : {}),
+							};
+							setMessages((ms) => upsertTurnReply(ms, leftover));
 						} else {
 							clearStream();
 						}
 					}
 					break;
 				case "activity":
+					// 工具开始时清掉流式计划旁白；生成中气泡壳靠 busy 保持，不再反复拆装成多个泡
+					if (frame.activity.kind === "tool_start" && (streamRef.current || streamThinkingRef.current)) {
+						clearStream();
+					}
 					turnActsRef.current = [...turnActsRef.current, frame.activity];
 					setToolNote(frame.activity.kind === "tool_start" ? `${toolLabel(frame.activity.name)}…` : null);
 					break;
@@ -637,6 +688,20 @@ export default function App() {
 	const lastUserIdx = useMemo(() => {
 		for (let i = messages.length - 1; i >= 0; i--) if (messages[i].channel === "user") return i;
 		return -1;
+	}, [messages]);
+	/** 本轮用户输入之后是否已有定稿角色回复（有则隐藏空的「生成中」壳，避免双泡） */
+	const turnHasCommittedReply = useMemo(() => {
+		let lastStoryUser = -1;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].channel === "user" && !messages[i].backstage) {
+				lastStoryUser = i;
+				break;
+			}
+		}
+		for (let i = lastStoryUser + 1; i < messages.length; i++) {
+			if (messages[i].channel === "narrative" || messages[i].channel === "backstage") return true;
+		}
+		return false;
 	}, [messages]);
 	/** 剧情用户轮（不含戏外），用于回退 N 计算 */
 	const storyUserIdxs = useMemo(
@@ -1017,6 +1082,8 @@ export default function App() {
 				ws.send({ type: "sessions" });
 				return;
 			}
+			// 先清该面板 GET 缓存，再 remount：否则 peek / 旧缓存会让「刷新」假成功
+			if (id && !id.startsWith("agent:")) apiGetCacheClearForPanel(id);
 			// 仅强制重挂载当前可见面板（表单草稿也会重置）；其它 keep 不动
 			setManualTick((t) => ({ ...t, [side]: t[side] + 1 }));
 		};
@@ -1458,19 +1525,28 @@ export default function App() {
 									)}
 								</>
 							)}
-							{(streamText || streamThinking) && (
-								<div className="msg msg-char">
+							{/* 整轮生成共用一个实时角色泡：中间 tool 轮不拆成多个气泡；定稿后若无新流式则收起壳 */}
+							{busy && (!turnHasCommittedReply || streamText || streamThinking || toolNote) && (
+								<div className="msg msg-char msg-live">
 									<div className="msg-head">
 										<MsgAvatar src={charAvatarUrl} name={charName} kind="char" />
 										<span className="msg-name msg-name-char">{charName}</span>
+										<span className="msg-live-tag">生成中</span>
 									</div>
 									{streamThinking && <ThinkingBlock text={streamThinking} live={thinkingLive} />}
 									{streamText && <RichContent text={streamText} />}
-									<span className="caret" />
+									{toolNote && (
+										<div className="info-line pulse" style={{ margin: "0.4rem 0 0" }}>
+											{toolNote}
+										</div>
+									)}
+									{!streamText && !streamThinking && !toolNote && (
+										<div className="info-line pulse" style={{ margin: "0.4rem 0 0" }}>
+											{thinkingLive ? `${charName} 正在思考…` : `${charName} 工作中…`}
+										</div>
+									)}
+									{(streamText || streamThinking) && <span className="caret" />}
 								</div>
-							)}
-							{(thinkingLive || toolNote) && !streamText && (
-								<div className="info-line pulse">{toolNote ?? `${charName} 正在思考…`}</div>
 							)}
 							{activeChoice && (
 								<ChoiceCard

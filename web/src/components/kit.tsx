@@ -1,15 +1,28 @@
 /** 面板共用件：数据加载 hook + 表单原子（与纯白主题令牌配套的类名在 app.css） */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { apiGetPeek } from "../api.ts";
+import { apiGetPeek, runWithPanelFetchBypass } from "../api.ts";
 import { IconClose } from "./icons.tsx";
 
 /**
  * 面板刷新上下文（横切基建 §1 数据时效）：App 在每轮 agent 结束时递增 tick。
  * usePanelData 传 { watchAgent: true } 的面板（技能库/知识库/世界书/上传区——agent 会写的资产）
  * 随之自动重拉；带草稿表单的面板（设置/用户角色/预设）不 opt-in，避免打字被清。
+ *
+ * 另有 {@link bumpWatchPanels}：角色卡导入配套世界书等「非 agent 回合」的资产写入后调用，
+ * 让已保活挂载的 watchAgent 面板立刻重拉（不必等用户刷新网页）。
  */
 export const PanelRefreshContext = createContext(0);
+
+/** watchAgent 面板额外订阅的外部 bump（与 agentTick 正交） */
+let watchBumpEpoch = 0;
+const watchBumpListeners = new Set<(n: number) => void>();
+
+/** 通知所有 watchAgent 面板重拉数据（导入挂载世界书、外部写资产后调用） */
+export function bumpWatchPanels(): void {
+	watchBumpEpoch += 1;
+	for (const l of watchBumpListeners) l(watchBumpEpoch);
+}
 
 export interface PanelData<T> {
 	data: T | null;
@@ -22,6 +35,7 @@ export interface PanelData<T> {
  * 面板数据装载。
  * - cacheKey：与 apiGet 路径一致时，首帧从内存缓存同步水合（无「读取中」闪烁）
  * - 已有 data：后台静默刷新，不挡 UI（ST 式常驻）
+ * - 每次 effect 拉数走网络（bypass 缓存），缓存只服务 peek 秒开
  */
 export function usePanelData<T>(
 	loader: () => Promise<T>,
@@ -33,15 +47,25 @@ export function usePanelData<T>(
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(() => seeded == null);
 	const [tick, setTick] = useState(0);
+	const [watchBump, setWatchBump] = useState(0);
 	const agentTick = useContext(PanelRefreshContext);
-	const effectiveAgentTick = opts?.watchAgent ? agentTick : 0;
+	const effectiveAgentTick = opts?.watchAgent ? agentTick + watchBump : 0;
 	const hasDataRef = useRef(seeded != null);
 	const loaderRef = useRef(loader);
 	loaderRef.current = loader;
 
 	useEffect(() => {
+		if (!opts?.watchAgent) return;
+		const onBump = (n: number) => setWatchBump(n);
+		watchBumpListeners.add(onBump);
+		return () => {
+			watchBumpListeners.delete(onBump);
+		};
+	}, [opts?.watchAgent]);
+
+	useEffect(() => {
 		let alive = true;
-		// 缓存可能在挂载后被预热写入：再 peek 一次
+		// 缓存可能在挂载后被预热写入：再 peek 一次（仅尚无 data 时）
 		if (!hasDataRef.current && cacheKey) {
 			const again = apiGetPeek<T>(cacheKey);
 			if (again != null) {
@@ -53,8 +77,8 @@ export function usePanelData<T>(
 		const silent = hasDataRef.current;
 		if (!silent) setLoading(true);
 		setError(null);
-		loaderRef
-			.current()
+		// 始终走网络：避免「reload / 右上角刷新 / agentTick」仍命中陈旧 GET 缓存
+		runWithPanelFetchBypass(() => loaderRef.current())
 			.then((d) => {
 				if (alive) {
 					setData(d);

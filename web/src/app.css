@@ -929,6 +929,18 @@ html[data-theme="dark"] [data-tip]:focus-visible::after {
 	letter-spacing: 0.6px;
 }
 
+/* 整轮生成中的实时角色泡：与定稿同壳，避免多步工具拆成多个气泡 */
+.msg-live {
+	opacity: 0.96;
+}
+.msg-live-tag {
+	margin-left: 8px;
+	font-size: 11px;
+	font-weight: 500;
+	color: var(--text-faint);
+	letter-spacing: 0.5px;
+}
+
 .floor {
 	margin-left: auto;
 	font-size: 11px;
@@ -3730,6 +3742,24 @@ input.panel-search.num {
 .card-fav.on {
 	color: var(--accent);
 }
+/* 卡库删除钮：与收藏钮同款，靠左让位；二次确认时显示文字 */
+.card-del {
+	right: auto;
+	left: 4px;
+	width: auto;
+	min-width: 24px;
+	padding: 0 5px;
+	font-size: 11px;
+	line-height: 1;
+}
+.card-del:hover {
+	color: var(--accent-strong);
+}
+/* 列表视图：删除钮别压住缩略图，挪到收藏钮左侧 */
+.card-item-list .card-del {
+	left: auto;
+	right: 32px;
+}
 
 .card-list {
 	display: flex;
@@ -3904,7 +3934,7 @@ input.panel-search.num {
 	margin-bottom: 10px;
 }
 
-/* ── 预设：通道分组 ── */
+/* ── 预设：通道分组 + 块编辑 ── */
 .preset-group {
 	margin-bottom: 12px;
 }
@@ -3923,6 +3953,81 @@ input.panel-search.num {
 	display: flex;
 	align-items: baseline;
 	gap: 8px;
+}
+.preset-block .lore-head {
+	align-items: flex-start;
+	gap: 8px;
+}
+.preset-block-toggle {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	flex: 1;
+	min-width: 0;
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	text-align: left;
+	color: inherit;
+}
+.preset-block-toggle:hover .lore-title {
+	color: var(--accent);
+}
+.preset-block-acts {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+}
+.preset-edit-btn {
+	flex: none;
+	white-space: nowrap;
+	font-size: 12px;
+	padding: 2px 8px;
+	border: 1px solid var(--hairline-strong);
+	border-radius: var(--radius-s);
+	background: var(--surface);
+}
+.preset-edit-btn:hover:not(:disabled) {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.preset-dirty-hint {
+	color: var(--accent, #bc4123);
+	margin-top: 6px;
+}
+.preset-block-body {
+	margin: 6px 0 10px 18px;
+	padding: 8px 10px;
+	border-radius: var(--radius-s);
+	background: color-mix(in srgb, var(--surface-dim) 70%, transparent);
+	border: 1px solid var(--hairline);
+}
+.preset-block-body .field-label {
+	display: block;
+	font-size: 11px;
+	color: var(--text-faint);
+	margin-bottom: 4px;
+}
+.preset-block-ta {
+	width: 100%;
+	min-height: 180px;
+	font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+	font-size: 12px;
+	line-height: 1.45;
+	resize: vertical;
+}
+.preset-block-preview {
+	margin: 0;
+	max-height: 220px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--text-muted, var(--text));
+	font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
 }
 
 /* ── 上传区：图片网格、批量选择 ── */
@@ -4379,8 +4484,8 @@ input.panel-search.num {
 }
 .conn-model-thinking {
 	flex: 1;
-	min-width: 100px;
-	max-width: 160px;
+	min-width: 88px;
+	max-width: 140px;
 	font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
 	font-size: 12px;
 	padding: 4px 8px;

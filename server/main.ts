@@ -1650,6 +1650,41 @@ const sessionInfos = async () => {
 					cardName: info?.name || names.charName,
 				});
 			}
+		} else {
+			// 惰性落盘：首条 assistant 前会话文件可能尚未出现在 SessionManager.list
+			// （_persist 无 assistant 时不写盘）。新建后列表仍须立刻有「当前会话」。
+			let cardName = names.charName;
+			try {
+				const entries = session.sessionManager.getEntries() as Array<{
+					type?: string;
+					customType?: string;
+					data?: { name?: string };
+				}>;
+				for (let i = entries.length - 1; i >= 0; i--) {
+					const e = entries[i];
+					if (e?.type === "custom" && e.customType === "rp-card" && typeof e.data?.name === "string" && e.data.name) {
+						cardName = e.data.name;
+						break;
+					}
+				}
+			} catch {
+				// 极早期生命周期：回落显示名
+			}
+			let messageCount = 0;
+			try {
+				messageCount = session.messages?.length ?? 0;
+			} catch {
+				messageCount = 0;
+			}
+			list.push({
+				path: curFile || "",
+				id: curId,
+				firstMessage: "",
+				modified: Date.now(),
+				messageCount,
+				current: true,
+				cardName,
+			});
 		}
 	}
 	list.sort((a, b) => b.modified - a.modified);

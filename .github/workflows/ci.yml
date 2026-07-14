@@ -83,6 +83,12 @@ jobs:
       - name: Build frontend
         run: npm run web:build
 
+      # 仓库不提交个人配置；冒烟用示例配置（与 start.sh 首启一致）
+      - name: Seed example config
+        run: |
+          test -f liyuan.config.json || cp liyuan.config.example.json liyuan.config.json
+          test -f liyuan.agent.json || cp liyuan.agent.example.json liyuan.agent.json
+
       - name: Web smoke (no LLM)
         run: node scripts/smoke-web.mjs
         timeout-minutes: 8

@@ -1,6 +1,6 @@
 {
   "name": "liyuan",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "梨园（Liyuan）— 以 AI 为主演的角色扮演剧院",
   "scripts": {
     "test": "node --test test/*.test.ts",

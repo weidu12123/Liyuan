@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Liyuan Agent 1.0.1 - Linux / macOS launcher
+# Liyuan Agent 1.0.2 - Linux / macOS launcher
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -10,7 +10,7 @@ MIN_NODE_MAJOR=22
 
 echo ""
 echo "  ========================================"
-echo "    Liyuan Agent  v1.0.1"
+echo "    Liyuan Agent  v1.0.2"
 echo "  ========================================"
 echo ""
 

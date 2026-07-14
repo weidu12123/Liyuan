@@ -171,12 +171,12 @@ function Stage-Clean {
     "node_modules",
     ".git",
     ".github",
-    ".liyuan", ".liyuan-artifacts", ".liyuan-cache", ".liyuan-codex",
+    ".liyuan", ".liyuan-artifacts", ".liyuan-assistant", ".liyuan-cache", ".liyuan-codex",
     ".liyuan-lore", ".liyuan-media", ".liyuan-skills", ".liyuan-state",
     ".liyuan-uploads", ".liyuan-audio", ".liyuan-worldline",
     ".rp-media", ".rp-uploads",
     ".playwright-mcp",
-    "ab-test", "import-test", "liyuan-profiles"
+    "ab-test", "import-test", "liyuan-profiles", "assets/gen"
   )
   $xf = @(
     "*.log", "*.tsbuildinfo", ".DS_Store", "Thumbs.db",
@@ -267,9 +267,10 @@ stage = Path(r'''$SourceDir''')
 zip_path = Path(r'''$ZipPath''')
 skip_dirs = {
   'node_modules', '.git', '.github', '.liyuan', '.liyuan-cache',
-  '.liyuan-artifacts', '.liyuan-codex', '.liyuan-lore',
+  '.liyuan-artifacts', '.liyuan-assistant', '.liyuan-codex', '.liyuan-lore',
   '.liyuan-media', '.liyuan-skills', '.liyuan-state',
-  '.liyuan-uploads', '.rp-media', '.rp-uploads'
+  '.liyuan-uploads', '.liyuan-audio', '.liyuan-worldline',
+  '.rp-media', '.rp-uploads'
 }
 exec_names = {'start.sh', 'start.command', 'install.sh'}
 with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:

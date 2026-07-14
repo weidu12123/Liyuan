@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 chcp 65001 >nul 2>&1
-title Liyuan Agent 1.0
+title Liyuan Agent 1.0.2
 
 :: Product root = this bat's folder
 cd /d "%~dp0"
@@ -16,7 +16,7 @@ if not exist "server\main.ts" (
 
 echo.
 echo  ========================================
-echo    Liyuan Agent  v1.0
+echo    Liyuan Agent  v1.0.2
 echo  ========================================
 echo.
 

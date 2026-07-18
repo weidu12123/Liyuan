@@ -19,16 +19,24 @@ export const CONFIG_FILE_LEGACY = "rp.config.json";
 export const PRESET_FILE = "liyuan-preset.json";
 export const PRESET_FILE_LEGACY = "rp-preset.json";
 
+/** 在 POSIX 上 path.isAbsolute 不认盘符；会话里常存 Windows 绝对路径 */
+function isAbsPath(p: string): boolean {
+	if (isAbsolute(p)) return true;
+	// C:\… / C:/…
+	return /^[a-zA-Z]:[\\/]/.test(p);
+}
+
 /**
  * 角色卡路径是否同一张卡（会话列表过滤用）。
- * 兼容相对/绝对、Windows 反斜杠、./ 前缀、盘符大小写。
+ * 兼容相对/绝对、Windows 反斜杠、./ 前缀、盘符大小写（含 Linux 宿主读 Windows 会话标记）。
  */
 export function sameCardPath(a: string | undefined, b: string | undefined, projectCwd: string): boolean {
 	if (!a || !b) return false;
 	if (a === b) return true;
 	const key = (p: string) => {
 		const s = p.replace(/\\/g, "/").trim().replace(/^\.\//, "");
-		const abs = isAbsolute(s) ? s : join(projectCwd, s);
+		const abs = isAbsPath(s) ? s : join(projectCwd, s).replace(/\\/g, "/");
+		// normalize 在 POSIX 上对 `E:/a/b` 较保守，统一成 / 后再比
 		return normalize(abs).replace(/\\/g, "/").toLowerCase();
 	};
 	try {

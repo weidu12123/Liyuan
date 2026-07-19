@@ -1,29 +1,62 @@
-# Liyuan Agent 1.0.4
+# Liyuan / 梨园 v1.0.4
 
-## 本版要点
+模型兼容与生成体验补丁：Kimi K3 可开预设、停止更利落、中断半截能留下，过程条更像导演笔记。
 
-- **Kimi K3 / k2.6 / k2.7 固定采样**：官方要求勿传 temperature 等；开启预设后按 `profile=none` 全剥，避免渠道拒调（含 opencode 等中转上的 `kimi-k3`）。
-- **停止更干净**：工具轮 / 选择卡后 abort 不再误开下一轮 LLM；清空 steer/follow-up 队列；前端停止后忽略迟到 delta。
-- **中断留痕**：`stopReason=aborted` 的半截正文 / 仅思维链 / 夹 toolCall 均可上屏并标「未完成」；`resync` 后不消失，便于继续。
-- **过程条 RP 化**：工具前台侧旁白规范进 harness；工具步骤显示人话摘要（非 JSON）；标签与样式更像导演笔记。
-- **过程 UI**：旁白加重、步骤 chip、tool 状态「已办完 / 未办成」。
+## 下载
 
-## 安装包
+| 平台 | 文件 | 怎么开 |
+|------|------|--------|
+| **Windows** | `Liyuan-1.0.4-windows.zip` | Node ≥ 22 → 解压 → 双击 `start.bat` |
+| **Linux** | `Liyuan-1.0.4-linux.zip` | Node ≥ 22 → `chmod +x start.sh && ./start.sh` |
+| **macOS** | `Liyuan-1.0.4-macos.zip` | Node ≥ 22 → 解压 → 双击 `start.command` |
+| **Docker** | `docker-compose.yml` | `docker compose up -d --build` |
 
-| 平台 | 文件 |
-|------|------|
-| Windows | `Liyuan-1.0.4-windows.zip` |
-| Linux | `Liyuan-1.0.4-linux.zip` |
-| macOS | `Liyuan-1.0.4-macos.zip` |
-| 校验 | `SHA256SUMS.txt` |
+校验：同目录 `SHA256SUMS.txt`。
 
-| **Docker** | 见仓库 `docker-compose.yml` | `docker compose up -d --build` |
+> 首次启动会 `npm install`（需联网一次），之后可离线。默认 `http://127.0.0.1:7620`
 
-## 快速开始
+## 本版修复与改进
 
-见各包内 `RELEASE.txt` / `start.bat` · `start.sh` · `start.command`。需要 Node.js **≥ 22**。
+### Kimi K3（及 k2.6 / k2.7）开预设不再拒调
 
-## 说明
+- 官方文档写明这些模型 **temperature / top_p / 惩罚项固定，请求里不要传**
+- 开启预设后，梨园按模型把采样参数 **全部剥离**（不是丢掉你的预设文件，只是本请求不带）
+- 覆盖官方、中转（如 opencode 上的 `kimi-k3`）等同名模型 id
+- 旧版可调温的 `kimi-k2` 等不受影响
 
-- 不含个人 API Key、私有角色卡或运行时会话数据。
-- 许可证：PolyForm Noncommercial 1.0.0（个人/非商业）。
+### 停止更干净
+
+- 点停止后：工具轮 / 选择卡结束后 **不再偷偷再开一轮** 生成
+- 排队中的续写/插入消息一并清空，避免「停了还在跑」
+- 前端忽略停止后迟到的流式字，输入框可立刻接着用
+
+### 中断半截会留下（可继续）
+
+- 生成到一半点停止：**半截正文会留在对话里**，并标「未完成」
+- 若当时还在长思考、正文还没出来：也会留痕（思维链可展开），不再整段蒸发
+- 写设定等工具做到一半被停：半截说明也会留下，不会被「中间轮过滤」吃掉
+- 之后发「继续」等，模型能看见未完成稿再接着写
+
+### 过程条更像 RP 导演笔记
+
+- 鼓励模型在动手前用 **短人话** 说明「准备怎么设计 / 对齐哪段戏」（不要只报工具名）
+- 工具步骤显示可读摘要（例如「写入设定「××」…」），不再甩一长串 JSON
+- 过程旁白更醒目；步骤用标签区分「固化设定 / 记下变化 / 已办完」等
+
+## 从 1.0.3 升级
+
+解压新包到新目录，或覆盖安装目录后保留你的：
+
+- `liyuan.agent.json` / `liyuan.config.json`
+- `.liyuan*` 运行时数据目录
+
+重新 `start` 即可。若主要用 Kimi K3 + 预设，升级后直接再试开预设生成。
+
+## 要求
+
+- Node.js **≥ 22**
+- 任意 OpenAI 兼容 API Key
+
+## 许可证
+
+PolyForm Noncommercial 1.0.0 — 个人/非商业使用。

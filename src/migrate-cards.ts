@@ -38,7 +38,6 @@ import {
 	CARDS_ROOT,
 	DIRS,
 	cardDirOf,
-	cardsRoot,
 	chatDirOf,
 	chatSessionsDirOf,
 	dir,
@@ -98,9 +97,23 @@ export function sessionIdFromFile(fileName: string): string {
 	return m ? m[1] : "";
 }
 
-/** 迁移是否已经做过（cards/ 已存在＝做过或用户自己建了） */
+/**
+ * 产品种子卡（随包 `default_*`）：导入暂存里的这份是种子，不是用户导入。
+ * 升格/一次性迁移只**拷进**卡空间，源文件留着——Docker 把 `assets/cards` 挂成卷，
+ * 搬走＝CI 断言与下次播种都落空；卡库会同时列出暂存和空间，拷完靠 basename 去重。
+ */
+export function isProductSeedCard(fileName: string): boolean {
+	return /^default_/i.test(basename(fileName));
+}
+
+function spaceForBasename(cwd: string, fileName: string): CardSpace | undefined {
+	const base = basename(fileName);
+	return listCardSpaces(cwd).find((s) => basename(s.cardFile) === base);
+}
+
+/** 迁移是否已经做过：有过至少一张卡空间＝做过或用户自己建了。空 `cards/` 目录不算（Docker 卷会先建出空目录）。 */
 export function alreadyMigrated(cwd: string): boolean {
-	return existsSync(cardsRoot(cwd));
+	return listCardSpaces(cwd).length > 0;
 }
 
 /** 迁移后这张卡的新引用（`cards/<folder>/<file>`）——迁移器唯一改写口径 */
@@ -216,9 +229,16 @@ export function applyCardMigration(cwd: string, plan: CardMigrationPlan): string
 	const spaceOf = new Map<string, CardSpace>();
 	for (const c of plan.cards) {
 		try {
-			const space = createCardSpace(cwd, c.from, c.folder, { move: true });
+			const existing = spaceForBasename(cwd, c.from);
+			if (existing) {
+				spaceOf.set(c.folder, existing);
+				log.push(`卡「${c.name}」已在 ${CARDS_ROOT}/${existing.folder}/，跳过`);
+				continue;
+			}
+			const seed = isProductSeedCard(c.from);
+			const space = createCardSpace(cwd, c.from, c.folder, seed ? { copy: copyPathSafe } : { move: true });
 			spaceOf.set(c.folder, space);
-			log.push(`卡「${c.name}」→ ${CARDS_ROOT}/${space.folder}/`);
+			log.push(`卡「${c.name}」→ ${CARDS_ROOT}/${space.folder}/${seed ? "（种子留下）" : ""}`);
 		} catch (err) {
 			log.push(`卡「${c.name}」搬不动：${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -278,7 +298,7 @@ export function applyCardMigration(cwd: string, plan: CardMigrationPlan): string
 	for (const k of plan.skipped) log.push(`原地保留 ${basename(k.file)}：${k.why}`);
 
 	// 4) 改写 config.card / personas byCard / 卡收藏：旧引用 → 新引用
-	rewriteCardRefs(cwd, plan, log);
+	rewriteCardRefs(cwd, plan, log, spaceOf);
 	return log;
 }
 
@@ -302,7 +322,8 @@ export function promoteStagedCard(cwd: string, sessionDir: string, cardRef: stri
 		sessions: plan.sessions.filter((s) => s.folder === mine.folder),
 		skipped: [],
 	});
-	return newRefOf(mine);
+	const after = spaceForBasename(cwd, rel);
+	return after ? `${CARDS_ROOT}/${after.folder}/${basename(after.cardFile)}` : newRefOf(mine);
 }
 
 /**
@@ -343,11 +364,13 @@ export function planOrphanSessions(cwd: string, sessionDir: string): SessionMove
  * 改写「按卡路径键控」的引用：liyuan.config.json 的 card、personas 的 byCard、
  * 卡收藏 card-favs.json。逐条换成新引用；旧引用不再出现在任何键上。
  */
-function rewriteCardRefs(cwd: string, plan: CardMigrationPlan, log: string[]): void {
+function rewriteCardRefs(cwd: string, plan: CardMigrationPlan, log: string[], spaceOf?: Map<string, CardSpace>): void {
 	if (plan.cards.length === 0) return;
 	const refOf = new Map<string, string>(); // 旧引用（归一）→ 新引用
 	for (const c of plan.cards) {
-		refOf.set(normalizeRef(c.ref), newRefOf(c));
+		const space = spaceOf?.get(c.folder);
+		const dest = space ? `${CARDS_ROOT}/${space.folder}/${basename(space.cardFile)}` : newRefOf(c);
+		refOf.set(normalizeRef(c.ref), dest);
 	}
 	const rewrite = (old: string | undefined): string | undefined => {
 		if (!old) return undefined;

@@ -663,10 +663,13 @@ interface CardLibItem {
 
 function listCardLibrary(cwd: string, config: RpConfig): CardLibItem[] {
 	const out: CardLibItem[] = [];
+	const spaceFiles = new Set(listCardSpaces(cwd).map((s) => basename(s.cardFile)));
 	for (const spec of cardDirSpecs(cwd, config)) {
 		if (!existsSync(spec.abs)) continue;
 		for (const f of readdirSync(spec.abs)) {
 			if (!/\.(png|json)$/i.test(f)) continue;
+			// 暂存区与卡空间同文件名：空间是正本，暂存是种子/残留，不并列两张
+			if (spec.relBase === "assets/cards" && spaceFiles.has(f)) continue;
 			const abs = join(spec.abs, f);
 			let mtimeMs = 0;
 			try {

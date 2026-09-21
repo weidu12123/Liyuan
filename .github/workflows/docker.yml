@@ -92,6 +92,7 @@ jobs:
           test -f deploy/data/config/liyuan.config.json
           test -f deploy/data/config/liyuan.agent.json
           test -f deploy/data/cards/default_Qingwu.json
+          test -n "$(find deploy/data/card-spaces -name default_Qingwu.json | head -1)"
 
       - name: Dump logs on failure
         if: failure()

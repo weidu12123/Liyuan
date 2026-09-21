@@ -43,7 +43,8 @@ docker compose up -d --build
 ```
 data/config/liyuan.config.json   角色卡 / 世界书 / 用户身份（从 example 播种）
 data/config/liyuan.agent.json    模型与 API Key（从 example 播种，勿提交仓库）
-data/cards/                      角色卡，含默认「青梧」
+data/cards/                      导入暂存，含默认「青梧」种子
+data/card-spaces/                卡工作空间（会话、账本随卡存放）
 data/lorebooks/                  世界书
 ```
 

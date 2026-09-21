@@ -272,6 +272,48 @@ test("promoteStagedCard：暂存卡在打开时升格——只搬这一张、旧
 	}
 });
 
+test("alreadyMigrated：空 cards/ 目录不算做过", () => {
+	const { cwd, sessionDir } = mkProject();
+	try {
+		mkdirSync(join(cwd, "cards"), { recursive: true });
+		assert.equal(alreadyMigrated(cwd), false, "Docker 卷会先建出空目录");
+		writeCard(join(cwd, "assets", "cards", "a.json"), "甲卡");
+		applyCardMigration(cwd, planCardMigration(cwd, sessionDir));
+		assert.equal(alreadyMigrated(cwd), true);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(sessionDir, { recursive: true, force: true });
+	}
+});
+
+test("产品种子 default_* 只拷不搬；再跑不复制第二份；config 改指空间", () => {
+	const { cwd, sessionDir } = mkProject();
+	try {
+		writeCard(join(cwd, "assets", "cards", "default_Qingwu.json"), "青梧");
+		writeCard(join(cwd, "assets", "cards", "a.json"), "甲卡");
+		writeFileSync(join(cwd, "liyuan.config.json"), JSON.stringify({ card: "assets/cards/default_Qingwu.json" }), "utf8");
+
+		applyCardMigration(cwd, planCardMigration(cwd, sessionDir));
+		assert.ok(existsSync(join(cwd, "assets", "cards", "default_Qingwu.json")), "种子留在暂存");
+		assert.ok(!existsSync(join(cwd, "assets", "cards", "a.json")), "用户卡搬走");
+		assert.ok(existsSync(join(cardDirOf(cwd, "青梧"), "default_Qingwu.json")));
+		assert.ok(existsSync(join(cardDirOf(cwd, "甲卡"), "a.json")));
+		assert.equal(
+			(JSON.parse(readFileSync(join(cwd, "liyuan.config.json"), "utf8")) as { card: string }).card,
+			"cards/青梧/default_Qingwu.json",
+		);
+
+		applyCardMigration(cwd, planCardMigration(cwd, sessionDir));
+		assert.deepEqual(listCardSpaces(cwd).map((s) => s.folder).sort(), ["甲卡", "青梧"], "种子再跑不复制第二份");
+
+		const again = promoteStagedCard(cwd, sessionDir, "assets/cards/default_Qingwu.json");
+		assert.equal(again, "cards/青梧/default_Qingwu.json");
+		assert.equal(listCardSpaces(cwd).length, 2);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(sessionDir, { recursive: true, force: true });
+	}
+});
 
 test("planOrphanSessions：只收「指向已有卡空间」的散会话；落到该卡一个子项目", () => {
 	const { cwd, sessionDir } = mkProject();

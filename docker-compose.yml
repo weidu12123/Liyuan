@@ -39,12 +39,13 @@ services:
       - liyuan-personas-assets:/app/assets/personas
       - liyuan-profiles:/app/liyuan-profiles
       - liyuan-skills-project:/app/skills
-      # 配置 + 用户导入的角色卡 / 世界书（重建镜像不丢）
-      # 无需任何手工准备：目录不存在时 Docker 自建，首启由 entrypoint 从 example 播种。
+      # 配置 + 导入暂存（assets/cards）+ 卡工作空间（cards/）+ 世界书。
       # 只挂目录、不挂单个文件——文件级 bind mount 在宿主机缺文件时会被 Docker
       # 当成目录创建，撞上容器内的同名文件直接崩（issue #1）。
+      # 产品种子 default_* 只拷进卡空间、源留在暂存卷；用户导入的卡搬走。
       - ./data/config:/app/config
       - ./data/cards:/app/assets/cards
+      - ./data/card-spaces:/app/cards
       - ./data/lorebooks:/app/assets/lorebooks
     healthcheck:
       test:

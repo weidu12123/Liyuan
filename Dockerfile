@@ -52,7 +52,7 @@ EXPOSE 7620
 
 # Persist runtime dirs via anonymous volumes (sessions live under ~/.liyuan/agent by design)
 # /app/config 存 liyuan.config.json / liyuan.agent.json（含 API Key），重建镜像不丢
-VOLUME ["/root/.liyuan", "/app/config", "/app/.liyuan-state", "/app/.liyuan-uploads", "/app/.liyuan-media", "/app/.liyuan-audio", "/app/.liyuan-artifacts", "/app/.liyuan-codex", "/app/.liyuan-lore", "/app/.liyuan-memory", "/app/.liyuan-skills", "/app/.liyuan-worldline", "/app/.liyuan-cache", "/app/assets/presets", "/app/assets/personas", "/app/liyuan-profiles", "/app/skills"]
+VOLUME ["/root/.liyuan", "/app/config", "/app/.liyuan-state", "/app/.liyuan-uploads", "/app/.liyuan-media", "/app/.liyuan-audio", "/app/.liyuan-artifacts", "/app/.liyuan-codex", "/app/.liyuan-lore", "/app/.liyuan-memory", "/app/.liyuan-skills", "/app/.liyuan-worldline", "/app/.liyuan-cache", "/app/assets/presets", "/app/assets/personas", "/app/liyuan-profiles", "/app/skills", "/app/cards"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||7620)+'/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

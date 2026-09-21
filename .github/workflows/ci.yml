@@ -147,7 +147,9 @@ jobs:
           python3 -c "import json;json.load(open('data/config/liyuan.config.json'))"
 
       - name: Default assets survive the volume mount
-        run: test -f data/cards/default_Qingwu.json
+        run: |
+          test -f data/cards/default_Qingwu.json
+          test -n "$(find data/card-spaces -name default_Qingwu.json | head -1)"
 
       - name: HTTP probe
         run: |

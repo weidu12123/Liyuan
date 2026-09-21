@@ -31,9 +31,10 @@ services:
       - liyuan-personas-assets:/app/assets/personas
       - liyuan-profiles:/app/liyuan-profiles
       - liyuan-skills-project:/app/skills
-      # 配置 + 用户导入的角色卡 / 世界书（与根 compose 同一套布局；只挂目录不挂单文件）
+      # 配置 + 导入暂存 + 卡工作空间 + 世界书（与根 compose 同一套布局；只挂目录不挂单文件）
       - ./data/config:/app/config
       - ./data/cards:/app/assets/cards
+      - ./data/card-spaces:/app/cards
       - ./data/lorebooks:/app/assets/lorebooks
     healthcheck:
       test:

@@ -60,6 +60,11 @@ export interface ChatMeta {
 	name?: string;
 	/** ISO 时间 */
 	createdAt: string;
+	/**
+	 * 子项目形态（docs/PLAN-AGENT-MODE.md §5.1）：缺省＝扮演（正文在树上）；`agent`＝正文住 `正文/` 章文件、
+	 * 对话是讨论。新建时定，一个子项目一种形态，不在拍与拍之间切换。
+	 */
+	mode?: "agent";
 }
 
 export interface ChatInfo {
@@ -189,7 +194,7 @@ export function readChatMeta(cardDir: string, chatId: string): ChatMeta | null {
 	if (!existsSync(file)) return null;
 	try {
 		const raw = readJsonFile(file) as Partial<ChatMeta>;
-		return { createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "", ...(raw.name ? { name: raw.name } : {}) };
+		return { createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "", ...(raw.name ? { name: raw.name } : {}), ...(raw.mode === "agent" ? { mode: "agent" as const } : {}) };
 	} catch {
 		return null;
 	}
@@ -401,11 +406,11 @@ export function listChats(cardDir: string): ChatInfo[] {
 }
 
 /** 建一个新的子项目（＝「完全新开对话」）：目录 + 会话目录 + 元数据 */
-export function createChat(cardDir: string, opts?: { id?: string; name?: string; now?: Date }): ChatInfo {
+export function createChat(cardDir: string, opts?: { id?: string; name?: string; now?: Date; mode?: "agent" }): ChatInfo {
 	const now = opts?.now ?? new Date();
 	const id = opts?.id ?? newChatId(now);
 	mkdirSync(chatSessionsDirOf(cardDir, id), { recursive: true });
-	writeChatMeta(cardDir, id, { createdAt: now.toISOString(), ...(opts?.name ? { name: opts.name } : {}) });
+	writeChatMeta(cardDir, id, { createdAt: now.toISOString(), ...(opts?.name ? { name: opts.name } : {}), ...(opts?.mode === "agent" ? { mode: "agent" } : {}) });
 	return chatInfo(cardDir, id);
 }
 
@@ -435,6 +440,14 @@ export function chatDirOfSessionDir(sessionDir: string | undefined): string | nu
 export function chatDirOfSessionFile(sessionFile: string | undefined): string | null {
 	if (!sessionFile) return null;
 	return chatDirOfSessionDir(dirname(sessionFile));
+}
+
+/** 会话目录所属子项目的形态：`agent` 子项目返回 "agent"；扮演子项目、老布局、内存会话返回 undefined */
+export function chatModeOfSessionDir(sessionDir: string | undefined): "agent" | undefined {
+	const chatDir = chatDirOfSessionDir(sessionDir);
+	const cardDir = chatDir ? cardDirOfChatDir(chatDir) : null;
+	if (!chatDir || !cardDir) return undefined;
+	return readChatMeta(cardDir, basename(chatDir))?.mode;
 }
 
 /** 子项目目录 → 卡文件夹目录（`cards/<卡>/<对话>/<id>` 的上两级）；不是这个形状返回 null */

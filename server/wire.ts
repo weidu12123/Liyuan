@@ -18,7 +18,7 @@ import { hasDepthLimits } from "../src/cardfront.ts";
 import type { AuthorScript } from "../src/authorScripts.ts";
 import type { CardProjectPreview } from "../src/card-authoring-types.ts";
 import { isBackstageText } from "../src/stance.ts";
-import { messageMode } from "../src/conversation-mode.ts";
+import { messageMode, type ConversationMode } from "../src/conversation-mode.ts";
 import { applyDraftOps, type DraftMsgLike } from "../src/draft.ts";
 import type { RpPanel } from "../src/panels.ts";
 import type { WorldState } from "../src/types.ts";
@@ -64,7 +64,7 @@ export type WireSegment =
 
 export interface WireMsg {
 	channel: WireChannel;
-	mode?: "roleplay" | "authoring";
+	mode?: ConversationMode;
 	/** 发言者显示名（narrative/greeting 为角色名，user 为用户名） */
 	name?: string;
 	text: string;
@@ -220,8 +220,8 @@ export interface UpdateWire {
 export type ServerFrame =
 	| {
 			type: "hello";
-			conversationMode?: "roleplay" | "authoring";
-			turnMode?: "roleplay" | "authoring";
+			conversationMode?: ConversationMode;
+			turnMode?: ConversationMode;
 			sessionId: string;
 			charName: string;
 			userName: string;
@@ -252,7 +252,7 @@ export type ServerFrame =
 			};
 	  }
 	| { type: "message"; message: WireMsg }
-	| { type: "conversation_mode"; mode: "roleplay" | "authoring"; turnMode?: "roleplay" | "authoring" }
+	| { type: "conversation_mode"; mode: ConversationMode; turnMode?: ConversationMode }
 	/** draft=true：该 text 增量是 draft_write 参数的转发（替换语义——重交原地更新，不叠加）；reset=true：本次调用的首个分片 */
 	| { type: "delta"; kind: "text" | "thinking"; delta: string; draft?: boolean; reset?: boolean }
 	/** 稿件分段重同步（修复/重交后）：前端把屏上全部稿段原位替换为 segments（按空行切段） */
@@ -304,7 +304,7 @@ export type ClientFrame =
 	| { type: "open"; path: string }
 	/** 剧情决策应答：value=选项原文或自由输入；stop=停止本回合（笔还给用户） */
 	| { type: "choice_reply"; id: string; value?: string; stop?: boolean }
-	| { type: "new"; name?: string }
+	| { type: "new"; name?: string; mode?: "agent" }
 	/** 两层布局：在指定子项目里再开一个会话（「第二个窗口继续聊」） */
 	| { type: "chat_new_session"; chatId: string }
 	| { type: "ping" }; // 保活，服务端丢弃
@@ -446,12 +446,14 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 	const msg = m as MsgLike;
 	const text = textOf(msg.content).trim();
 	const skin = opts?.skin ?? null;
-	if (messageMode(msg) === "authoring") {
-		if (msg.role === "user") return text ? { channel: "user", name: names.userName, text, mode: "authoring" } : null;
+	const mode = messageMode(msg);
+	if (mode !== "roleplay") {
+		// agent 讨论与写卡维护同一条显示通道（原始文本＋时间线，不过卡皮肤），只是 mode 标记不同
+		if (msg.role === "user") return text ? { channel: "user", name: names.userName, text, mode } : null;
 		if (msg.role !== "assistant") return null;
 		const timeline = (msg.details as { rpTimeline?: WireSegment[] } | undefined)?.rpTimeline;
 		const thinking = thinkingOf(msg.content);
-		return text || thinking || timeline?.length ? { channel: "authoring", name: "写卡", text, mode: "authoring", ...(thinking ? { thinking } : {}),
+		return text || thinking || timeline?.length ? { channel: "authoring", name: mode === "agent" ? "agent" : "写卡", text, mode, ...(thinking ? { thinking } : {}),
 			...(timeline?.length ? { timeline } : {}), ...(msg.stopReason === "aborted" ? { unfinished: true } : {}) } : null;
 	}
 

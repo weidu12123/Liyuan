@@ -133,6 +133,8 @@ export const CHATS_DIR = "对话";
 export const CHAT_META_FILE = "对话.json";
 /** 子项目内：会话目录（＝ pi 的 sessionDir） */
 export const CHAT_SESSIONS_DIR = "会话";
+/** agent 模式子项目的章文件目录（docs/PLAN-AGENT-MODE.md §5.2）：一章一文件，写时复制 */
+export const CHAT_STORY_DIR = "正文";
 /** 子项目内：世界状态账本（旧 .liyuan-state/<sessionId>.json） */
 export const CHAT_STATE_FILE = "世界状态.json";
 /** 子项目内：世界线元数据（旧 .liyuan-worldline/<sessionId>.json） */

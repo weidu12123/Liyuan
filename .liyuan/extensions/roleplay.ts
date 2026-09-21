@@ -87,7 +87,7 @@ import {
 	type McpToolDescriptor,
 } from "../../src/mcp.ts";
 import { dir, resolveConfigPath, DIRS } from "../../src/paths.ts";
-import { chatDataPath } from "../../src/cardspace.ts";
+import { chatDataPath, chatModeOfSessionDir } from "../../src/cardspace.ts";
 import { DEFAULT_CONFIG, type CharacterCard, type LorebookEntry, type RpConfig, type WorldState } from "../../src/types.ts";
 import {
 	buildAncestryIndex,
@@ -1175,8 +1175,9 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				}
 			}
 
-			// 新会话注入开场白（既定第一条消息，参与 LLM 上下文并在 TUI 显示）
-			if (rpMode && config.greeting && card.firstMes) {
+			// 新会话注入开场白（既定第一条消息，参与 LLM 上下文并在 TUI 显示）。
+			// agent 子项目不注：first_mes 在那里是素材不是协议（docs/PLAN-AGENT-MODE.md §四·问 3）。
+			if (rpMode && config.greeting && card.firstMes && chatModeOfSessionDir(ctx.sessionManager.getSessionDir()) !== "agent") {
 				const hasHistory = ctx.sessionManager
 					.getEntries()
 					.some((e: { type: string }) => e.type === "message" || e.type === "custom_message");
@@ -1392,7 +1393,9 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		description: cmdDesc("rewind"),
 		handler: async (args, ctx) => {
 			const n = Math.max(1, Number.parseInt((args ?? "").trim(), 10) || 1);
-			const branch = storyBranch(ctx.sessionManager.getBranch()) as Array<{
+			// agent 子项目：树上只有讨论，「用户轮」＝讨论轮（该轮写入的章随分支一起退掉，文件仍在）
+			const rawBranch = ctx.sessionManager.getBranch();
+			const branch = (chatModeOfSessionDir(ctx.sessionManager.getSessionDir()) === "agent" ? rawBranch : storyBranch(rawBranch)) as Array<{
 				id: string;
 				type: string;
 				message?: { role?: string };

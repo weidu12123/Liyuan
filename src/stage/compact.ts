@@ -28,6 +28,7 @@ import {
 import { buildRpSummaryPrompt } from "../scribe.ts";
 import { formatState } from "../state.ts";
 import { applyDraftRevisions } from "./draft-projection.ts";
+import { hasChapters, projectChapters, type StoryStore } from "./story.ts";
 import { storyBranch } from "../conversation-mode.ts";
 import type { WorldState } from "../types.ts";
 
@@ -68,6 +69,8 @@ export interface PlanCompactionOptions {
 	keepRecentBeats?: number;
 	/** 可裁正文字数地板（缺省 MIN_COMPACT_CHARS） */
 	minChars?: number;
+	/** 章文件仓（agent 模式）：分支上有章条目时单位从「拍」换成「章」，正文从文件读 */
+	story?: Pick<StoryStore, "read">;
 }
 
 /**
@@ -93,6 +96,7 @@ export function serializeForSummary(entries: BranchEntryLike[], userName: string
  * 返回 null = 本拍不压缩。
  */
 export function planCompaction(branch: BranchEntryLike[], opts: PlanCompactionOptions): CompactPlan | null {
+	if (opts.story && hasChapters(branch)) return planChapterCompaction(branch, opts, opts.story);
 	branch = applyDraftRevisions(storyBranch(branch), { omitEditRequests: true });
 	const keep = opts.keepRecentBeats ?? KEEP_RECENT_BEATS;
 	const minChars = opts.minChars ?? MIN_COMPACT_CHARS;
@@ -128,6 +132,44 @@ export function planCompaction(branch: BranchEntryLike[], opts: PlanCompactionOp
 	};
 }
 
+/**
+ * agent 模式（docs/PLAN-AGENT-MODE.md §5.4）：单位是章不是拍。上下文里本来就只有稿子尾部，「到期」＝有章落到
+ * 尾部之外且攒够字数；覆盖边界锚在最后一个被摘要的 rp-chapter 条目上，之后的章与其修订照常活着。
+ */
+function planChapterCompaction(branch: BranchEntryLike[], opts: PlanCompactionOptions, story: Pick<StoryStore, "read">): CompactPlan | null {
+	branch = storyBranch(branch);
+	const keep = opts.keepRecentBeats ?? KEEP_RECENT_BEATS;
+	const minChars = opts.minChars ?? MIN_COMPACT_CHARS;
+	if (!Number.isFinite(opts.everyNTurns) || opts.everyNTurns <= 0) return null;
+
+	const active = activeSummary(branch);
+	const liveIds = new Set((active ? branch.slice(active.cut) : branch).map((e) => e.id));
+	const live = projectChapters(branch).filter((c) => c.entryId && liveIds.has(c.entryId));
+	if (live.length < keep + opts.everyNTurns) return null;
+
+	const covered = live.slice(0, live.length - keep);
+	const coversThroughId = covered[covered.length - 1]?.entryId;
+	if (!coversThroughId) return null;
+
+	const parts: string[] = [];
+	for (const c of covered) {
+		let text: string;
+		try { text = story.read(c); } catch { continue; }
+		parts.push(`第 ${c.index} 章${c.title ? `「${c.title}」` : ""}\n\n${text}`);
+	}
+	const conversationText = parts.join("\n\n");
+	if (conversationText.length < minChars) return null;
+
+	const at = branch.findIndex((e) => e.id === coversThroughId);
+	return {
+		coversThroughId,
+		covered: branch.slice(active?.cut ?? 0, at + 1),
+		turns: covered.length,
+		conversationText,
+		...(active ? { previousSummary: active.summary } : {}),
+	};
+}
+
 export interface CompactRunDeps {
 	/** 旁路文本调用：返回文本，或 {error} */
 	sideText: (systemPrompt: string, userText: string) => Promise<string | { error: string }>;
@@ -149,6 +191,8 @@ export interface CompactRunInput {
 	everyNTurns: number;
 	keepRecentBeats?: number;
 	minChars?: number;
+	/** 章文件仓（agent 模式；扮演分支上没有章条目，给了也不生效） */
+	story?: Pick<StoryStore, "read">;
 }
 
 export type CompactOutcome =
@@ -168,6 +212,7 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 		charName: input.charName,
 		keepRecentBeats: input.keepRecentBeats,
 		minChars: input.minChars,
+		story: input.story,
 	});
 	if (!plan) return { kind: "skipped", reason: "not-due" };
 

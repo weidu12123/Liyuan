@@ -2587,7 +2587,26 @@ stage = new StageEngine({
 			const stats = safeStats();
 			if (stats) broadcast({ type: "stats", stats });
 			// 向量记忆入库：只在真落了新正文时（中断/错误拍不入）
-			if (info.mode === "authoring" || !info.entryId || info.error || info.aborted) return;
+			if (info.mode === "authoring") return;
+			// agent 模式：正文是章，不是讨论——逐章入库（story_edit 不产生新章，不入）
+			if (info.mode === "agent") {
+				if (!info.chapters?.length || info.aborted || !info.entryId) return;
+				const agentNodeId = info.entryId;
+				const agentBranchIds = branchNodeIds();
+				void (async () => {
+					for (const ch of info.chapters!) {
+						try {
+							const mem = await onNarrativeTurnEnd(cwd, memoryScopeFor(), ch.text, { nodeId: agentNodeId, branchIds: agentBranchIds });
+							if (mem.error) broadcast({ type: "notify", level: "warning", text: `向量记忆：第 ${ch.index} 章入库失败 · ${mem.error}` });
+							else if (mem.stored) broadcast({ type: "notify", level: "info", text: `向量记忆：第 ${ch.index} 章已入剧情库` });
+						} catch (e) {
+							console.warn("[memory] chapter ingest failed", e);
+						}
+					}
+				})();
+				return;
+			}
+			if (!info.entryId || info.error || info.aborted) return;
 			// 树坐标在进异步块前同步取（同上：随后的重roll 会挪叶）。这条路径已有 info.entryId
 			// 就是本拍的落树节点，直接用它当 nodeId 最准。
 			const memNodeId = info.entryId;
@@ -2752,7 +2771,7 @@ const handlePrompt = async (text: string) => {
 	if (!isCommand) {
 		broadcast({
 			type: "message",
-			message: { channel: "user", name: names.userName, text: trimmed, ...(stage.mode === "authoring" ? { mode: "authoring" } : {}) },
+			message: { channel: "user", name: names.userName, text: trimmed, ...(stage.mode !== "roleplay" ? { mode: stage.mode } : {}) },
 		});
 		// 流式中送达的输入由引擎排队到本拍结束（RP 语境：不打断正在进行的叙事）
 		await stage.performTurn(trimmed);
@@ -3153,7 +3172,13 @@ wss.on("connection", (ws, req) => {
 						// 「第二个窗口继续聊」，由 switchSession/open 承担。老布局走 runtime.newSession()。
 						// name＝新建项目弹窗起的名（缺省前端已给「新建对话（N）」默认名）。
 						const newName = typeof frame.name === "string" ? frame.name.trim() || undefined : undefined;
-						const freshDir = newChatSessionDir(cwd, cardPath, newName);
+						// mode:"agent"＝新建一个 agent 子项目（docs/PLAN-AGENT-MODE.md §5.1：形态在建项目时定）；老布局不支持
+						const newMode = frame.mode === "agent" ? "agent" : undefined;
+						const freshDir = newChatSessionDir(cwd, cardPath, newName, newMode);
+						if (newMode && !freshDir) {
+							ws.send(JSON.stringify({ type: "notify", level: "error", text: "agent 模式只在 cards/ 的子项目里可用" } satisfies ServerFrame));
+							return;
+						}
 						if (freshDir) {
 							const previousSessionFile = session.sessionFile;
 							// 按 pi 的 teardownCurrent 同款收尾旧会话（session_shutdown → 扩展收尾 → dispose），

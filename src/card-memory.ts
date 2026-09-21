@@ -28,7 +28,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { listChats, type ChatInfo } from "./cardspace.ts";
 import { readJsonFile } from "./jsonio.ts";
@@ -41,6 +41,7 @@ import {
 } from "./paths.ts";
 import { rebuildHistory, stateFromBranch, type BranchEntryLike } from "./stage/assemble.ts";
 import { applyDraftRevisions } from "./stage/draft-projection.ts";
+import { hasChapters, projectChapters, StoryStore, storyDirectory } from "./stage/story.ts";
 import { storyBranch } from "./conversation-mode.ts";
 import { formatState } from "./state.ts";
 
@@ -215,9 +216,25 @@ export function collectChatEvidence(
 	const sections: string[] = [];
 	let beats = 0;
 	let lastBranch: BranchEntryLike[] = [];
+	// agent 模式子项目：正文是章文件，证据从分支上的章条目取（docs/PLAN-AGENT-MODE.md §5.5 第 4 条）
+	const story = new StoryStore(storyDirectory(dirname(chat.sessionsDir)));
 	for (const f of files) {
 		const branch = branchOfSessionFile(join(chat.sessionsDir, f));
 		if (branch.length === 0) continue;
+		if (hasChapters(branch)) {
+			const chapters = projectChapters(storyBranch(branch));
+			const { summary } = rebuildHistory(branch);
+			const lines: string[] = [];
+			if (summary) lines.push(`【前情提要】\n${summary}`);
+			for (const c of chapters) {
+				try { lines.push(`第 ${c.index} 章${c.title ? `「${c.title}」` : ""}\n\n${story.read(c)}`); } catch { /* 章文件缺失：跳过该章 */ }
+			}
+			if (!lines.length) continue;
+			beats += chapters.length;
+			lastBranch = branch;
+			sections.push(lines.join("\n\n"));
+			continue;
+		}
 		const { history, summary } = rebuildHistory(branch);
 		const userBeats = history.filter((m) => m.role === "user").length;
 		if (userBeats === 0 && !summary) continue;

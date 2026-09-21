@@ -120,13 +120,13 @@ ${formatMvuTree(mvu.tree)}${mvu.rules ? `\n\n【状态树·更新规则（卡作
 ${panels.map((p) => `〔${p.name}〕\n${formatMvuTree(p.tree)}`).join("\n\n")}`
 		: "";
 
+	// agent 模式（章写入触发）没有「用户这一拍的话」——讨论不是剧情，不进场记；只给章原文。
+	const exchange = userText.trim() ? `${userName}：${userText}\n\n${charName}：${assistantText}` : assistantText;
 	const user = `【当前账本】
 ${JSON.stringify(state, null, 2)}${mvuUserSection}${panelUserSection}
 
 【本轮对话】
-${userName}：${userText}
-
-${charName}：${assistantText}`;
+${exchange}`;
 
 	return { systemPrompt, userText: user };
 }

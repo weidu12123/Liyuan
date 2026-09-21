@@ -1,5 +1,8 @@
-/** One session tree; modes select views of it, never separate conversations. */
-export type ConversationMode = "roleplay" | "authoring";
+/**
+ * One session tree; modes select views of it, never separate conversations.
+ * `agent`（docs/PLAN-AGENT-MODE.md）是子项目属性而非树上开关：正文住章文件，树上只有讨论与数据条目。
+ */
+export type ConversationMode = "roleplay" | "authoring" | "agent";
 export const CONVERSATION_MODE_TYPE = "liyuan-mode";
 export const CONVERSATION_PROCESS_TYPE = "liyuan-process";
 
@@ -26,7 +29,7 @@ export interface ProcessRecord {
 }
 
 export function isConversationMode(value: unknown): value is ConversationMode {
-	return value === "roleplay" || value === "authoring";
+	return value === "roleplay" || value === "authoring" || value === "agent";
 }
 
 export function conversationMode(branch: ConversationEntry[]): ConversationMode {
@@ -40,7 +43,8 @@ export function conversationMode(branch: ConversationEntry[]): ConversationMode 
 }
 
 export function messageMode(message: unknown): ConversationMode {
-	return (message as ContextMessage | undefined)?.details?.liyuanMode === "authoring" ? "authoring" : "roleplay";
+	const mode = (message as ContextMessage | undefined)?.details?.liyuanMode;
+	return mode === "authoring" || mode === "agent" ? mode : "roleplay";
 }
 
 /** Entering authoring also claims the request that caused the switch, retroactively. */
@@ -63,7 +67,8 @@ export function storyBranch<T extends ConversationEntry>(branch: T[]): T[] {
 	return branch.filter((e) => {
 		if (e.type === "message" && (e.message as ContextMessage)?.role === "user") authoring = hidden.has(e.id ?? "") || messageMode(e.message) === "authoring";
 		if (e.type === "custom" && (e.customType === CONVERSATION_MODE_TYPE || e.customType === CONVERSATION_PROCESS_TYPE)) return false;
-		return !authoring && messageMode(e.message) !== "authoring";
+		// agent 讨论逐条不进 story 流，但不开维护段：章条目/账本/摘要等数据条目仍属剧情侧。
+		return !authoring && messageMode(e.message) === "roleplay";
 	});
 }
 

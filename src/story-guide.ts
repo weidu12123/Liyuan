@@ -46,10 +46,10 @@ function byCardName(_cwd: string, _ref: string): CardSpace | null {
  * 当前卡不在 cards/ 里 ⇒ 返回 undefined：调用方走 runtime.newSession()（同 sessionDir
  * 再开一个会话——老布局下「新对话」与今天语义一致）。
  */
-export function newChatSessionDir(cwd: string, configCard: string, name?: string): string | undefined {
+export function newChatSessionDir(cwd: string, configCard: string, name?: string, mode?: "agent"): string | undefined {
 	const space = resolveCardSpace(cwd, configCard);
 	if (!space) return undefined;
-	return createChat(space.dir, name ? { name } : undefined).sessionsDir;
+	return createChat(space.dir, { ...(name ? { name } : {}), ...(mode ? { mode } : {}) }).sessionsDir;
 }
 
 /**

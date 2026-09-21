@@ -15,7 +15,7 @@ import { cardAuthoringDirectory } from "./card-authoring.ts";
 import { loadCardConfig, resolveCardSpace, saveCardConfig } from "./cardspace.ts";
 import type { ConversationEntry } from "./conversation-mode.ts";
 import { mountedLorebookPaths } from "./lorebook.ts";
-import { CARDS_ROOT, SHARED_LIBRARY_DIRS, cardsRoot, insidePath } from "./paths.ts";
+import { CARDS_ROOT, CHATS_DIR, CHAT_SESSIONS_DIR, CHAT_STORY_DIR, SHARED_LIBRARY_DIRS, cardsRoot, insidePath } from "./paths.ts";
 
 /** pi 原生工具 → 访问类别。键集＝工作模式开放的原生工具清单（stage/authoring.ts 从这里派生）。 */
 export const NATIVE_TOOL_ACCESS = {
@@ -57,7 +57,9 @@ export type SandboxGrant = { dir: string } | { bash: true };
 export type SandboxVerdict =
 	| { kind: "allow" }
 	| { kind: "ask"; tool: NativeToolName; target: string; unit: string }
-	| { kind: "ask-bash"; command: string };
+	| { kind: "ask-bash"; command: string }
+	/** harness 管理的数据目录：原生写工具一律拒绝，不申请（reason 即回给模型的回执） */
+	| { kind: "deny"; reason: string };
 
 /** 与 pi 工具同一套输入规范化（core/utils/paths.ts normalizePath 的工具侧选项；包未导出，此处照抄） */
 function normalizeLikePi(input: string): string {
@@ -139,11 +141,26 @@ export function sandboxScope(cwd: string, config: { card: string; lorebook?: str
 	return { cwd, cardDir: space?.dir, roots: roots.map(realExisting), readRoots: readRoots.map(realExisting) };
 }
 
+/**
+ * 卡目录里由 harness 持有的数据（docs/PLAN-AGENT-MODE.md §5.2）：`对话/<id>/正文/`（章文件，版本与归属在会话树上）
+ * 与 `对话/<id>/会话/`（会话树本身）。原生写工具改这里会绕开树条目，故拒绝；读照常。这是路径规则，不是识别器。
+ */
+export function harnessManagedPath(cardDir: string | undefined, target: string): boolean {
+	if (!cardDir) return false;
+	const rel = relative(realExisting(cardDir), target);
+	if (!rel || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return false;
+	const segs = rel.split(sep);
+	return segs[0] === CHATS_DIR && segs.length >= 3 && (segs[2] === CHAT_STORY_DIR || segs[2] === CHAT_SESSIONS_DIR);
+}
+
 export function sandboxVerdict(tool: string, input: Record<string, unknown>, scope: SandboxScope, grants: SandboxGrants): SandboxVerdict {
 	const access = NATIVE_TOOL_ACCESS[tool as NativeToolName];
 	if (!access) return { kind: "allow" };
 	if (access === "bash") return grants.bash ? { kind: "allow" } : { kind: "ask-bash", command: String(input.command ?? "") };
 	const target = realExisting(sandboxTarget(tool, input, scope.cwd)!);
+	if (access === "write" && harnessManagedPath(scope.cardDir, target)) {
+		return { kind: "deny", reason: `${display(scope.cwd, target)} 属于梨园管理的数据（章文件 / 会话树），原生 ${tool} 不能写；正文用 story_* 工具。` };
+	}
 	const within = (roots: string[]) => roots.some((r) => insidePath(r, target));
 	if (within(scope.roots)) return { kind: "allow" };
 	if (access === "read" && within(scope.readRoots)) return { kind: "allow" };
@@ -203,7 +220,7 @@ const display = (cwd: string, p: string): string => {
 	return insidePath(root, p) ? relative(root, p) || "." : p;
 };
 
-export function describeAsk(v: Exclude<SandboxVerdict, { kind: "allow" }>, scope: SandboxScope): AskCard {
+export function describeAsk(v: Exclude<SandboxVerdict, { kind: "allow" } | { kind: "deny" }>, scope: SandboxScope): AskCard {
 	const always = scope.cardDir !== undefined;
 	if (v.kind === "ask-bash") {
 		return {
@@ -262,6 +279,7 @@ export function createSandboxGate(deps: SandboxGateDeps): (tool: string, input: 
 		const perm = permanentGrants(deps.cwd, scope.cardDir);
 		const v = sandboxVerdict(tool, input, scope, { dirs: [...session.dirs, ...perm.dirs], bash: session.bash || perm.bash });
 		if (v.kind === "allow") return undefined;
+		if (v.kind === "deny") { deps.log?.(`${tool} ${display(scope.cwd, sandboxTarget(tool, input, scope.cwd) ?? "")} → deny`); return v.reason; }
 		const card = describeAsk(v, scope);
 		if (!deps.ask) return `${card.denied}卡目录之外的访问需要用户批准，当前环境无法询问。`;
 		const answer = await deps.ask(card.question, card.options.map((o) => o.label));

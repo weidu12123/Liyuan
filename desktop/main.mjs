@@ -24,6 +24,75 @@ const dev = process.argv.includes("--dev") || !app.isPackaged;
 /** 产品树根（含 server/src/packages/web-dist/assets 的那一层）；打包后＝resources/app 即 stage 原样 */
 const productRoot = dev ? path.resolve(__dirname, "..") : app.getAppPath();
 
+// ---------- 界面语言（docs/PLAN-I18N.md 刀 5）----------
+// 壳的对话框与菜单跟数据根里 liyuan.config.json 的 uiLanguage 走；数据根还没定（首启）时按系统语言。
+// 菜单在起窗时建一次，网页里切换语言后壳的菜单要下次启动才换（已知限制）。
+const DESKTOP_EN = {
+	"选择梨园数据目录": "Choose the Liyuan data folder",
+	"角色卡、会话、记忆与配置都保存在这个目录里，可整体拷贝迁移。": "Character cards, sessions, memory and settings live in this folder; copy it as a whole to move.",
+	"选这里": "Use this folder",
+	"欢迎使用梨园": "Welcome to Liyuan",
+	"角色卡、会话、记忆与配置将保存在「数据目录」": "Character cards, sessions, memory and settings will be stored in the data folder",
+	"默认位置：{def}\n\n数据目录可整体拷贝迁移，重装梨园不影响数据。\n以后可在「文件」菜单更改位置。": "Default location: {def}\n\nThe data folder can be copied as a whole; reinstalling Liyuan does not touch it.\nYou can change the location later from the File menu.",
+	"就用默认位置": "Use default",
+	"选择其他位置": "Choose another",
+	"退出": "Quit",
+	"梨园": "Liyuan",
+	"数据目录不存在：\n{saved}": "Data folder not found:\n{saved}",
+	"目录可能被移动或删除。重新选择已有目录可继续用原有数据；选新目录则从零开始。": "The folder may have been moved or deleted. Pick the existing folder to keep your data, or a new one to start fresh.",
+	"重新选择…": "Choose again…",
+	"服务进程意外退出（代码 {code}）。": "The service process exited unexpectedly (code {code}).",
+	"日志：{log}": "Log: {log}",
+	"重启服务": "Restart service",
+	"服务进程已退出（详见日志）": "The service process has exited (see the log)",
+	"等待服务就绪超时": "Timed out waiting for the service",
+	"更改数据目录": "Change data folder",
+	"把角色卡、会话与记忆的存放位置换到新目录。": "Move where character cards, sessions and memory are stored.",
+	"原目录的数据不会自动搬移——需要保留就把原目录整体拷贝到新位置后再切换。\n新目录缺什么会自动补种默认资产。": "Data in the current folder is not moved automatically; copy the whole folder to the new location first if you want to keep it.\nMissing defaults are seeded into the new folder.",
+	"继续…": "Continue…",
+	"取消": "Cancel",
+	"切换数据目录后服务重启失败：{err}\n\n日志：{log}": "The service failed to restart after changing the data folder: {err}\n\nLog: {log}",
+	"已是最新版本（v{v}）。": "You are on the latest version (v{v}).",
+	"好": "OK",
+	"梨园更新": "Liyuan update",
+	"新版本 v{v} 已下载就绪。": "Version v{v} has been downloaded.",
+	"当前 v{v}。重启并安装大约需要几秒。\n角色卡、会话与配置都在数据目录，不受影响。": "Current version v{v}. Restarting to install takes a few seconds.\nCharacter cards, sessions and settings live in the data folder and are not affected.",
+	"重启并安装": "Restart and install",
+	"以后再说": "Later",
+	"检查更新失败。": "Update check failed.",
+	"{err}\n\n也可以到发布页手动下载新版。": "{err}\n\nYou can also download the new version from the releases page.",
+	"加载中…": "Loading…",
+	"文件": "File",
+	"打开数据目录": "Open data folder",
+	"更改数据目录…": "Change data folder…",
+	"视图": "View",
+	"重新载入": "Reload",
+	"开发者工具": "Developer tools",
+	"帮助": "Help",
+	"检查更新…": "Check for updates…",
+	"关于": "About",
+	"梨园 Liyuan v{v}": "Liyuan v{v}",
+	"数据目录：{dir}": "Data folder: {dir}",
+	"梨园启动失败": "Liyuan failed to start",
+	"{err}\n\n{log}": "{err}\n\n{log}",
+};
+let uiLocale = "zh";
+function detectUiLocale(dataRoot) {
+	try {
+		const cfg = JSON.parse(fs.readFileSync(path.join(dataRoot, "liyuan.config.json"), "utf8"));
+		if (cfg.uiLanguage === "zh" || cfg.uiLanguage === "en") return cfg.uiLanguage;
+	} catch {
+		/* 没配置或没数据根：按系统语言 */
+	}
+	return (app.getLocale?.() || "").toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+/** 同 web/src/i18n：键＝中文原文，占位符 {name}，缺条目回落中文 */
+function t(zh, vars) {
+	const out = uiLocale === "en" && DESKTOP_EN[zh] !== undefined ? DESKTOP_EN[zh] : zh;
+	return vars ? out.replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : m)) : out;
+}
+const logLine = () => (dev ? "" : t("日志：{log}", { log: logPath() }));
+
 // ---------- 数据根 ----------
 
 const desktopConfigFile = () => path.join(app.getPath("userData"), "desktop.json");
@@ -45,11 +114,11 @@ function saveDataRoot(dir) {
 async function pickDataRoot() {
 	const docs = app.getPath("documents") || app.getPath("home");
 	const { canceled, filePaths } = await dialog.showOpenDialog({
-		title: "选择梨园数据目录",
-		message: "角色卡、会话、记忆与配置都保存在这个目录里，可整体拷贝迁移。",
+		title: t("选择梨园数据目录"),
+		message: t("角色卡、会话、记忆与配置都保存在这个目录里，可整体拷贝迁移。"),
 		defaultPath: path.join(docs, "Liyuan"),
 		properties: ["openDirectory", "createDirectory", "dontAddToRecent"],
-		buttonLabel: "选这里",
+		buttonLabel: t("选这里"),
 	});
 	if (canceled || !filePaths?.[0]) return null;
 	saveDataRoot(filePaths[0]);
@@ -62,10 +131,10 @@ async function firstRunDataRoot() {
 	const def = path.join(docs, "Liyuan");
 	const choice = dialog.showMessageBoxSync({
 		type: "question",
-		title: "欢迎使用梨园",
-		message: "角色卡、会话、记忆与配置将保存在「数据目录」",
-		detail: `默认位置：${def}\n\n数据目录可整体拷贝迁移，重装梨园不影响数据。\n以后可在「文件」菜单更改位置。`,
-		buttons: ["就用默认位置", "选择其他位置", "退出"],
+		title: t("欢迎使用梨园"),
+		message: t("角色卡、会话、记忆与配置将保存在「数据目录」"),
+		detail: t("默认位置：{def}\n\n数据目录可整体拷贝迁移，重装梨园不影响数据。\n以后可在「文件」菜单更改位置。", { def }),
+		buttons: [t("就用默认位置"), t("选择其他位置"), t("退出")],
 		defaultId: 0,
 		cancelId: 2,
 	});
@@ -86,10 +155,10 @@ async function resolveDataRoot() {
 		// 指针在、目录没了：明确告知，不静默重建（数据主权在用户）
 		const choice = dialog.showMessageBoxSync({
 			type: "warning",
-			title: "梨园",
-			message: `数据目录不存在：\n${saved}`,
-			detail: "目录可能被移动或删除。重新选择已有目录可继续用原有数据；选新目录则从零开始。",
-			buttons: ["重新选择…", "退出"],
+			title: t("梨园"),
+			message: t("数据目录不存在：\n{saved}", { saved }),
+			detail: t("目录可能被移动或删除。重新选择已有目录可继续用原有数据；选新目录则从零开始。"),
+			buttons: [t("重新选择…"), t("退出")],
 			defaultId: 0,
 			cancelId: 1,
 		});
@@ -253,10 +322,10 @@ function spawnServer(dataRoot) {
 		if (quitting) return;
 		const choice = dialog.showMessageBoxSync({
 			type: "error",
-			title: "梨园",
-			message: `服务进程意外退出（代码 ${code}）。`,
-			detail: dev ? "" : `日志：${logPath()}`,
-			buttons: ["重启服务", "退出"],
+			title: t("梨园"),
+			message: t("服务进程意外退出（代码 {code}）。", { code }),
+			detail: logLine(),
+			buttons: [t("重启服务"), t("退出")],
 			defaultId: 0,
 			cancelId: 1,
 		});
@@ -269,7 +338,7 @@ function waitHealthy(timeoutMs = 90_000) {
 	const started = Date.now();
 	return new Promise((resolve, reject) => {
 		const ping = () => {
-			if (serverProc === null) return reject(new Error("服务进程已退出（详见日志）"));
+			if (serverProc === null) return reject(new Error(t("服务进程已退出（详见日志）")));
 			const req = http.get({ host: "127.0.0.1", port: serverPort, path: "/healthz", timeout: 3000 }, (res) => {
 				res.resume();
 				if (res.statusCode === 200) resolve();
@@ -279,7 +348,7 @@ function waitHealthy(timeoutMs = 90_000) {
 			req.on("error", retry);
 		};
 		const retry = () => {
-			if (Date.now() - started > timeoutMs) return reject(new Error("等待服务就绪超时"));
+			if (Date.now() - started > timeoutMs) return reject(new Error(t("等待服务就绪超时")));
 			setTimeout(ping, 400);
 		};
 		ping();
@@ -301,10 +370,10 @@ async function restart() {
 async function changeDataRoot() {
 	const choice = dialog.showMessageBoxSync({
 		type: "question",
-		title: "更改数据目录",
-		message: "把角色卡、会话与记忆的存放位置换到新目录。",
-		detail: "原目录的数据不会自动搬移——需要保留就把原目录整体拷贝到新位置后再切换。\n新目录缺什么会自动补种默认资产。",
-		buttons: ["继续…", "取消"],
+		title: t("更改数据目录"),
+		message: t("把角色卡、会话与记忆的存放位置换到新目录。"),
+		detail: t("原目录的数据不会自动搬移——需要保留就把原目录整体拷贝到新位置后再切换。\n新目录缺什么会自动补种默认资产。"),
+		buttons: [t("继续…"), t("取消")],
 		defaultId: 0,
 		cancelId: 1,
 	});
@@ -313,12 +382,13 @@ async function changeDataRoot() {
 	if (!picked) return;
 	dataRootResolved = picked;
 	seedDataRoot(picked);
+	uiLocale = detectUiLocale(picked);
 	try {
 		await restart();
 	} catch (err) {
 		dialog.showErrorBox(
-			"梨园",
-			`切换数据目录后服务重启失败：${err instanceof Error ? err.message : String(err)}\n\n日志：${logPath()}`,
+			t("梨园"),
+			t("切换数据目录后服务重启失败：{err}\n\n日志：{log}", { err: err instanceof Error ? err.message : String(err), log: logPath() }),
 		);
 		app.quit();
 	}
@@ -358,19 +428,19 @@ async function setupAutoUpdate() {
 			manualCheck = false;
 			void dialog.showMessageBox({
 				type: "info",
-				title: "梨园",
-				message: `已是最新版本（v${app.getVersion()}）。`,
-				buttons: ["好"],
+				title: t("梨园"),
+				message: t("已是最新版本（v{v}）。", { v: app.getVersion() }),
+				buttons: [t("好")],
 			});
 		}
 	});
 	autoUpdater.on("update-downloaded", (info) => {
 		const choice = dialog.showMessageBoxSync({
 			type: "question",
-			title: "梨园更新",
-			message: `新版本 v${info.version} 已下载就绪。`,
-			detail: `当前 v${app.getVersion()}。重启并安装大约需要几秒。\n角色卡、会话与配置都在数据目录，不受影响。`,
-			buttons: ["重启并安装", "以后再说"],
+			title: t("梨园更新"),
+			message: t("新版本 v{v} 已下载就绪。", { v: info.version }),
+			detail: t("当前 v{v}。重启并安装大约需要几秒。\n角色卡、会话与配置都在数据目录，不受影响。", { v: app.getVersion() }),
+			buttons: [t("重启并安装"), t("以后再说")],
 			defaultId: 0,
 			cancelId: 1,
 		});
@@ -384,10 +454,10 @@ async function setupAutoUpdate() {
 			manualCheck = false;
 			void dialog.showMessageBox({
 				type: "warning",
-				title: "梨园",
-				message: "检查更新失败。",
-				detail: `${err instanceof Error ? err.message : String(err)}\n\n也可以到发布页手动下载新版。`,
-				buttons: ["好"],
+				title: t("梨园"),
+				message: t("检查更新失败。"),
+				detail: t("{err}\n\n也可以到发布页手动下载新版。", { err: err instanceof Error ? err.message : String(err) }),
+				buttons: [t("好")],
 			});
 		}
 		// 自动检查静默失败：网络不通是常态，不弹窗
@@ -430,7 +500,7 @@ function buildSplash() {
 			);
 	}
 	const html =
-		`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>梨园</title>` +
+		`<!doctype html><html lang="${uiLocale === "zh" ? "zh-CN" : "en"}"><head><meta charset="utf-8"><title>${t("梨园")}</title>` +
 		`<style>` +
 		`*{box-sizing:border-box;margin:0;padding:0}` +
 		`html,body{width:100%;height:100%;overflow:hidden;background:#141110;color:#c4bbb1;` +
@@ -443,8 +513,8 @@ function buildSplash() {
 		`@keyframes splash-pulse{0%,100%{opacity:0.3;transform:scale(0.85)}50%{opacity:1;transform:scale(1.15);box-shadow:0 0 8px rgba(226,90,60,0.6)}}` +
 		`</style></head>` +
 		`<body><main class="splash">` +
-		`<img class="splash-logo" src="${logoSrc}" alt="梨园" />` +
-		`<div class="splash-loading"><span class="splash-dot"></span><span>加载中…</span></div>` +
+		`<img class="splash-logo" src="${logoSrc}" alt="${t("梨园")}" />` +
+		`<div class="splash-loading"><span class="splash-dot"></span><span>${t("加载中…")}</span></div>` +
 		`</main></body></html>`;
 	return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -456,7 +526,7 @@ function createWindow() {
 		minWidth: 940,
 		minHeight: 600,
 		backgroundColor: "#141110",
-		title: "梨园",
+		title: t("梨园"),
 		autoHideMenuBar: true, // 菜单栏默认隐藏（Alt 呼出）——2026-09-12 用户反馈
 	});
 	win.loadURL(buildSplash());
@@ -479,37 +549,37 @@ function createWindow() {
 function buildMenu() {
 	const template = [
 		{
-			label: "文件",
+			label: t("文件"),
 			submenu: [
-				{ label: "打开数据目录", click: () => void shell.openPath(dataRootResolved) },
-				{ label: "更改数据目录…", click: () => void changeDataRoot() },
+				{ label: t("打开数据目录"), click: () => void shell.openPath(dataRootResolved) },
+				{ label: t("更改数据目录…"), click: () => void changeDataRoot() },
 				{ type: "separator" },
-				{ label: "退出", role: "quit" },
+				{ label: t("退出"), role: "quit" },
 			],
 		},
 		{
-			label: "视图",
+			label: t("视图"),
 			submenu: [
-				{ label: "重新载入", accelerator: "CmdOrCtrl+R", click: () => win?.webContents.reload() },
-				{ label: "开发者工具", accelerator: "F12", click: () => win?.webContents.toggleDevTools() },
+				{ label: t("重新载入"), accelerator: "CmdOrCtrl+R", click: () => win?.webContents.reload() },
+				{ label: t("开发者工具"), accelerator: "F12", click: () => win?.webContents.toggleDevTools() },
 			],
 		},
 		{
-			label: "帮助",
+			label: t("帮助"),
 			submenu: [
 				{
-					label: "检查更新…",
+					label: t("检查更新…"),
 					click: () => checkUpdates(),
 				},
 				{
-					label: "关于",
+					label: t("关于"),
 					click: () =>
 						void dialog.showMessageBox({
 							type: "info",
-							title: "梨园",
-							message: `梨园 Liyuan v${app.getVersion()}`,
-							detail: `数据目录：${dataRootResolved}`,
-							buttons: ["好"],
+							title: t("梨园"),
+							message: t("梨园 Liyuan v{v}", { v: app.getVersion() }),
+							detail: t("数据目录：{dir}", { dir: dataRootResolved }),
+							buttons: [t("好")],
 						}),
 				},
 			],
@@ -522,6 +592,7 @@ function buildMenu() {
 
 async function bootstrap() {
 	await app.whenReady();
+	uiLocale = detectUiLocale(dev ? productRoot : readSavedDataRoot() || "");
 	createWindow(); // 先有窗（启动页在场），再谈数据目录——首启对话有上下文，不裸弹
 	const dataRoot = await resolveDataRoot();
 	if (!dataRoot) {
@@ -530,6 +601,7 @@ async function bootstrap() {
 	}
 	dataRootResolved = dataRoot;
 	seedDataRoot(dataRoot);
+	uiLocale = detectUiLocale(dataRoot);
 	buildMenu();
 	void setupAutoUpdate();
 	try {
@@ -539,8 +611,8 @@ async function bootstrap() {
 		if (win) win.loadURL(serverUrl());
 	} catch (err) {
 		dialog.showErrorBox(
-			"梨园启动失败",
-			`${err instanceof Error ? err.message : String(err)}\n\n${dev ? "" : `日志：${logPath()}`}`,
+			t("梨园启动失败"),
+			t("{err}\n\n{log}", { err: err instanceof Error ? err.message : String(err), log: logLine() }),
 		);
 		app.quit();
 	}
@@ -558,7 +630,7 @@ if (!gotLock) {
 	});
 
 	void bootstrap().catch((err) => {
-		dialog.showErrorBox("梨园启动失败", String(err));
+		dialog.showErrorBox(t("梨园启动失败"), String(err));
 		app.quit();
 	});
 

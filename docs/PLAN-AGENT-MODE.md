@@ -199,4 +199,5 @@ agent 轮的送模内容只有这四样，**在此声明为闭合集合**，实�
 - 2026-09-22：**刀 3 已落地**（导出扮演子项目为 agent 子项目仍是可选后续，未做）：用户按章直接编辑（稿子视图「编辑」→ 全文替换 → `POST /api/story/edit` → `replaceChapterText`，与 `story_edit` 同一条修订落点、来源 `user`）；「回退到此章之后」（`story_rewind` 帧 → `chapterRewindTarget` 算出写入该章那一轮的末条 → `navigateTree`，之后的章随分支退掉、文件仍在）；`story_append` 正文流式预览（引擎从 pi `toolcall_*` 增量事件取 `content` 参数 → `story_preview` 帧 → 稿子末尾「写入中」章；⚠ 实测 sonnet 经中转把工具 JSON 整块送达，只出一帧全量预览，在章落盘前约 6 秒可见——逐字生长取决于 provider 是否流工具参数）。浏览器实测三样都过；回退后连用户在其后做的修订也一起退掉（正确：修订是分支上的条目）。
 - 2026-09-22：**刀 2 前端已落地**：新建项目弹窗选「扮演 / agent」（`new` 帧带 `mode`）；agent 子项目桌面端 6:4 反向分栏——`StoryPane`（章目录＋连续阅读＋版本角标）在中间、讨论在右，只有一个输入框；顶栏「扮演｜工作」开关让位给 `agent` 标记（手机上兼作稿子页签入口）；讨论区章卡片（`chapter` 通道，写入/修订留痕，点击定位到章）；手机稿子/讨论双页签；会话列表项目行带 `agent` 角标。数据通道＝`hello.story`（章目录，轻）＋`GET /api/story`（正文，gzip），前端按「chapterId:version」指纹变化才拉。隔离实例浏览器实测：建 agent 项目→写第 1 章→story_edit→卡片/版本角标/手机页签全部对上；扮演项目不受影响。
 - 前置：1.6.1（桌面包漏发 `AUTHORING.md` 的修复已在 `4ff23ad`）。
+- 2026-09-22：用户认定现状粗糙，差距写在 [AGENT-MODE-STATUS.md](AGENT-MODE-STATUS.md)。**下一步改为 agent 模式的 coding agent 化**（一章一个文件、一次操作涉及多个文件）。本文 §十的实弹与发版让位，不在那一步之前做。
 - 开工条件：用户点名；开工第一步是重答第四节三问并核对本文引用的行号。

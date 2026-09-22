@@ -26,34 +26,38 @@ import {
 	IconWorldline,
 } from "./icons.tsx";
 import { ConfirmButton, Field, SearchInput, useAction } from "./kit.tsx";
+import { fmtDateTime, t } from "../i18n/index.ts";
 
 function timeAgo(ms: number): string {
 	const diff = Date.now() - ms;
-	if (diff < 90_000) return "刚刚";
-	if (diff < 3_600_000) return `${Math.round(diff / 60_000)} 分钟前`;
-	if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} 小时前`;
-	if (diff < 30 * 86_400_000) return `${Math.round(diff / 86_400_000)} 天前`;
-	return new Date(ms).toLocaleDateString();
+	if (diff < 90_000) return t("刚刚");
+	if (diff < 3_600_000) return t("{n} 分钟前", { n: Math.round(diff / 60_000) });
+	if (diff < 86_400_000) return t("{n} 小时前", { n: Math.round(diff / 3_600_000) });
+	if (diff < 30 * 86_400_000) return t("{n} 天前", { n: Math.round(diff / 86_400_000) });
+	return fmtDateTime(ms, { year: "numeric", month: "numeric", day: "numeric" });
 }
 
 /** 子项目显示名：用户起的名优先，缺省按建立时间生成 */
 function chatLabel(c: WireChatInfo): string {
 	if (c.name) return c.name;
-	const t = Date.parse(c.createdAt);
-	if (Number.isNaN(t)) return "未命名项目";
-	const d = new Date(t);
+	const ts = Date.parse(c.createdAt);
+	if (Number.isNaN(ts)) return t("未命名项目");
+	const d = new Date(ts);
 	const pad = (n: number) => String(n).padStart(2, "0");
-	return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+	return t("{month}月{day}日 {time}", { month: d.getMonth() + 1, day: d.getDate(), time: `${pad(d.getHours())}:${pad(d.getMinutes())}` });
 }
 
 /** 新建项目弹窗的默认名：已有「新建对话（N）」取最大 N＋1，否则从（1）起 */
 export function nextProjectName(chats: WireChatInfo[]): string {
 	let max = 0;
+	// 按当前语言的模板反推序号：模板里的 {n} 位置换成数字捕获
+	const tmpl = t("新建对话（{n}）", { n: "\u0000" });
+	const re = new RegExp(`^${tmpl.split("\u0000").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("(\\d+)")}$`);
 	for (const c of chats) {
-		const m = /^新建对话（(\d+)）$/.exec(c.name ?? "");
+		const m = re.exec(c.name ?? "");
 		if (m) max = Math.max(max, Number(m[1]));
 	}
-	return `新建对话（${max + 1}）`;
+	return t("新建对话（{n}）", { n: max + 1 });
 }
 
 /** 每个项目默认露出的对话数（当前项目永远全展开）；超出折叠进「展开显示」 */
@@ -82,7 +86,7 @@ export interface SessionsPanelProps {
 }
 
 function sessionTitle(s: { name?: string; firstMessage: string }): string {
-	return s.name || s.firstMessage.slice(0, 40) || "暂无聊天";
+	return s.name || s.firstMessage.slice(0, 40) || t("暂无聊天");
 }
 
 function RenameBox({ initial, onDone }: { initial: string; onDone: (name: string | null) => void }) {
@@ -131,7 +135,7 @@ export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy
 			}}
 		>
 			<div className="spv2-modal">
-				<div className="spv2-modal-title">新建项目</div>
+				<div className="spv2-modal-title">{t("新建项目")}</div>
 				<input
 					ref={ref}
 					className="panel-search spv2-modal-input"
@@ -142,8 +146,8 @@ export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy
 						if (e.key === "Escape") onDone(null);
 					}}
 				/>
-				<div className="spv2-modal-modes" role="radiogroup" aria-label="项目形态">
-					{([["roleplay", "扮演", "你是故事里的人，回复就是正文"], ["agent", "agent", "正文是稿子里的章，对话是讨论；agent 用工具写入"]] as const).map(([m, label, hint]) => (
+				<div className="spv2-modal-modes" role="radiogroup" aria-label={t("项目形态")}>
+					{([["roleplay", t("扮演"), t("你是故事里的人，回复就是正文")], ["agent", "agent", t("正文是稿子里的章，对话是讨论；agent 用工具写入")]] as const).map(([m, label, hint]) => (
 						<button key={m} type="button" role="radio" aria-checked={mode === m} className={`spv2-modal-mode ${mode === m ? "on" : ""}`} onClick={() => setMode(m)}>
 							<span className="spv2-modal-mode-label">{label}</span>
 							<span className="spv2-modal-mode-hint">{hint}</span>
@@ -151,9 +155,9 @@ export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy
 					))}
 				</div>
 				{mode === "agent" && greetings && greetings.length > 0 && (
-					<div className="spv2-modal-greetings" role="radiogroup" aria-label="开场白">
-						<div className="spv2-modal-greetings-title">开场白落成稿子的第一个文件（000-开场.md）</div>
-						{[{ index: -1, label: "不落，空稿子开始", text: "" }, ...greetings].map((g) => (
+					<div className="spv2-modal-greetings" role="radiogroup" aria-label={t("开场白")}>
+						<div className="spv2-modal-greetings-title">{t("开场白落成稿子的第一个文件（000-开场.md）")}</div>
+						{[{ index: -1, label: t("不落，空稿子开始"), text: "" }, ...greetings].map((g) => (
 							<button key={g.index} type="button" role="radio" aria-checked={greeting === g.index} className={`spv2-modal-greeting ${greeting === g.index ? "on" : ""}`} onClick={() => setGreeting(g.index)}>
 								<span className="spv2-modal-greeting-label">{g.label}</span>
 								{g.text && <span className="spv2-modal-greeting-hint">{g.text.replace(/\s+/g, " ").slice(0, 60)}</span>}
@@ -163,10 +167,10 @@ export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy
 				)}
 				<div className="spv2-modal-row">
 					<button type="button" className="drawer-btn" onClick={() => onDone(null)}>
-						取消
+						{t("取消")}
 					</button>
 					<button type="button" className="drawer-btn spv2-modal-ok" disabled={busy} onClick={() => done(value.trim() || null)}>
-						创建
+						{t("创建")}
 					</button>
 				</div>
 			</div>
@@ -197,7 +201,7 @@ function Leaf({
 	onToggleSelect?: (path: string) => void;
 }) {
 	const [renaming, setRenaming] = useState(false);
-	const hint = `${sessionTitle(s)}${s.preview ? `\n${s.preview}` : ""}\n(${timeAgo(s.modified)} · ${s.messageCount} 条)${s.current && currentHint ? `\n${currentHint}` : ""}`;
+	const hint = `${sessionTitle(s)}${s.preview ? `\n${s.preview}` : ""}\n(${timeAgo(s.modified)} · ${t("{n} 条", { n: s.messageCount })})${s.current && currentHint ? `\n${currentHint}` : ""}`;
 
 	return (
 		<div className={`spv2-leafrow ${s.current ? "cur" : ""} ${picking && selected ? "picked" : ""}`}>
@@ -206,7 +210,7 @@ function Leaf({
 					type="checkbox"
 					className="session-pick"
 					checked={selected}
-					aria-label={`选择「${sessionTitle(s)}」`}
+					aria-label={t("选择「{name}」", { name: sessionTitle(s) })}
 					onChange={() => onToggleSelect?.(s.path)}
 				/>
 			)}
@@ -232,8 +236,8 @@ function Leaf({
 				<span className="spv2-leaf-acts">
 					<button
 						className="spv2-icon-btn"
-						title="重命名"
-						aria-label="重命名对话"
+						title={t("重命名")}
+						aria-label={t("重命名对话")}
 						onClick={(e) => {
 							e.stopPropagation();
 							setRenaming(true);
@@ -245,9 +249,9 @@ function Leaf({
 						<ConfirmButton
 							className="spv2-icon-btn spv2-del-btn"
 							disabled={busy}
-							title="删除对话（不可恢复）"
-							aria-label="删除对话"
-							confirmText="删除"
+							title={t("删除对话（不可恢复）")}
+							aria-label={t("删除对话")}
+							confirmText={t("删除")}
 							onConfirm={() => onDelete(s.path)}
 						>
 							<IconTrash size={14} />
@@ -315,7 +319,7 @@ function ChatGroup({
 					<button type="button" className="spv2-chatname" onClick={openLatest} disabled={list.length === 0}>
 						<IconFolder size={15} />
 						<span className="spv2-chatname-text">{chatLabel(chat)}</span>
-						{chat.mode === "agent" && <span className="spv2-chat-mode" title="agent 模式：正文是稿子里的章">agent</span>}
+						{chat.mode === "agent" && <span className="spv2-chat-mode" title={t("agent 模式：正文是稿子里的章")}>agent</span>}
 					</button>
 				)}
 				{!renaming && (
@@ -323,21 +327,21 @@ function ChatGroup({
 						<button
 							className="spv2-icon-btn"
 							type="button"
-							title="新建对话"
-							aria-label="在这个项目里新建对话"
+							title={t("新建对话")}
+							aria-label={t("在这个项目里新建对话")}
 							onClick={() => onNewIn(chat.id)}
 						>
 							<IconPlus size={15} />
 						</button>
-						<button className="spv2-icon-btn" type="button" title="重命名项目" aria-label="重命名项目" onClick={() => setRenaming(true)}>
+						<button className="spv2-icon-btn" type="button" title={t("重命名项目")} aria-label={t("重命名项目")} onClick={() => setRenaming(true)}>
 							<IconPencil size={14} />
 						</button>
 						<a
 							className="spv2-icon-btn"
 							href={`/api/chats/export?chatId=${encodeURIComponent(chat.id)}`}
 							download
-							title="导出项目（zip，含全部对话）"
-							aria-label="导出项目"
+							title={t("导出项目（zip，含全部对话）")}
+							aria-label={t("导出项目")}
 						>
 							<IconDownload size={14} />
 						</a>
@@ -345,9 +349,9 @@ function ChatGroup({
 							<ConfirmButton
 								disabled={busy}
 								className="spv2-icon-btn spv2-del-btn"
-								title="删除整个项目（含全部对话与世界状态，不可恢复）"
-								aria-label="删除项目"
-								confirmText="删除"
+								title={t("删除整个项目（含全部对话与世界状态，不可恢复）")}
+								aria-label={t("删除项目")}
+								confirmText={t("删除")}
 								onConfirm={() => onDeleteChat(chat.id)}
 							>
 								<IconTrash size={14} />
@@ -357,7 +361,7 @@ function ChatGroup({
 				)}
 			</div>
 			<div className="spv2-kids">
-				{list.length === 0 && <div className="spv2-empty">暂无聊天</div>}
+				{list.length === 0 && <div className="spv2-empty">{t("暂无聊天")}</div>}
 				{visible.map((s) => (
 					<Leaf
 						key={s.path}
@@ -374,7 +378,7 @@ function ChatGroup({
 				))}
 				{hidden > 0 && (
 					<button type="button" className="spv2-more" onClick={() => setExpanded(true)}>
-						展开显示
+						{t("展开显示")}
 					</button>
 				)}
 			</div>
@@ -437,7 +441,7 @@ export function SessionsPanel({
 	}, [chats, matched]);
 
 	const currentChatId = sessions?.find((s) => s.current)?.chatId;
-	const currentHint = atHome ? "点击进入当前对话" : "再次点击回到主页";
+	const currentHint = atHome ? t("点击进入当前对话") : t("再次点击回到主页");
 
 	const doSearch = async () => {
 		const q = query.trim();
@@ -460,7 +464,7 @@ export function SessionsPanel({
 		run(async () => {
 			await apiPost("/api/sessions/rename", { path, name });
 			onRefresh();
-		}, "已重命名");
+		}, t("已重命名"));
 
 	const remove = (path: string) =>
 		run(async () => {
@@ -472,13 +476,13 @@ export function SessionsPanel({
 		run(async () => {
 			await apiPost("/api/chats/rename", { chatId, name });
 			onRefresh();
-		}, "已重命名");
+		}, t("已重命名"));
 
 	const removeChat = (chatId: string) =>
 		run(async () => {
 			await apiDelete(`/api/chats?chatId=${encodeURIComponent(chatId)}`);
 			onRefresh();
-		}, "已删除项目");
+		}, t("已删除项目"));
 
 	const [picking, setPicking] = useState(false);
 	const [picked, setPicked] = useState<string[]>([]);
@@ -519,7 +523,7 @@ export function SessionsPanel({
 		setImportingChat(true);
 		try {
 			const r = await apiPostFile<{ chatId: string; fileCount: number }>("/api/chats/import", file);
-			toast("info", `已导入项目（${r.fileCount} 个会话文件）`);
+			toast("info", t("已导入项目（{n} 个会话文件）", { n: r.fileCount }));
 			onRefresh();
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
@@ -534,7 +538,7 @@ export function SessionsPanel({
 		try {
 			const content = await file.text();
 			await apiPost("/api/import", { content, tag: importTag.trim() });
-			toast("info", "导入完成（前情块已注入会话）");
+			toast("info", t("导入完成（前情块已注入会话）"));
 			onRefresh();
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
@@ -550,23 +554,23 @@ export function SessionsPanel({
 			<div className="spv2-actions">
 				<button type="button" className="spv2-action" onClick={() => (chats ? setNaming(true) : onNew())}>
 					<IconPlus size={15} />
-					<span>{chats ? "新建项目" : "新建会话"}</span>
+					<span>{chats ? t("新建项目") : t("新建会话")}</span>
 				</button>
 				{onWorldline && (
-					<button type="button" className="spv2-action" onClick={onWorldline} title="查看世界线时间线">
+					<button type="button" className="spv2-action" onClick={onWorldline} title={t("查看世界线时间线")}>
 						<IconWorldline size={15} />
-						<span>世界线</span>
+						<span>{t("世界线")}</span>
 					</button>
 				)}
 				{onStore && (
-					<button type="button" className="spv2-action" onClick={onStore} title="在当前剧情点钉存档">
+					<button type="button" className="spv2-action" onClick={onStore} title={t("在当前剧情点钉存档")}>
 						<IconPin size={15} />
-						<span>存档</span>
+						<span>{t("存档")}</span>
 					</button>
 				)}
-				<button type="button" className="spv2-action" onClick={onCompact} title="压缩较早对话">
+				<button type="button" className="spv2-action" onClick={onCompact} title={t("压缩较早对话")}>
 					<IconList size={15} />
-					<span>压缩上下文</span>
+					<span>{t("压缩上下文")}</span>
 				</button>
 			</div>
 
@@ -578,7 +582,7 @@ export function SessionsPanel({
 						setQuery(v);
 						if (!v.trim()) setHits(null);
 					}}
-					placeholder="搜索..."
+					placeholder={t("搜索...")}
 					onEnter={() => void doSearch()}
 				/>
 			</div>
@@ -587,39 +591,39 @@ export function SessionsPanel({
 			{picking && (
 				<div className="panel-row list-toolbar session-pick-bar">
 					<button className="drawer-btn" onClick={() => setPicked(allPicked ? [] : others.map((s) => s.path))}>
-						{allPicked ? "全不选" : `全选 ${others.length}`}
+						{allPicked ? t("全不选") : t("全选 {n}", { n: others.length })}
 					</button>
 					<ConfirmButton
 						className="drawer-btn preset-del-btn"
 						disabled={busy || picked.length === 0}
-						confirmText={`删除 ${picked.length} 个`}
-						title="删除所选对话（不可恢复）"
+						confirmText={t("删除 {n} 个", { n: picked.length })}
+						title={t("删除所选对话（不可恢复）")}
 						onConfirm={removePicked}
 					>
-						删除所选 {picked.length}
+						{t("删除所选 {n}", { n: picked.length })}
 					</ConfirmButton>
 					<button className="drawer-btn" onClick={exitPicking}>
-						取消
+						{t("取消")}
 					</button>
 				</div>
 			)}
 
 			{/* 分组标题栏 */}
 			<div className="spv2-label">
-				<span>{chats ? "项目" : "会话"}</span>
+				<span>{chats ? t("项目") : t("会话")}</span>
 				{!picking && others.length > 0 && (
 					<button type="button" className="spv2-label-act" onClick={() => setPicking(true)}>
-						多选
+						{t("多选")}
 					</button>
 				)}
 			</div>
 
-			{searching && <div className="sp-empty">搜索中…</div>}
+			{searching && <div className="sp-empty">{t("搜索中…")}</div>}
 
 			{/* 搜索命中列表 */}
 			{hits !== null && !searching && (
 				<div className="spv2-tree">
-					<div className="field-hint" style={{ padding: "0 8px 6px" }}>命中 {hits.length} 个对话</div>
+					<div className="field-hint" style={{ padding: "0 8px 6px" }}>{t("命中 {n} 个对话", { n: hits.length })}</div>
 					{hits.map((h) => (
 						<button
 							key={h.path}
@@ -638,8 +642,8 @@ export function SessionsPanel({
 			{/* 主树形列表 */}
 			{hits === null && (
 				<div className="spv2-tree">
-					{sessions === null && <div className="info-line">读取中…</div>}
-					{sessions !== null && matched.length === 0 && <div className="info-line">{chats ? "暂无项目" : "暂无会话"}</div>}
+					{sessions === null && <div className="info-line">{t("读取中…")}</div>}
+					{sessions !== null && matched.length === 0 && <div className="info-line">{chats ? t("暂无项目") : t("暂无会话")}</div>}
 					{grouped
 						? grouped.groups.map(({ chat, list }) => (
 								<ChatGroup
@@ -712,21 +716,21 @@ export function SessionsPanel({
 					className="spv2-bottom-link"
 					disabled={importingChat}
 					onClick={() => zipRef.current?.click()}
-					title="把导出的项目包（zip）导回本卡，落成新项目，不覆盖现有"
+					title={t("把导出的项目包（zip）导回本卡，落成新项目，不覆盖现有")}
 				>
 					<IconFolder size={13} />
-					<span>{importingChat ? "导入中…" : "导入项目"}</span>
+					<span>{importingChat ? t("导入中…") : t("导入项目")}</span>
 				</button>
 				<button type="button" className="spv2-bottom-link" onClick={() => setImportOpen((v) => !v)}>
 					<IconUploads size={13} />
-					<span>导入聊天记录</span>
+					<span>{t("导入聊天记录")}</span>
 				</button>
 				{importOpen && (
 					<div className="spv2-import-body">
 						<div className="field-hint">
-							选择 SillyTavern 导出的 .jsonl 文件，自动提取历史剧情与世界状态。
+							{t("选择 SillyTavern 导出的 .jsonl 文件，自动提取历史剧情与世界状态。")}
 						</div>
-						<Field label="正文标签名（可选）">
+						<Field label={t("正文标签名（可选）")}>
 							<input
 								className="panel-search"
 								placeholder="content"
@@ -745,7 +749,7 @@ export function SessionsPanel({
 							}}
 						/>
 						<button className="drawer-btn" disabled={importing} onClick={() => fileRef.current?.click()}>
-							{importing ? "正在导入…" : "选择文件导入"}
+							{importing ? t("正在导入…") : t("选择文件导入")}
 						</button>
 					</div>
 				)}

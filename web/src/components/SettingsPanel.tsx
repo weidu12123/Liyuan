@@ -91,7 +91,7 @@ function MemoryChunkManager({
 			});
 			setChunks((cs) => cs.filter((c) => c.id !== id));
 			onChanged();
-		}, "已删除条目");
+		}, t("已删除条目"));
 
 	return (
 		<div className="memory-chunk-mgr" style={{ marginTop: 8 }}>
@@ -102,37 +102,37 @@ function MemoryChunkManager({
 					disabled={!enabled}
 					onClick={() => setOpen((v) => !v)}
 				>
-					{open ? "收起条目" : `管理「${label}」条目`}
+					{open ? t("收起条目") : t("管理「{label}」条目", { label })}
 				</button>
 				{open ? (
 					<button type="button" className="drawer-btn" disabled={busy || loading} onClick={() => void refresh()}>
-						刷新列表
+						{t("刷新列表")}
 					</button>
 				) : null}
 			</div>
 			{open && (
 				<div className="memory-chunk-list">
-					{loading && !chunks.length ? <div className="field-hint">加载中…</div> : null}
-					{!loading && chunks.length === 0 ? <div className="field-hint">暂无条目</div> : null}
+					{loading && !chunks.length ? <div className="field-hint">{t("加载中…")}</div> : null}
+					{!loading && chunks.length === 0 ? <div className="field-hint">{t("暂无条目")}</div> : null}
 					<ul className="memory-hits">
 						{chunks.map((c) => {
 							const src =
 								c.meta?.source === "import"
-									? "导入"
+									? t("导入")
 									: c.meta?.source === "manual"
-										? "手动"
+										? t("手动")
 										: c.meta?.source === "narrative"
-											? "剧情"
+											? t("剧情")
 											: c.meta?.source || "";
 							const title = c.meta?.title || c.meta?.fileName || "";
-							const merge = c.meta?.mergeCount && c.meta.mergeCount > 1 ? ` · 合并×${c.meta.mergeCount}` : "";
+							const merge = c.meta?.mergeCount && c.meta.mergeCount > 1 ? t(" · 合并×{n}", { n: c.meta.mergeCount }) : "";
 							return (
 								<li key={c.id} className="memory-chunk-item">
 									<div className="memory-chunk-meta">
 										<span className="memory-score">
 											{src}
 											{title ? ` · ${title}` : ""}
-											{merge} · {c.textLen}字
+											{merge} · {t("{n}字", { n: c.textLen })}
 										</span>
 										<button
 											type="button"
@@ -141,7 +141,7 @@ function MemoryChunkManager({
 											onClick={() => void del(c.id)}
 											style={{ marginLeft: 8, padding: "2px 8px", fontSize: 12 }}
 										>
-											删除
+											{t("删除")}
 										</button>
 									</div>
 									<div className="memory-chunk-text">
@@ -220,7 +220,7 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 				],
 			});
 			reload();
-		}, "记忆设置已保存");
+		}, t("记忆设置已保存"));
 
 	const probeEmbed = () =>
 		run(async () => {
@@ -236,15 +236,15 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 				method: "POST",
 				body: "{}",
 			});
-			if (!r.ok) throw new Error(r.error || "探测失败");
+			if (!r.ok) throw new Error(r.error || t("探测失败"));
 			reload();
-		}, "云端 embedding 正常");
+		}, t("云端 embedding 正常"));
 
 	const clearStore = (storeId: string, label: string) =>
 		run(async () => {
 			await api("/api/memory/clear", { method: "POST", body: JSON.stringify({ storeId }) });
 			reload();
-		}, `已清空「${label}」`);
+		}, t("已清空「{label}」", { label }));
 
 	const reembedAll = () =>
 		run(async () => {
@@ -274,9 +274,9 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 			});
 			reload();
 			const n = r.totalUpdated ?? 0;
-			const t = r.totalChunks ?? 0;
-			if (t === 0) toast("info", "当前对话库为空，无需重向量化");
-			else toast("info", `重向量化完成：${n}/${t} 条（${r.mode === "cloud" ? r.model : "本地"}）`);
+			const total = r.totalChunks ?? 0;
+			if (total === 0) toast("info", t("当前对话库为空，无需重向量化"));
+			else toast("info", t("重向量化完成：{n}/{total} 条（{mode}）", { n, total, mode: r.mode === "cloud" ? r.model : t("本地") }));
 		});
 
 	const onImportFile = async (file: File) => {
@@ -293,7 +293,7 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 	const manualAdd = () =>
 		run(async () => {
 			const text = manualText.trim();
-			if (text.length < 8) throw new Error("内容太短");
+			if (text.length < 8) throw new Error(t("内容太短"));
 			await api("/api/memory/manual", {
 				method: "POST",
 				body: JSON.stringify({
@@ -313,7 +313,7 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 				body: JSON.stringify({ storeId: "narrative", query: probeQ, topK: searchTopK }),
 			});
 			setProbeHits(r.hits ?? []);
-		}, "检索完成");
+		}, t("检索完成"));
 
 	const narCount = data?.stores.find((s) => s.id === "narrative")?.chunkCount ?? 0;
 	const narMax = data?.stores.find((s) => s.id === "narrative")?.maxChunks ?? "—";
@@ -322,22 +322,22 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 
 	return (
 		<section className="sp-section">
-			<h4>向量记忆</h4>
+			<h4>{t("向量记忆")}</h4>
 			<div className="field-hint">
-				按「当前角色卡 + 当前对话」隔离。
-				<strong>剧情数据库</strong>仅 agent 自动<strong>合并</strong>入库；
-				<strong>额外数据库</strong>用于导入与手动向量化（每段可成条目，可逐条删除）。
+				{t("按「当前角色卡 + 当前对话」隔离。")}
+				<strong>{t("剧情数据库")}</strong>{t("仅 agent 自动")}<strong>{t("合并")}</strong>{t("入库；")}
+				<strong>{t("额外数据库")}</strong>{t("用于导入与手动向量化（每段可成条目，可逐条删除）。")}
 			</div>
 			{data?.scope?.sessionId ? (
 				<div className="field-hint">
-					当前库作用域：会话 {data.scope.sessionId.slice(0, 8)}…
-					{data.scope.card ? ` · 卡 ${data.scope.card.split(/[/\\]/).pop()}` : ""}
+					{t("当前库作用域：会话 {id}…", { id: data.scope.sessionId.slice(0, 8) })}
+					{data.scope.card ? t(" · 卡 {card}", { card: data.scope.card.split(/[/\\]/).pop() }) : ""}
 				</div>
 			) : null}
-			{loading && !data ? <div className="field-hint">加载中…</div> : null}
+			{loading && !data ? <div className="field-hint">{t("加载中…")}</div> : null}
 			{error ? <div className="field-hint" style={{ color: "var(--danger, #c44)" }}>{error}</div> : null}
 			<div className="toggle-row">
-				<span>启用向量记忆</span>
+				<span>{t("启用向量记忆")}</span>
 				<Toggle
 					checked={enabled}
 					onChange={(v) => {
@@ -349,7 +349,7 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 			{(open || enabled) && data && (
 				<div className="memory-panel">
 					<div className="field-label" style={{ marginBottom: 6 }}>
-						嵌入模式
+						{t("嵌入模式")}
 					</div>
 					<div className="access-actions" style={{ gap: 8, marginBottom: 8 }}>
 						<button
@@ -357,43 +357,43 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 							className={`drawer-btn ${embedMode === "local" ? "save-btn" : ""}`}
 							onClick={() => setEmbedMode("local")}
 						>
-							本地（免模型）
+							{t("本地（免模型）")}
 						</button>
 						<button
 							type="button"
 							className={`drawer-btn ${embedMode === "cloud" ? "save-btn" : ""}`}
 							onClick={() => setEmbedMode("cloud")}
 						>
-							云端 embedding
+							{t("云端 embedding")}
 						</button>
 					</div>
 					<div className="field-hint">
-						换模式后用「重向量化」保留原文只重算向量（云端只花 embedding 费）。
+						{t("换模式后用「重向量化」保留原文只重算向量（云端只花 embedding 费）。")}
 					</div>
 					{embedMode === "cloud" && (
 						<div className="memory-cloud">
 							<input
 								className="field-input"
-								placeholder="Base URL（如 https://api.openai.com/v1）"
+								placeholder={t("Base URL（如 https://api.openai.com/v1）")}
 								value={cloudBase}
 								onChange={(e) => setCloudBase(e.target.value)}
 							/>
 							<input
 								className="field-input"
 								type="password"
-								placeholder={keyConfigured ? "API Key（已保存，留空不改）" : "API Key"}
+								placeholder={keyConfigured ? t("API Key（已保存，留空不改）") : "API Key"}
 								value={cloudKey}
 								autoComplete="off"
 								onChange={(e) => setCloudKey(e.target.value)}
 							/>
 							<input
 								className="field-input"
-								placeholder="模型名（如 text-embedding-3-small）"
+								placeholder={t("模型名（如 text-embedding-3-small）")}
 								value={cloudModel}
 								onChange={(e) => setCloudModel(e.target.value)}
 							/>
 							<button type="button" className="drawer-btn" disabled={busy} onClick={() => void probeEmbed()}>
-								测试 embedding 连接
+								{t("测试 embedding 连接")}
 							</button>
 						</div>
 					)}
@@ -404,23 +404,23 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 							disabled={busy || !enabled}
 							onClick={() => void reembedAll()}
 						>
-							按当前模式重向量化
+							{t("按当前模式重向量化")}
 						</button>
 					</div>
 
 					{/* —— 剧情数据库 —— */}
 					<div className="toggle-row" style={{ marginTop: 14 }}>
-						<span>剧情数据库</span>
+						<span>{t("剧情数据库")}</span>
 						<Toggle checked={narrativeOn} onChange={setNarrativeOn} />
 					</div>
 					<div className="field-hint">
-						条数 {narCount} / {narMax}。仅 agent 自动写入：到轮次后<strong>合并进最后一条</strong>
-						（约满 1800 字才新开一条），不接受手动/导入。
+						{t("条数 {count} / {max}。仅 agent 自动写入：到轮次后", { count: narCount, max: narMax })}<strong>{t("合并进最后一条")}</strong>
+						{t("（约满 1800 字才新开一条），不接受手动/导入。")}
 					</div>
 					{narrativeOn && (
 						<SliderField
-							label="每隔多少轮助手回复合并入库"
-							hint="1=每轮尝试合并；3=每 3 轮。0=不自动写"
+							label={t("每隔多少轮助手回复合并入库")}
+							hint={t("1=每轮尝试合并；3=每 3 轮。0=不自动写")}
 							value={narrativeEvery}
 							min={0}
 							max={20}
@@ -432,14 +432,14 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 							type="button"
 							className="drawer-btn"
 							disabled={busy}
-							onClick={() => clearStore("narrative", "剧情数据库")}
+							onClick={() => clearStore("narrative", t("剧情数据库"))}
 						>
-							清空剧情库
+							{t("清空剧情库")}
 						</button>
 					</div>
 					<MemoryChunkManager
 						storeId="narrative"
-						label="剧情"
+						label={t("剧情")}
 						enabled={enabled}
 						busy={busy}
 						run={run}
@@ -449,15 +449,15 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 
 					{/* —— 额外数据库 —— */}
 					<div className="toggle-row" style={{ marginTop: 14 }}>
-						<span>额外数据库</span>
+						<span>{t("额外数据库")}</span>
 						<Toggle checked={externalOn} onChange={setExternalOn} />
 					</div>
 					<div className="field-hint">
-						条数 {extCount} / {extMax}。导入文件会切块成多条；手动向量化短文 1 条、长文多条。可逐条删除。
+						{t("条数 {count} / {max}。导入文件会切块成多条；手动向量化短文 1 条、长文多条。可逐条删除。", { count: extCount, max: extMax })}
 					</div>
 					<div className="access-actions">
 						<button type="button" className="drawer-btn" disabled={busy || !enabled} onClick={() => fileRef.current?.click()}>
-							导入文本文件
+							{t("导入文本文件")}
 						</button>
 						<input
 							ref={fileRef}
@@ -470,23 +470,23 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 								if (fileRef.current) fileRef.current.value = "";
 							}}
 						/>
-						<button type="button" className="drawer-btn" disabled={busy} onClick={() => clearStore("external", "额外数据库")}>
-							清空额外库
+						<button type="button" className="drawer-btn" disabled={busy} onClick={() => clearStore("external", t("额外数据库"))}>
+							{t("清空额外库")}
 						</button>
 					</div>
 					<div className="field-label" style={{ marginTop: 10, marginBottom: 4 }}>
-						手动向量化（写入额外库）
+						{t("手动向量化（写入额外库）")}
 					</div>
 					<input
 						className="field-input"
-						placeholder="可选标题"
+						placeholder={t("可选标题")}
 						value={manualTitle}
 						onChange={(e) => setManualTitle(e.target.value)}
 						disabled={!enabled || busy}
 					/>
 					<textarea
 						className="field-input"
-						placeholder="粘贴要记住的设定/摘录…"
+						placeholder={t("粘贴要记住的设定/摘录…")}
 						value={manualText}
 						onChange={(e) => setManualText(e.target.value)}
 						rows={4}
@@ -500,12 +500,12 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 							disabled={busy || !enabled || manualText.trim().length < 8}
 							onClick={() => void manualAdd()}
 						>
-							写入额外库
+							{t("写入额外库")}
 						</button>
 					</div>
 					<MemoryChunkManager
 						storeId="external"
-						label="额外"
+						label={t("额外")}
 						enabled={enabled}
 						busy={busy}
 						run={run}
@@ -514,15 +514,15 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 					/>
 
 					<div className="toggle-row" style={{ marginTop: 12 }}>
-						<span>每轮自动检索并注入模型</span>
+						<span>{t("每轮自动检索并注入模型")}</span>
 						<Toggle checked={injectOnTurn} onChange={setInjectOnTurn} />
 					</div>
 					<div className="field-hint">
-						开=用户发言后检索剧情库+额外库，以【剧情记忆】注入。关=只入库不注入。
+						{t("开=用户发言后检索剧情库+额外库，以【剧情记忆】注入。关=只入库不注入。")}
 					</div>
 					<SliderField
-						label="检索 / 注入条数 top-k"
-						hint="试检索与每轮注入共用上限"
+						label={t("检索 / 注入条数 top-k")}
+						hint={t("试检索与每轮注入共用上限")}
 						value={searchTopK}
 						min={1}
 						max={15}
@@ -531,13 +531,13 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 					<div className="access-actions" style={{ flexWrap: "wrap", gap: 8 }}>
 						<input
 							className="field-input"
-							placeholder="试检索剧情库…"
+							placeholder={t("试检索剧情库…")}
 							value={probeQ}
 							onChange={(e) => setProbeQ(e.target.value)}
 							style={{ flex: 1, minWidth: 120 }}
 						/>
 						<button type="button" className="drawer-btn" disabled={busy || !probeQ.trim() || !enabled} onClick={() => void probe()}>
-							检索
+							{t("检索")}
 						</button>
 					</div>
 					{probeHits.length > 0 && (
@@ -553,7 +553,7 @@ function MemorySection({ toast }: { toast: (level: "info" | "warning" | "error",
 
 					<div className="sticky-save" style={{ marginTop: 12 }}>
 						<button type="button" className="drawer-btn save-btn" disabled={busy} onClick={() => void save()}>
-							保存记忆设置
+							{t("保存记忆设置")}
 						</button>
 					</div>
 				</div>
@@ -579,8 +579,8 @@ function AccessSection({ toast }: { toast: (level: "info" | "warning" | "error",
 	const submit = (turningOff: boolean) =>
 		run(async () => {
 			if (!turningOff) {
-				if (newPw.length < 4) throw new Error("新密码至少 4 位");
-				if (newPw !== newPw2) throw new Error("两次输入的新密码不一致");
+				if (newPw.length < 4) throw new Error(t("新密码至少 4 位"));
+				if (newPw !== newPw2) throw new Error(t("两次输入的新密码不一致"));
 			}
 			const r = await api<{ required: boolean }>("/api/access/set", {
 				method: "POST",
@@ -590,15 +590,15 @@ function AccessSection({ toast }: { toast: (level: "info" | "warning" | "error",
 			setOldPw("");
 			setNewPw("");
 			setNewPw2("");
-		}, turningOff ? "已关闭访问密码" : "已设置访问密码（其他设备需重新登录）");
+		}, turningOff ? t("已关闭访问密码") : t("已设置访问密码（其他设备需重新登录）"));
 
 	return (
 		<section className="sp-section">
-			<h4>访问密码</h4>
+			<h4>{t("访问密码")}</h4>
 			<div className="field-hint">
 				{required
-					? "已开启：所有设备访问本站都需输入密码。修改或关闭需先验证当前密码。"
-					: "未开启：任何能连到本站的人都可直接使用。部署到公网 / 局域网共享时建议设置。"}
+					? t("已开启：所有设备访问本站都需输入密码。修改或关闭需先验证当前密码。")
+					: t("未开启：任何能连到本站的人都可直接使用。部署到公网 / 局域网共享时建议设置。")}
 			</div>
 			{required === null ? null : (
 				<>
@@ -606,7 +606,7 @@ function AccessSection({ toast }: { toast: (level: "info" | "warning" | "error",
 						<input
 							className="field-input"
 							type="password"
-							placeholder="当前密码"
+							placeholder={t("当前密码")}
 							value={oldPw}
 							autoComplete="current-password"
 							onChange={(e) => setOldPw(e.target.value)}
@@ -615,7 +615,7 @@ function AccessSection({ toast }: { toast: (level: "info" | "warning" | "error",
 					<input
 						className="field-input"
 						type="password"
-						placeholder={required ? "新密码（至少 4 位）" : "设置密码（至少 4 位）"}
+						placeholder={required ? t("新密码（至少 4 位）") : t("设置密码（至少 4 位）")}
 						value={newPw}
 						autoComplete="new-password"
 						onChange={(e) => setNewPw(e.target.value)}
@@ -623,18 +623,18 @@ function AccessSection({ toast }: { toast: (level: "info" | "warning" | "error",
 					<input
 						className="field-input"
 						type="password"
-						placeholder="再输一次新密码"
+						placeholder={t("再输一次新密码")}
 						value={newPw2}
 						autoComplete="new-password"
 						onChange={(e) => setNewPw2(e.target.value)}
 					/>
 					<div className="access-actions">
 						<button className="drawer-btn save-btn" disabled={busy || !newPw} onClick={() => submit(false)}>
-							{required ? "修改密码" : "设置密码"}
+							{required ? t("修改密码") : t("设置密码")}
 						</button>
 						{required && (
 							<button className="drawer-btn" disabled={busy || !oldPw} onClick={() => submit(true)}>
-								关闭密码
+								{t("关闭密码")}
 							</button>
 						)}
 					</div>
@@ -653,7 +653,7 @@ function BackupSection({ toast }: { toast: (level: "info" | "warning" | "error",
 	const onBackup = () =>
 		run(async () => {
 			const r = await createBackup();
-			toast("info", `已在本机备份 ${r.files} 个文件（.liyuan-cache/backup/${r.filename}）`);
+			toast("info", t("已在本机备份 {n} 个文件（.liyuan-cache/backup/{file}）", { n: r.files, file: r.filename }));
 		});
 
 	const onPickImport = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -667,25 +667,24 @@ function BackupSection({ toast }: { toast: (level: "info" | "warning" | "error",
 			if (!pendingFile) return;
 			const r = await importBackup(pendingFile);
 			setPendingFile(null);
-			toast("info", r.note || "已导入，正在重启应用…");
+			toast("info", r.note || t("已导入，正在重启应用…"));
 		});
 
 	return (
 		<section className="sp-section">
-			<h4>备份与恢复</h4>
+			<h4>{t("备份与恢复")}</h4>
 			<div className="field-hint">
-				完整备份本项目的角色卡、世界书、预设、会话、向量记忆、面板、知识库、素材与配置（含 API
-				密钥与访问密码，请妥善保管）。恢复会<strong>整体覆盖</strong>当前项目，并自动先留一份恢复前快照。
+				{t("完整备份本项目的角色卡、世界书、预设、会话、向量记忆、面板、知识库、素材与配置（含 API 密钥与访问密码，请妥善保管）。恢复会")}<strong>{t("整体覆盖")}</strong>{t("当前项目，并自动先留一份恢复前快照。")}
 			</div>
 			<div className="access-actions" style={{ flexWrap: "wrap" }}>
 				<button type="button" className="drawer-btn" disabled={busy} onClick={onBackup}>
-					备份
+					{t("备份")}
 				</button>
 				<button type="button" className="drawer-btn" disabled={busy} onClick={() => downloadBackup()}>
-					导出
+					{t("导出")}
 				</button>
 				<button type="button" className="drawer-btn" disabled={busy} onClick={() => fileRef.current?.click()}>
-					导入
+					{t("导入")}
 				</button>
 				<input
 					ref={fileRef}
@@ -698,14 +697,14 @@ function BackupSection({ toast }: { toast: (level: "info" | "warning" | "error",
 			{pendingFile && (
 				<div className="memory-chunk-mgr" style={{ marginTop: 8 }}>
 					<div className="field-hint">
-						待导入：{pendingFile.name}（覆盖当前项目全部数据）
+						{t("待导入：{name}（覆盖当前项目全部数据）", { name: pendingFile.name })}
 					</div>
 					<div className="access-actions">
-						<ConfirmButton className="drawer-btn" disabled={busy} confirmText="确认覆盖当前项目" onConfirm={() => void doImport()}>
-							开始导入
+						<ConfirmButton className="drawer-btn" disabled={busy} confirmText={t("确认覆盖当前项目")} onConfirm={() => void doImport()}>
+							{t("开始导入")}
 						</ConfirmButton>
 						<button type="button" className="drawer-btn" disabled={busy} onClick={() => setPendingFile(null)}>
-							取消
+							{t("取消")}
 						</button>
 					</div>
 				</div>
@@ -759,7 +758,7 @@ export function SettingsPanel({
 				creationMode: askMode ? "ask" : "silent",
 			});
 			reload();
-		}, "已保存并重载会话");
+		}, t("已保存并重载会话"));
 
 	return (
 		<div className="panel-body panel-body-sticky">
@@ -775,10 +774,10 @@ export function SettingsPanel({
 			{data && (
 				<>
 					<section className="sp-section">
-						<h4>世界书</h4>
+						<h4>{t("世界书")}</h4>
 						<SliderField
-							label="关键词扫描深度"
-							hint="被动触发回看最近几条消息"
+							label={t("关键词扫描深度")}
+							hint={t("被动触发回看最近几条消息")}
 							value={scanDepth}
 							min={1}
 							max={20}
@@ -788,8 +787,8 @@ export function SettingsPanel({
 							}}
 						/>
 						<SliderField
-							label="每轮注入条目上限"
-							hint="0 = 关闭被动注入（常驻条目不受影响）"
+							label={t("每轮注入条目上限")}
+							hint={t("0 = 关闭被动注入（常驻条目不受影响）")}
 							value={maxLore}
 							min={0}
 							max={10}
@@ -801,10 +800,10 @@ export function SettingsPanel({
 					</section>
 
 					<section className="sp-section">
-						<h4>上下文压缩</h4>
+						<h4>{t("上下文压缩")}</h4>
 						<SliderField
-							label="固定楼层压缩周期"
-							hint="每 N 个剧情轮把早期正文压成接力摘要（原文归档进剧情库可召回）；0 = 仅在上下文吃紧时被动压缩"
+							label={t("固定楼层压缩周期")}
+							hint={t("每 N 个剧情轮把早期正文压成接力摘要（原文归档进剧情库可召回）；0 = 仅在上下文吃紧时被动压缩")}
 							value={compactEvery}
 							min={0}
 							max={100}
@@ -816,9 +815,9 @@ export function SettingsPanel({
 					</section>
 
 					<section className="sp-section">
-						<h4>agent 行为</h4>
+						<h4>{t("agent 行为")}</h4>
 						<div className="toggle-row">
-							<span>后端操控（bash / 文件等通用工具）</span>
+							<span>{t("后端操控（bash / 文件等通用工具）")}</span>
 							<Toggle
 								checked={backendControl}
 								onChange={(v) => {
@@ -828,10 +827,10 @@ export function SettingsPanel({
 							/>
 						</div>
 						<div className="field-hint">
-							开启后 agent 能操作本机（调用你的其他项目、查资料）；全部调用都会显示在过程条。仅在自己的设备上开启。
+							{t("开启后 agent 能操作本机（调用你的其他项目、查资料）；全部调用都会显示在过程条。仅在自己的设备上开启。")}
 						</div>
 						<div className="toggle-row">
-							<span>决策门禁（戏内选择卡）</span>
+							<span>{t("决策门禁（戏内选择卡）")}</span>
 							<Toggle
 								checked={askMode}
 								onChange={(v) => {
@@ -841,19 +840,19 @@ export function SettingsPanel({
 							/>
 						</div>
 						<div className="field-hint">
-							开=询问档：剧情相关（含「我该怎么办」）一律戏内，用选择卡共创；关=静默档自行推进。戏外只办系统事，不处理剧情。
+							{t("开=询问档：剧情相关（含「我该怎么办」）一律戏内，用选择卡共创；关=静默档自行推进。戏外只办系统事，不处理剧情。")}
 						</div>
 					</section>
 
 					<section className="sp-section">
-						<h4>关于</h4>
+						<h4>{t("关于")}</h4>
 						<div className="field-hint">
-							梨园 Liyuan v{currentVersion || "1.6.0"} · 基于 pi 构建的 RP Agent
+							{t("梨园 Liyuan v{v} · 基于 pi 构建的 RP Agent", { v: currentVersion || "1.6.0" })}
 						</div>
 						{onOpenAbout && (
 							<div className="access-actions" style={{ marginTop: 6 }}>
 								<button type="button" className="drawer-btn" onClick={onOpenAbout}>
-									查看完整关于
+									{t("查看完整关于")}
 								</button>
 							</div>
 						)}
@@ -861,7 +860,7 @@ export function SettingsPanel({
 
 					<div className="sticky-save">
 						<button className="drawer-btn save-btn" disabled={busy || !dirty} onClick={save}>
-							{dirty ? "保存并重载会话" : "已保存"}
+							{dirty ? t("保存并重载会话") : t("已保存")}
 						</button>
 					</div>
 				</>

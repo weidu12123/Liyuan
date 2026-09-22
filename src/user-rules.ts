@@ -22,6 +22,8 @@ import type { PresetDoc } from "./preset-doc.ts";
 
 /** 用户规矩文件名（两级同名，对齐 pi 的 APPEND_SYSTEM.md 习惯） */
 export const USER_RULES_FILE = "APPEND_SYSTEM.md";
+/** agent 模式的全局追加槽：与 APPEND_SYSTEM.md 平级、二选一——扮演轮读前者，agent 轮读本文件 */
+export const AGENT_RULES_FILE = "AGENT_APPEND_SYSTEM.md";
 
 /** agentDir：与 paths.ts preferLiyuanAgentHome 同一约定（启动时写 env；只认 LIYUAN_*，PI_* 不当输入） */
 export function rulesAgentDir(): string {
@@ -30,6 +32,10 @@ export function rulesAgentDir(): string {
 
 export function globalRulesPath(): string {
 	return join(rulesAgentDir(), USER_RULES_FILE);
+}
+
+export function agentRulesPath(): string {
+	return join(rulesAgentDir(), AGENT_RULES_FILE);
 }
 
 /**
@@ -47,6 +53,8 @@ export function cardRulesPath(cardDir: string): string {
 
 export interface UserRules {
 	global: string;
+	/** agent 模式的全局追加（AGENT_APPEND_SYSTEM.md）；扮演轮不读 */
+	agent: string;
 	card: string;
 }
 
@@ -59,7 +67,7 @@ export function readUserRules(cardDir: string): UserRules {
 			return "";
 		}
 	};
-	return { global: read(globalRulesPath()), card: read(cardRulesPath(cardDir)) };
+	return { global: read(globalRulesPath()), agent: read(agentRulesPath()), card: read(cardRulesPath(cardDir)) };
 }
 
 // ---------------- 预设 → 规矩文件（一次性转译） ----------------

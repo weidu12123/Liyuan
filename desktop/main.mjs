@@ -126,7 +126,7 @@ function seedDataRoot(dataRoot) {
 	const data = (rel) => path.join(dataRoot, rel);
 
 	// 覆盖同步（只是种子源；活件在 ~/.liyuan/agent 与 skills/，播过即用户持有）
-	for (const rel of ["assets/SYSTEM.md", "assets/APPEND_SYSTEM.md"]) {
+	for (const rel of ["assets/SYSTEM.md", "assets/APPEND_SYSTEM.md", "assets/AGENT_APPEND_SYSTEM.md"]) {
 		if (fs.existsSync(prod(rel))) copyFileIfChanged(prod(rel), data(rel));
 	}
 	if (fs.existsSync(prod("assets/skills"))) copyTree(prod("assets/skills"), data("assets/skills"));

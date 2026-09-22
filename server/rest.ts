@@ -134,6 +134,7 @@ import {
 	type PresetPatch,
 } from "../src/preset-doc.ts";
 import {
+	agentRulesPath,
 	cardRulesPath,
 	globalRulesPath,
 	readUserRules,
@@ -3511,6 +3512,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const rules = readUserRules(cardDir);
 				sendJson(res, 200, {
 					global: { content: rules.global, path: globalRulesPath() },
+					agent: { content: rules.agent, path: agentRulesPath() },
 					card: { content: rules.card, path: cardRulesPath(cardDir), cardName: config.displayName ?? basename(config.card).replace(/\.(png|json)$/i, "") },
 					system: { content: existsSync(systemPromptPath()) ? readFileSync(systemPromptPath(), "utf8") : "", path: systemPromptPath() },
 				});
@@ -3528,12 +3530,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				} else if (body.scope === "global") {
 					abs = globalRulesPath();
 					mkdirSync(rulesAgentDir(), { recursive: true });
+				} else if (body.scope === "agent") {
+					abs = agentRulesPath();
+					mkdirSync(rulesAgentDir(), { recursive: true });
 				} else if (body.scope === "card") {
 					const cardDir = dirname(resolvePath(host.cwd, config.card));
 					mkdirSync(cardDir, { recursive: true });
 					abs = cardRulesPath(cardDir);
 				} else {
-					throw new Error("scope 必须是 system、global 或 card");
+					throw new Error("scope 必须是 system、global、agent 或 card");
 				}
 				writeFileSync(abs, body.content, "utf8");
 				await host.softRefreshConfig();

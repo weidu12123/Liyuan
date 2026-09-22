@@ -582,9 +582,10 @@ export interface PresetBlocksResponse {
 	blocks: Array<PresetBlockView & { content?: string }>;
 }
 
-/** 用户提示词：SYSTEM.md（全局系统提示词）+ 两级 APPEND_SYSTEM.md（全局/这张卡） */
+/** 用户提示词：SYSTEM.md（全局系统提示词）+ 全局追加两份（扮演 APPEND_SYSTEM.md / agent 模式 AGENT_APPEND_SYSTEM.md）+ 这张卡的 APPEND_SYSTEM.md */
 export interface RulesResponse {
 	global: { content: string; path: string };
+	agent: { content: string; path: string };
 	card: { content: string; path: string; cardName: string };
 	system: { content: string; path: string };
 }

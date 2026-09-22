@@ -125,3 +125,16 @@ test("沙箱：正文/ 对原生写开放；历史/ 与 会话/ 拒绝；状态�
 		assert.match(ev.transcript, /001-初雪\.md\n\n第一章正文/);
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("agent system 槽位：全局追加读 AGENT_APPEND_SYSTEM.md 而非扮演的 APPEND_SYSTEM.md；空缺退随包默认值；卡级两份照旧", async () => {
+	const { agentSystemPrompt } = await import("../src/stage/agent.ts");
+	const base = { cwd: "/w", cardPath: "cards/x/card.png", storyDir: "/w/正文", macro: { charName: "冷鹰", userName: "怀瑾" } };
+	const sys = agentSystemPrompt({ ...base, userRules: { global: "扮演规矩：产出是剧情正文。", agent: "agent 规矩：正文落文件。", card: "这张卡的规矩。" }, cardAgents: "{{char}} 的档案" });
+	assert.ok(sys.includes("agent 规矩：正文落文件。"), "agent 槽在");
+	assert.ok(!sys.includes("扮演规矩"), "扮演的全局追加不进 agent 轮");
+	assert.ok(sys.includes("这张卡的规矩。") && sys.includes("冷鹰 的档案"), "卡级 APPEND_SYSTEM.md 与 AGENTS.md 照旧、宏求值");
+	assert.ok(sys.indexOf("agent 规矩") < sys.indexOf("这张卡的规矩。") && sys.indexOf("这张卡的规矩。") < sys.indexOf("冷鹰 的档案"), "顺序：全局追加 → 卡追加 → 卡档案");
+	const fallback = agentSystemPrompt({ ...base, userRules: { global: "扮演规矩", agent: "", card: "" } });
+	assert.ok(fallback.includes("## 正文是文件"), "agent 槽空缺退随包 AGENT_APPEND_SYSTEM.md");
+	assert.ok(!fallback.includes("扮演规矩"));
+});

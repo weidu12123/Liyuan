@@ -26,7 +26,7 @@ import {
 import { addHistoryStripTags, resetDisplayTagExtras } from "../postprocess.ts";
 import type { ProtocolDrop } from "../protocol-detect.ts";
 import { applyDeclarations, declarationPathFor, readDeclaration } from "../lorebook-declare.ts";
-import { cardRulesPath, globalRulesPath, readUserRules, type UserRules } from "../user-rules.ts";
+import { agentRulesPath, cardRulesPath, globalRulesPath, readUserRules, type UserRules } from "../user-rules.ts";
 import { renderForModel } from "../prompt-entries.ts";
 import { CARD_AGENTS_FILE } from "../card-agents.ts";
 import { stripMvuRuleEntries } from "../mvu.ts";
@@ -258,6 +258,7 @@ function inputStamp(cwd: string, config: RpConfig): string {
 	if (config.preset) parts.push(fileStamp(resolvePath(cwd, config.preset)));
 	// 用户规矩两级文件（刀2）：改完下一拍即生效，靠的就是这两个指纹
 	parts.push(fileStamp(globalRulesPath()));
+	parts.push(fileStamp(agentRulesPath()));
 	parts.push(fileStamp(cardRulesPath(dirname(resolvePath(cwd, config.card)))));
 	// 卡档案（刀3）：生成/编辑/删除下一拍即生效
 	parts.push(fileStamp(join(dirname(resolvePath(cwd, config.card)), CARD_AGENTS_FILE)));
@@ -446,7 +447,7 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		protocolDrops,
 		// 条目引擎只作用送模面：readUserRules 给原文（REST/编辑器往返要无损），
 		// 这里渲染成开启条目＋零注释的送模文本
-		userRules: ((r) => ({ global: renderForModel(r.global), card: renderForModel(r.card) }))(readUserRules(dirname(cardAbs))),
+		userRules: ((r) => ({ global: renderForModel(r.global), agent: renderForModel(r.agent), card: renderForModel(r.card) }))(readUserRules(dirname(cardAbs))),
 		cardAgents,
 		// 送模侧作者正则：预设 + 卡（与 cardfront 显示侧同源；promptOnly/破坏性规则）
 		promptRules: promptRules([...(presetDoc?.raw?.extensions?.regex_scripts ?? []), ...cardRegexScripts]),

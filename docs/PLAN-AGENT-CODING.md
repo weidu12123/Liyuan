@@ -99,8 +99,7 @@ agent 模式清单＝扮演的数据工具中**与树无关的**（世界书 / �
 
 一版 §5.4 声明的四条通道（system / 项目状态块 / 讨论历史 / 本轮回执）保持闭合，不加第五条。变的是：
 
-1. **system**：`assets/AGENT.md` 重写，只会变短——「稿子」一节从五个工具的说明改成一句事实：正文是 `正文/` 下按文件名排序的 `.md` 文件，用文件工具读写，保存与历史由梨园管理。其余（用户规矩、卡 `AGENTS.md`、两行事实）不动。
-2. **项目状态块**：前情提要、世界状态、登场名录不动；**稿子尾部换成稿子目录**——文件名、字数、最后一次改动时间，一行一个。正文不带；读不读归模型，与 Claude Code 不预读文件同形。`agentStoryTailChars` 删除。
+1. **system**：~~`assets/AGENT.md` 重写~~ → **2026-09-23 改正**：agent 模式的 system 与扮演同一套槽位，只换一格——`SYSTEM.md`（环境底座）→ 全局追加（扮演读 `APPEND_SYSTEM.md`，agent 读 `AGENT_APPEND_SYSTEM.md`，二选一）→ 卡 `APPEND_SYSTEM.md` → 卡 `AGENTS.md` → 三行事实。`assets/AGENT.md` 退场，其内容并入随包种子 `assets/AGENT_APPEND_SYSTEM.md`（缺失才播种、用户可改、空缺退随包）。**项目状态块**：前情提要、世界状态、登场名录不动；**稿子尾部换成稿子目录**——文件名、字数、最后一次改动时间，一行一个。正文不带；读不读归模型，与 Claude Code 不预读文件同形。`agentStoryTailChars` 删除。
 3. **讨论历史**：`authoringHistory` 认 pi 的 `compaction` 条目（现在不认——从 `getBranch()` 全量回放）。分支上有 `compaction` 时从它的 `firstKeptEntryId` 起回放，摘要作一条 user 消息置前。这样 pi 自带的阈值压缩（`packages/coding-agent/src/core/compaction`，按模型上下文窗口比例）在 agent 轮真正生效。梨园不写第二套讨论压缩。
 4. **本轮回执**：不变。
 
@@ -165,3 +164,11 @@ agent 模式清单＝扮演的数据工具中**与树无关的**（世界书 / �
 ## 十四、稿子视图的渲染与扮演同链（2026-09-22 晚，用户点名）
 
 一版的稿子视图只按空行切段，`*动作*`、Markdown、卡皮肤、内嵌 HTML 一概不渲染（一版 §七代价 3 的留白）。现在改为**同一条链**：服务端 `storyView` 对每个文件跑与气泡同一个 `prepareDisplayText`（MVU 挂载点 → 卡皮肤正则 → 整页 HTML 保护 → fold/strip），深度＝文件序列上倒数第几个（最后一个＝depth 0，作者「N 楼外删掉」类规则按此生效），前端 `StoryPane` 用 `RichContent` 渲染 `display`（HTML 帧、Markdown、RP 行内），编辑框仍用原文 `text`。不动角色卡，只让稿子读同一份皮肤。隔离实例用带状态栏皮肤的卡实测：开场白落成文件后，隐藏初始化块的规则生效、卡自己的状态栏与悬浮球都在。
+
+## 十五、全局追加槽分家（2026-09-23，用户点名的严重问题）
+
+用户亲测：agent 模式下模型不写文件，把 1628 字正文直接输出在讨论区。会话记录坐实原因：`agentSystemPrompt` 把**扮演模式的全局追加** `APPEND_SYSTEM.md`（「你担任角色扮演 agent……产出是剧情正文」「正文有专门的稿纸 draft_write……」）整份装进了 agent 轮，500 字的 `AGENT.md` 拗不过它；卡 `AGENTS.md` 里预设转译的「剧情部分 1600–2000 字」则定了那 1628 字。工具说明与通道核对过，不是主因。
+
+用户定案：架构不动，`AGENT.md` 是多余的——它的定位就是全局追加那一格。改法＝agent 轮里扮演的 `APPEND_SYSTEM.md` 退场，换成 agent 模式自己的 `<agentDir>/AGENT_APPEND_SYSTEM.md`（随包种子 `assets/AGENT_APPEND_SYSTEM.md`，与 `APPEND_SYSTEM.md` 同一播种规则；提示词面板全局页签可编辑；`materials` 指纹认它，改完下一轮生效）。`SYSTEM.md` 底座、卡 `APPEND_SYSTEM.md`、卡 `AGENTS.md` 在 agent 轮照旧。
+
+隔离实例（同一张卡、同一模型 gemini-3.8-flash-high、同样的「你好」→「1」）复测：第一轮读开场文件、纯讨论；第二轮 `write` 落 `000-开场.md`（原开场完整保留＋续写），讨论区只有改动摘要与下一步选项。

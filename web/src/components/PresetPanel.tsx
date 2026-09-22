@@ -1,7 +1,8 @@
 /**
  * 「提示词」面板（docs/PLAN-AGENT-SLOTS.md §七，2026-09-08 用户定名与分栏）：
  * - 全局系统提示词：SYSTEM.md（梨园扮演骨架，改后重启生效）+ APPEND_SYSTEM.md
- *   （全局，对所有卡生效——角色相当于原来的预设）
+ *   （全局，对所有卡生效——角色相当于原来的预设）+ AGENT_APPEND_SYSTEM.md（同一格的
+ *   agent 模式版：扮演轮读前者，agent 轮读后者，二选一）
  * - 局部提示词：这张卡的 AGENTS.md（卡档案）+ 这张卡的 APPEND_SYSTEM.md
  * - 预设库（2026-09-12 用户定序）：导入原样复现 →「装载」设为活动预设 → 块开关拨选项
  *   （人称/基调/文风就是块的 enabled）。**装载即转译、拨开关即转译**：服务端按开关编译、
@@ -396,7 +397,7 @@ export function PresetPanel({
 	const [showDiff, setShowDiff] = useState(false);
 
 	const saveRules = useCallback(
-		async (scope: "global" | "card", content: string) => {
+		async (scope: "global" | "agent" | "card", content: string) => {
 			const r = await apiPut<RulesSaveResponse>("/api/rules", { scope, content });
 			toast("info", `已保存（${r.chars.toLocaleString()} 字），下一拍生效`);
 		},
@@ -726,9 +727,15 @@ export function PresetPanel({
 								busy={busy}
 							/>
 							<EntriesEditor
-								title="APPEND_SYSTEM.md（全局）"
+								title="APPEND_SYSTEM.md（全局·扮演模式）"
 								initial={rules.data.global.content}
 								onSave={(c) => saveRules("global", c)}
+								busy={busy}
+							/>
+							<EntriesEditor
+								title="AGENT_APPEND_SYSTEM.md（全局·agent 模式）"
+								initial={rules.data.agent.content}
+								onSave={(c) => saveRules("agent", c)}
 								busy={busy}
 							/>
 						</>

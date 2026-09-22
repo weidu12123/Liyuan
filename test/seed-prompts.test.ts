@@ -15,6 +15,7 @@ const makeEnv = () => {
 	mkdirSync(join(root, "assets", "SYSTEM.md".slice(0, 0)), { recursive: true });
 	copyFileSync(join(repoRoot, "assets", "SYSTEM.md"), join(root, "assets", "SYSTEM.md"));
 	copyFileSync(join(repoRoot, "assets", "APPEND_SYSTEM.md"), join(root, "assets", "APPEND_SYSTEM.md"));
+	copyFileSync(join(repoRoot, "assets", "AGENT_APPEND_SYSTEM.md"), join(root, "assets", "AGENT_APPEND_SYSTEM.md"));
 	const agentDir = join(root, "agent");
 	return { root, agentDir };
 };
@@ -81,6 +82,21 @@ test("半迁移态：旧 SYSTEM.md + 用户已有 APPEND → 只换底座，APPE
 		const sys = readFileSync(join(agentDir, "SYSTEM.md"), "utf8");
 		assert.ok(sys.length < 300, "底座换新");
 		assert.equal(readFileSync(join(agentDir, "APPEND_SYSTEM.md"), "utf8"), "用户自定义的扮演方式。", "APPEND 是用户的，不塞旧底座");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("agent 模式追加槽：全新环境播种 AGENT_APPEND_SYSTEM.md；用户已有的不覆盖", () => {
+	const { root, agentDir } = makeEnv();
+	try {
+		seedStageSystemPrompt(root, agentDir);
+		const agent = readFileSync(join(agentDir, "AGENT_APPEND_SYSTEM.md"), "utf8");
+		assert.ok(agent.includes("## 正文是文件"), "agent 模式定义在 AGENT_APPEND_SYSTEM.md");
+		assert.ok(!agent.includes("draft_write"), "不含扮演的稿纸工具");
+		writeFileSync(join(agentDir, "AGENT_APPEND_SYSTEM.md"), "用户自己的 agent 规矩。", "utf8");
+		seedStageSystemPrompt(root, agentDir);
+		assert.equal(readFileSync(join(agentDir, "AGENT_APPEND_SYSTEM.md"), "utf8"), "用户自己的 agent 规矩。");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

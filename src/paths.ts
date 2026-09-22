@@ -355,6 +355,13 @@ export function seedStageSystemPrompt(cwd: string, agentDir: string): void {
 			copyFileSync(shipped("APPEND_SYSTEM.md"), appendTarget);
 			lastAgentMergeLog.push(`已播种扮演定义默认值 APPEND_SYSTEM.md → ${appendTarget}`);
 		}
+
+		// agent 模式的追加槽（与 APPEND_SYSTEM.md 平级二选一）：同一规则，缺失才播种
+		const agentAppendTarget = join(agentDir, "AGENT_APPEND_SYSTEM.md");
+		if (!existsSync(agentAppendTarget) && existsSync(shipped("AGENT_APPEND_SYSTEM.md"))) {
+			copyFileSync(shipped("AGENT_APPEND_SYSTEM.md"), agentAppendTarget);
+			lastAgentMergeLog.push(`已播种 agent 模式定义默认值 AGENT_APPEND_SYSTEM.md → ${agentAppendTarget}`);
+		}
 	} catch (err) {
 		console.error(`[liyuan] 播种提示词槽位失败：${err instanceof Error ? err.message : String(err)}`);
 	}

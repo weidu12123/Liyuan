@@ -1,7 +1,10 @@
 /**
- * agent 模式的轮（docs/PLAN-AGENT-CODING.md §六）：送模内容只有四条通道——system（本文件的身份底座＋用户规矩＋
- * 卡 AGENTS.md）、项目状态块（与扮演同一份数据，多带稿子目录，不带正文）、讨论历史（agentHistory 回放）、本轮工具回执。
- * 在此声明为闭合集合；任何「在 X 时机再塞一段」都不在这里发生。
+ * agent 模式的轮（docs/PLAN-AGENT-CODING.md §六）：送模内容只有四条通道——system、项目状态块（与扮演同一份数据，
+ * 多带稿子目录，不带正文）、讨论历史（agentHistory 回放）、本轮工具回执。在此声明为闭合集合；任何「在 X 时机再塞一段」
+ * 都不在这里发生。
+ *
+ * system 的槽位与扮演同构，只换一格：SYSTEM.md（环境底座，roleplay 扩展垫在最前）→ 全局追加（扮演读 APPEND_SYSTEM.md，
+ * agent 读 AGENT_APPEND_SYSTEM.md，二选一）→ 卡 APPEND_SYSTEM.md → 卡 AGENTS.md → 工作区事实。
  */
 import { readFileSync } from "node:fs";
 
@@ -12,15 +15,18 @@ import type { UserRules } from "../user-rules.ts";
 import { formatStoryIndex, type StoryFile } from "./story-history.ts";
 import type { StageTool } from "./tools.ts";
 
+/** 用户槽位空缺（删了或清空）时退回随包默认值——与 SYSTEM.md 缺席退随包骨架同一规则 */
+const shippedAgentRules = (): string => readFileSync(new URL("../../assets/AGENT_APPEND_SYSTEM.md", import.meta.url), "utf8");
+
 export function agentSystemPrompt(o: { cwd: string; cardPath: string; storyDir: string; userRules?: UserRules; cardAgents?: string; macro: MacroContext }): string {
-	const sections = [readFileSync(new URL("../../assets/AGENT.md", import.meta.url), "utf8").trim()];
-	for (const text of [o.userRules?.global, o.userRules?.card]) if (text?.trim()) sections.push(text.trim());
+	const sections = [(o.userRules?.agent?.trim() || shippedAgentRules()).trim()];
+	if (o.userRules?.card?.trim()) sections.push(o.userRules.card.trim());
 	if (o.cardAgents?.trim()) sections.push(applyMacros(o.cardAgents.trim(), o.macro));
 	sections.push(`工作目录：${o.cwd}\n当前角色卡：${o.cardPath}\n稿子目录：${o.storyDir}`);
 	return sections.join("\n\n");
 }
 
-/** 项目状态块：前情（最早）→ 账本 → 名录 → 稿子目录（紧邻用户这轮的话）。全是数据块，语义在 AGENT.md 一次说清。 */
+/** 项目状态块：前情（最早）→ 账本 → 名录 → 稿子目录（紧邻用户这轮的话）。全是数据块，语义在 AGENT_APPEND_SYSTEM.md 一次说清。 */
 export function buildAgentStateBlock(o: { state: WorldState; rosterIndex?: string; summary?: string; residentSummary?: string; files: StoryFile[] }): string {
 	const blocks: string[] = [];
 	const past = [o.summary, o.residentSummary].filter(Boolean);

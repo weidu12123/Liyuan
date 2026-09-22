@@ -80,18 +80,19 @@ test("用户规矩进 system：全局在前、卡级在后、原文直通无包�
 		card: { name: "冷鹰", description: "监察院使", personality: "", scenario: "", firstMes: "", mesExample: "", systemPrompt: "", postHistoryInstructions: "", creatorNotes: "", alternateGreetings: [], tags: [], book: [] },
 		config,
 		constantLore: [],
-		userRules: { global: "全局规矩第一句。", card: "这张卡的规矩。" },
+		userRules: { global: "全局规矩第一句。", agent: "agent 模式的规矩。", card: "这张卡的规矩。" },
 		tools: false,
 	});
 	assert.ok(sys.includes("全局规矩第一句。"));
 	assert.ok(sys.includes("这张卡的规矩。"));
 	assert.ok(sys.indexOf("全局规矩第一句。") < sys.indexOf("这张卡的规矩。"), "全局在前");
+	assert.ok(!sys.includes("agent 模式的规矩。"), "扮演轮不读 agent 模式的追加槽");
 	// 空规矩零痕迹（不加空段）
 	const sys2 = buildStageSystemPrompt({
 		card: { name: "冷鹰", description: "", personality: "", scenario: "", firstMes: "", mesExample: "", systemPrompt: "", postHistoryInstructions: "", creatorNotes: "", alternateGreetings: [], tags: [], book: [] },
 		config,
 		constantLore: [],
-		userRules: { global: "", card: "" },
+		userRules: { global: "", agent: "", card: "" },
 		tools: false,
 	});
 	assert.ok(!sys2.startsWith("\n"), "空规矩不产生空段");

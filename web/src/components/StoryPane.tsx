@@ -6,29 +6,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { WireCheckpoint, WireStoryFile } from "../wire.ts";
+import { RichContent, type SkinProp } from "./Messages.tsx";
 
-export type StoryFileView = WireStoryFile & { text: string };
+/** text＝原文（编辑框用）；display＝服务端按扮演同一条链上过皮肤的上屏正文 */
+export type StoryFileView = WireStoryFile & { text: string; display: string };
 export interface StoryDiffFile { kind: "added" | "modified" | "renamed" | "removed"; name: string; from?: string; hunks: Array<{ op: " " | "-" | "+"; text: string }> }
-
-const paragraphs = (text: string) =>
-	text.split(/\n[\t ]*\n/).map((p) => p.trim()).filter(Boolean);
-
-function Prose({ text }: { text: string }) {
-	return (
-		<>
-			{paragraphs(text).map((p, i) => (
-				<p key={i}>
-					{p.split("\n").map((line, j, arr) => (
-						<span key={j}>
-							{line}
-							{j < arr.length - 1 && <br />}
-						</span>
-					))}
-				</p>
-			))}
-		</>
-	);
-}
 
 function FileEditor({ file, busy, onSave, onCancel }: { file: StoryFileView; busy: boolean; onSave: (text: string) => Promise<void>; onCancel: () => void }) {
 	const [text, setText] = useState(file.text);
@@ -133,6 +115,7 @@ function HistoryList({ checkpoints, busy, loadDiff, onRestore }: {
 export function StoryPane({
 	files,
 	checkpoints,
+	skin,
 	focus,
 	busy,
 	onBack,
@@ -143,6 +126,8 @@ export function StoryPane({
 	/** null＝正文还在拉取 */
 	files: StoryFileView[] | null;
 	checkpoints: WireCheckpoint[];
+	/** 一档卡皮肤（与扮演气泡同一份）：display 已在服务端上过皮肤，这里只用于 RichContent 的宏与二次判定（同气泡） */
+	skin: SkinProp | null;
 	/** 讨论区检查点卡片点击：切到历史并展开它；或滚到某文件 */
 	focus: { file?: string; checkpointId?: string; tick: number } | null;
 	/** 生成中：编辑/恢复不可用 */
@@ -227,7 +212,8 @@ export function StoryPane({
 									/>
 								) : (
 									<>
-										<Prose text={f.text} />
+										{/* 与扮演气泡同一条渲染链：服务端 prepareDisplayText（皮肤/MVU/整页保护）→ 前端 HTML 帧 → Markdown/RP 行内 */}
+										<RichContent text={f.display} skin={skin} />
 										<div className="story-chapter-acts">
 											<button type="button" className="story-act" disabled={busy || editing !== null} onClick={() => setEditing(f.name)}>
 												编辑

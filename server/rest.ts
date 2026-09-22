@@ -310,7 +310,7 @@ export interface RestHost {
 	/** 世界线时间线视图（会话树 rp-save + 旁路 meta） */
 	worldlineView(): import("../src/worldline.ts").WorldlineView;
 	/** agent 模式的稿子：正文/ 文件与全文（非 agent 子项目为空） */
-	storyView(): { files: Array<WireStoryFile & { text: string }> };
+	storyView(): { files: Array<WireStoryFile & { text: string; display: string }> };
 	/** 某检查点相对前一条的逐文件差 */
 	storyDiff(checkpointId: string): { files: FileDiff[] };
 	/** 用户直接改稿：写文件（text 为 null＝删除）并立即落检查点（来源 user） */

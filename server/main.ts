@@ -42,6 +42,7 @@ import {
 import { findModelEntry, loadAgentConfig, normalizeAgentConfig, syncAgentConfigToRuntime } from "../src/agent-config.ts";
 import { loadCardFile, readCardRawJson, updateCardFields } from "../src/card.ts";
 import { applyMacros } from "../src/card-macros.ts";
+import { prepareDisplayText } from "../src/postprocess.ts";
 import { findInitVar, findSchemaDefaults, seedMvuIfNeeded } from "../src/mvu.ts";
 import { authorScriptManifest, extractAuthorScripts } from "../src/authorScripts.ts";
 import { buildGreeting } from "../src/greeting.ts";
@@ -1778,7 +1779,15 @@ const restHost: RestHost = {
 		const outline = storyOutline();
 		if (!chatDir || !outline) return { files: [] };
 		const dir = storyDirectory(chatDir);
-		return { files: outline.files.map((f) => { let text = ""; try { text = readFileSync(join(dir, f.name), "utf8"); } catch { /* 读不到：正文空，目录仍在 */ } return { ...f, text }; }) };
+		// 上屏正文与扮演气泡同一条链（prepareDisplayText：MVU 挂载点 → 卡皮肤正则 → 整页 HTML 保护 → fold/strip）；
+		// 深度＝文件序列上倒数第几个（最后一个＝0），作者「N 楼外删掉」类规则按此生效。text 是原文，给编辑框。
+		const skin = currentDisplaySkin();
+		const n = outline.files.length;
+		return { files: outline.files.map((f, i) => {
+			let text = "";
+			try { text = readFileSync(join(dir, f.name), "utf8"); } catch { /* 读不到：正文空，目录仍在 */ }
+			return { ...f, text, display: prepareDisplayText(text, skinAtDepth(skin, n - 1 - i)) };
+		}) };
 	},
 	storyDiff(checkpointId) {
 		const chatDir = agentChatDir();

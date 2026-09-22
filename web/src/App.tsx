@@ -2125,6 +2125,7 @@ export default function App() {
 							<StoryPane
 								files={storyFiles}
 								checkpoints={storyCheckpoints}
+								skin={cardSkin}
 								focus={storyFocus}
 								busy={busy}
 								onBack={() => setStoryTab("chat")}

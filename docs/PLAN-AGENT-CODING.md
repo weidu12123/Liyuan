@@ -161,3 +161,7 @@ agent 模式清单＝扮演的数据工具中**与树无关的**（世界书 / �
 
 - **开场白**：卡的 `first_mes` / 备选开场白在 agent 模式仍是素材，但**新建 agent 项目的弹窗里可选一条落成稿子第一个文件 `000-开场.md`**（宏已求值，检查点来源 `user`，`new` 帧带 `greeting` 序号；「不落」＝空稿子）。这是用户把素材放进稿子的动作，不是注入。「重 roll」在这里的形态＝多个候选文件（让模型写 `000a/b/c.md`，删掉不要的，历史里随时捡回），不做变体导航。
 - **改稿回显**：原生 `edit` / `write` 的调用在过程条里展开成行级红绿 diff（`WireActivity.change`，`src/activity-format.ts` 的 `fileChangeOf`；持久化在 `rpTimeline` 里，刷新后仍在）。机制本身就是 pi 的 `edit`（`oldText → newText`，唯一匹配），与 Claude Code 的 Edit 同一协议；这一条只补显示。
+
+## 十四、稿子视图的渲染与扮演同链（2026-09-22 晚，用户点名）
+
+一版的稿子视图只按空行切段，`*动作*`、Markdown、卡皮肤、内嵌 HTML 一概不渲染（一版 §七代价 3 的留白）。现在改为**同一条链**：服务端 `storyView` 对每个文件跑与气泡同一个 `prepareDisplayText`（MVU 挂载点 → 卡皮肤正则 → 整页 HTML 保护 → fold/strip），深度＝文件序列上倒数第几个（最后一个＝depth 0，作者「N 楼外删掉」类规则按此生效），前端 `StoryPane` 用 `RichContent` 渲染 `display`（HTML 帧、Markdown、RP 行内），编辑框仍用原文 `text`。不动角色卡，只让稿子读同一份皮肤。隔离实例用带状态栏皮肤的卡实测：开场白落成文件后，隐藏初始化块的规则生效、卡自己的状态栏与悬浮球都在。

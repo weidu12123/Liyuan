@@ -1,14 +1,14 @@
 /**
- * agent 模式的稿子视图（docs/PLAN-AGENT-MODE.md §5.6）：中间是稿子，右栏是讨论。
- * 数据＝当前分支的章投影（hello 带目录、GET /api/story 带正文）；按章直接编辑走服务端同一条修订落点
- * （POST /api/story/edit，来源 user）；「回退到此章之后」＝树导航（story_rewind 帧）；写入中的章按流式预览
- * 挂在末尾（story_preview 帧，替换语义）。
+ * agent 模式的稿子视图（docs/PLAN-AGENT-CODING.md §八）：中间是稿子，右栏是讨论。
+ * 稿子＝正文/ 目录下的文件（hello 带目录、GET /api/story 带正文）；用户直接改稿＝写文件并立即落检查点
+ * （POST /api/story/edit）；「历史」页签＝检查点列表＋逐文件 diff，两式恢复（只文件 / 文件和对话）。
  */
 import { useEffect, useRef, useState } from "react";
 
-import type { WireStoryChapter } from "../wire.ts";
+import type { WireCheckpoint, WireStoryFile } from "../wire.ts";
 
-export type StoryChapterView = WireStoryChapter & { text: string };
+export type StoryFileView = WireStoryFile & { text: string };
+export interface StoryDiffFile { kind: "added" | "modified" | "renamed" | "removed"; name: string; from?: string; hunks: Array<{ op: " " | "-" | "+"; text: string }> }
 
 const paragraphs = (text: string) =>
 	text.split(/\n[\t ]*\n/).map((p) => p.trim()).filter(Boolean);
@@ -30,12 +30,12 @@ function Prose({ text }: { text: string }) {
 	);
 }
 
-function ChapterEditor({ chapter, busy, onSave, onCancel }: { chapter: StoryChapterView; busy: boolean; onSave: (text: string) => Promise<void>; onCancel: () => void }) {
-	const [text, setText] = useState(chapter.text);
+function FileEditor({ file, busy, onSave, onCancel }: { file: StoryFileView; busy: boolean; onSave: (text: string) => Promise<void>; onCancel: () => void }) {
+	const [text, setText] = useState(file.text);
 	const [saving, setSaving] = useState(false);
 	const ref = useRef<HTMLTextAreaElement>(null);
 	useEffect(() => { ref.current?.focus(); }, []);
-	const dirty = text !== chapter.text;
+	const dirty = text !== file.text;
 	return (
 		<div className="story-editor">
 			<textarea ref={ref} className="story-editor-text" value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} />
@@ -51,60 +51,132 @@ function ChapterEditor({ chapter, busy, onSave, onCancel }: { chapter: StoryChap
 						try { await onSave(text); } finally { setSaving(false); }
 					}}
 				>
-					保存为 v{chapter.version + 1}
+					保存
 				</button>
 			</div>
 		</div>
 	);
 }
 
+const fmtTime = (ms: number) => {
+	const d = new Date(ms);
+	const p = (n: number) => String(n).padStart(2, "0");
+	return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+const changeSummary = (c: WireCheckpoint["changed"]): string => {
+	const parts: string[] = [];
+	if (c.added.length) parts.push(`新增 ${c.added.length}`);
+	if (c.modified.length) parts.push(`修改 ${c.modified.length}`);
+	if (c.renamed.length) parts.push(`改名 ${c.renamed.length}`);
+	if (c.removed.length) parts.push(`删除 ${c.removed.length}`);
+	return parts.join(" · ") || "无改动";
+};
+
+function HistoryList({ checkpoints, busy, loadDiff, onRestore }: {
+	checkpoints: WireCheckpoint[];
+	busy: boolean;
+	loadDiff: (id: string) => Promise<StoryDiffFile[]>;
+	onRestore: (cp: WireCheckpoint, scope: "files" | "both") => void;
+}) {
+	const [openId, setOpenId] = useState<string | null>(null);
+	const [diff, setDiff] = useState<{ id: string; files: StoryDiffFile[] } | null>(null);
+	useEffect(() => {
+		if (!openId) return;
+		let live = true;
+		void loadDiff(openId).then((files) => { if (live) setDiff({ id: openId, files }); }).catch(() => { if (live) setDiff({ id: openId, files: [] }); });
+		return () => { live = false; };
+	}, [openId, loadDiff]);
+	if (!checkpoints.length) return <div className="story-empty">还没有检查点。每一轮改过稿子，梨园就保存一次。</div>;
+	const latest = checkpoints[checkpoints.length - 1]!;
+	return (
+		<ol className="story-history">
+			{[...checkpoints].reverse().map((cp) => (
+				<li key={cp.id} className={`story-cp ${cp.author === "user" ? "story-cp-user" : ""} ${openId === cp.id ? "story-cp-open" : ""}`}>
+					<button type="button" className="story-cp-head" onClick={() => setOpenId(openId === cp.id ? null : cp.id)}>
+						<span className="story-cp-time">{fmtTime(cp.ts)}</span>
+						<span className="story-cp-author">{cp.author === "user" ? "你" : "agent"}</span>
+						<span className="story-cp-msg">{cp.message}</span>
+						<span className="story-cp-sum">{changeSummary(cp.changed)}</span>
+					</button>
+					{openId === cp.id && (
+						<div className="story-cp-body">
+							{diff?.id !== cp.id ? <div className="story-cp-loading">读取中…</div> : diff.files.length === 0 ? <div className="story-cp-loading">无文件改动</div> : diff.files.map((f) => (
+								<details key={f.name} className={`story-diff story-diff-${f.kind}`} open={f.kind !== "removed"}>
+									<summary>
+										<span className="story-diff-kind">{{ added: "新增", modified: "修改", renamed: "改名", removed: "删除" }[f.kind]}</span>
+										{f.from ? `${f.from} → ${f.name}` : f.name}
+									</summary>
+									{f.hunks.length > 0 && (
+										<pre className="story-diff-pre">
+											{f.hunks.filter((h) => f.kind === "modified" ? true : h.op !== " ").map((h, i) => (
+												<span key={i} className={`story-diff-line story-diff-${h.op === "+" ? "add" : h.op === "-" ? "del" : "ctx"}`}>{h.op} {h.text}{"\n"}</span>
+											))}
+										</pre>
+									)}
+								</details>
+							))}
+							<div className="story-cp-acts">
+								<button type="button" className="story-act" disabled={busy || cp.id === latest.id} title="正文/ 回到这次改动之后的样子；讨论不动" onClick={() => onRestore(cp, "files")}>只恢复文件</button>
+								{cp.turnId && (
+									<button type="button" className="story-act" disabled={busy} title="文件回到这轮输入之前，讨论也截到那句输入之前" onClick={() => onRestore(cp, "both")}>文件和对话一起回到这轮之前</button>
+								)}
+							</div>
+						</div>
+					)}
+				</li>
+			))}
+		</ol>
+	);
+}
+
 export function StoryPane({
-	chapters,
-	preview,
+	files,
+	checkpoints,
 	focus,
 	busy,
 	onBack,
 	onEdit,
-	onRewind,
+	loadDiff,
+	onRestore,
 }: {
 	/** null＝正文还在拉取 */
-	chapters: StoryChapterView[] | null;
-	/** 写入中的章（story_append 参数流式预览） */
-	preview: { text: string; title?: string } | null;
-	/** 讨论区章卡片点击：滚到该章 */
-	focus: { chapterId: string; tick: number } | null;
-	/** 生成中：编辑/回退按钮不可用 */
+	files: StoryFileView[] | null;
+	checkpoints: WireCheckpoint[];
+	/** 讨论区检查点卡片点击：切到历史并展开它；或滚到某文件 */
+	focus: { file?: string; checkpointId?: string; tick: number } | null;
+	/** 生成中：编辑/恢复不可用 */
 	busy: boolean;
 	/** 手机页签：回到讨论 */
 	onBack: () => void;
-	/** 用户按章直接编辑（全文替换成新版本）；抛错＝失败提示 */
-	onEdit: (chapter: StoryChapterView, text: string) => Promise<void>;
-	/** 回退到写入该章的那一轮之后 */
-	onRewind: (chapter: StoryChapterView) => void;
+	/** 用户直接改稿（写文件并落检查点）；抛错＝失败提示 */
+	onEdit: (file: StoryFileView, text: string) => Promise<void>;
+	loadDiff: (id: string) => Promise<StoryDiffFile[]>;
+	onRestore: (cp: WireCheckpoint, scope: "files" | "both") => void;
 }) {
 	const seen = useRef<Set<string>>(new Set());
 	const [editing, setEditing] = useState<string | null>(null);
+	const [tab, setTab] = useState<"text" | "history">("text");
+	const fileId = (name: string) => `story-f-${encodeURIComponent(name)}`;
 	const scrollTo = (id: string, smooth = true) => {
 		document.getElementById(id)?.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
 	};
 	useEffect(() => {
-		if (focus) scrollTo(`story-ch-${focus.chapterId}`);
+		if (!focus) return;
+		if (focus.checkpointId) setTab("history");
+		else if (focus.file) { setTab("text"); requestAnimationFrame(() => scrollTo(fileId(focus.file!))); }
 	}, [focus]);
-	// 新写入的章：自动滚到它（回退/分叉后的章目录变短不滚）
+	// 新出现的文件：自动滚到它（恢复后目录变短不滚）
 	useEffect(() => {
-		if (!chapters) return;
-		const fresh = chapters.filter((c) => !seen.current.has(c.chapterId));
-		seen.current = new Set(chapters.map((c) => c.chapterId));
+		if (!files) return;
+		const fresh = files.filter((f) => !seen.current.has(f.name));
+		seen.current = new Set(files.map((f) => f.name));
 		const last = fresh.at(-1);
-		if (last && fresh.length < chapters.length) requestAnimationFrame(() => scrollTo(`story-ch-${last.chapterId}`));
-		if (editing && !chapters.some((c) => c.chapterId === editing)) setEditing(null);
-	}, [chapters, editing]);
-	// 流式预览：跟着末尾走
-	useEffect(() => {
-		if (preview?.text) requestAnimationFrame(() => scrollTo("story-ch-preview", false));
-	}, [preview?.text.length]);
+		if (last && fresh.length < files.length && tab === "text") requestAnimationFrame(() => scrollTo(fileId(last.name)));
+		if (editing && !files.some((f) => f.name === editing)) setEditing(null);
+	}, [files, editing, tab]);
 
-	const total = chapters?.reduce((n, c) => n + c.chars, 0) ?? 0;
+	const total = files?.reduce((n, f) => n + f.chars, 0) ?? 0;
 	return (
 		<div className="story-pane-inner">
 			<div className="story-head">
@@ -112,72 +184,62 @@ export function StoryPane({
 					讨论
 				</button>
 				<span className="story-title">稿子</span>
-				<span className="story-meta">{chapters ? `${chapters.length} 章 · ${total} 字` : "读取中…"}</span>
+				<span className="story-meta">{files ? `${files.length} 个文件 · ${total} 字` : "读取中…"}</span>
+				<span className="story-tabs" role="tablist">
+					<button type="button" role="tab" aria-selected={tab === "text"} className={`story-tab ${tab === "text" ? "story-tab-on" : ""}`} onClick={() => setTab("text")}>正文</button>
+					<button type="button" role="tab" aria-selected={tab === "history"} className={`story-tab ${tab === "history" ? "story-tab-on" : ""}`} onClick={() => setTab("history")}>历史{checkpoints.length ? ` ${checkpoints.length}` : ""}</button>
+				</span>
 			</div>
-			{chapters && chapters.length > 0 && (
-				<nav className="story-outline" aria-label="章目录">
-					{chapters.map((c) => (
-						<button key={c.chapterId} type="button" className="story-outline-item" onClick={() => scrollTo(`story-ch-${c.chapterId}`)} title={c.title}>
-							<span className="story-outline-index">{c.index}</span>
-							<span className="story-outline-title">{c.title || `第 ${c.index} 章`}</span>
-						</button>
-					))}
-				</nav>
-			)}
-			<div className="story-body">
-				{chapters && chapters.length === 0 && !preview?.text && (
-					<div className="story-empty">稿子还是空的。在右边讨论，agent 会把定稿写进来。</div>
-				)}
-				{chapters?.map((c, i) => (
-					<article key={`${c.chapterId}:${c.version}`} id={`story-ch-${c.chapterId}`} className="story-chapter">
-						<h2 className="story-chapter-head">
-							<span className="story-chapter-no">第 {c.index} 章</span>
-							{c.title && <span className="story-chapter-title">{c.title}</span>}
-							{c.version > 1 && <span className="story-chapter-ver" title={`第 ${c.version} 版`}>v{c.version}</span>}
-							<span className="story-chapter-chars">{c.chars} 字</span>
-						</h2>
-						{editing === c.chapterId ? (
-							<ChapterEditor
-								chapter={c}
-								busy={busy}
-								onSave={async (text) => { await onEdit(c, text); setEditing(null); }}
-								onCancel={() => setEditing(null)}
-							/>
-						) : (
-							<>
-								<Prose text={c.text} />
-								<div className="story-chapter-acts">
-									<button type="button" className="story-act" disabled={busy || editing !== null} onClick={() => setEditing(c.chapterId)}>
-										编辑
-									</button>
-									{i < chapters.length - 1 && (
-										<button
-											type="button"
-											className="story-act"
-											disabled={busy || editing !== null}
-											title="之后的章退出当前分支（文件与会话树都还在）；从这里继续写＝分叉"
-											onClick={() => onRewind(c)}
-										>
-											回退到此章之后
-										</button>
-									)}
-								</div>
-							</>
+			{tab === "history" ? (
+				<div className="story-body">
+					<HistoryList checkpoints={checkpoints} busy={busy} loadDiff={loadDiff} onRestore={onRestore} />
+				</div>
+			) : (
+				<>
+					{files && files.length > 0 && (
+						<nav className="story-outline" aria-label="目录">
+							{files.map((f, i) => (
+								<button key={f.name} type="button" className="story-outline-item" onClick={() => scrollTo(fileId(f.name))} title={f.name}>
+									<span className="story-outline-index">{i + 1}</span>
+									<span className="story-outline-title">{f.title}</span>
+								</button>
+							))}
+						</nav>
+					)}
+					<div className="story-body">
+						{files && files.length === 0 && (
+							<div className="story-empty">稿子还是空的。在右边讨论，agent 会把定稿写成文件放进来。</div>
 						)}
-					</article>
-				))}
-				{preview?.text && (
-					<article id="story-ch-preview" className="story-chapter story-chapter-preview" aria-live="polite">
-						<h2 className="story-chapter-head">
-							<span className="story-chapter-no">第 {(chapters?.length ?? 0) + 1} 章</span>
-							{preview.title && <span className="story-chapter-title">{preview.title}</span>}
-							<span className="story-chapter-ver">写入中</span>
-							<span className="story-chapter-chars">{preview.text.length} 字</span>
-						</h2>
-						<Prose text={preview.text} />
-					</article>
-				)}
-			</div>
+						{files?.map((f, i) => (
+							<article key={f.name} id={fileId(f.name)} className="story-chapter">
+								<h2 className="story-chapter-head">
+									<span className="story-chapter-no">{i + 1}</span>
+									<span className="story-chapter-title">{f.title}</span>
+									<span className="story-chapter-file" title={f.name}>{f.name}</span>
+									<span className="story-chapter-chars">{f.chars} 字</span>
+								</h2>
+								{editing === f.name ? (
+									<FileEditor
+										file={f}
+										busy={busy}
+										onSave={async (text) => { await onEdit(f, text); setEditing(null); }}
+										onCancel={() => setEditing(null)}
+									/>
+								) : (
+									<>
+										<Prose text={f.text} />
+										<div className="story-chapter-acts">
+											<button type="button" className="story-act" disabled={busy || editing !== null} onClick={() => setEditing(f.name)}>
+												编辑
+											</button>
+										</div>
+									</>
+								)}
+							</article>
+						))}
+					</div>
+				</>
+			)}
 		</div>
 	);
 }

@@ -109,7 +109,7 @@ import { AboutPanel } from "./components/AboutPanel.tsx";
 import { SessionStatsBar, StatusStrip } from "./components/StatusStrip.tsx";
 import { UploadsPanel } from "./components/UploadsPanel.tsx";
 import { StoreModal, WorldlinePanel } from "./components/WorldlinePanel.tsx";
-import { StoryPane, type StoryChapterView } from "./components/StoryPane.tsx";
+import { StoryPane, type StoryDiffFile, type StoryFileView } from "./components/StoryPane.tsx";
 import { useWire, type ConnState } from "./ws.ts";
 import type {
 	AuthorScript,
@@ -120,7 +120,8 @@ import type {
 	WireChatInfo,
 	WireSessionInfo,
 	WireStats,
-	WireStoryChapter,
+	WireStoryFile,
+	WireCheckpoint,
 	UpdateWire,
 	WorldState,
 } from "./wire.ts";
@@ -263,15 +264,14 @@ export default function App() {
 	const modeRef = useRef<ConversationMode>("roleplay");
 	const [streamMode, setStreamMode] = useState<ConversationMode>("roleplay");
 	const streamModeRef = useRef<ConversationMode>("roleplay");
-	/** agent 模式：当前分支章目录（hello 同帧）；正文按目录指纹变化才拉 GET /api/story */
-	const [storyOutline, setStoryOutline] = useState<WireStoryChapter[] | null>(null);
-	const [storyChapters, setStoryChapters] = useState<StoryChapterView[] | null>(null);
+	/** agent 模式：稿子目录与检查点（hello 同帧）；正文按目录指纹变化才拉 GET /api/story */
+	const [storyOutline, setStoryOutline] = useState<WireStoryFile[] | null>(null);
+	const [storyCheckpoints, setStoryCheckpoints] = useState<WireCheckpoint[]>([]);
+	const [storyFiles, setStoryFiles] = useState<StoryFileView[] | null>(null);
 	/** 手机：稿子与讨论是两个页签 */
 	const [storyTab, setStoryTab] = useState<"story" | "chat">("chat");
-	/** 讨论区章卡片点击 → 稿子视图滚到该章 */
-	const [storyFocus, setStoryFocus] = useState<{ chapterId: string; tick: number } | null>(null);
-	/** story_append 正文的流式预览（服务端 story_preview 帧，替换语义） */
-	const [storyPreview, setStoryPreview] = useState<{ text: string; title?: string } | null>(null);
+	/** 讨论区检查点卡片点击 → 稿子视图历史里展开它 */
+	const [storyFocus, setStoryFocus] = useState<{ file?: string; checkpointId?: string; tick: number } | null>(null);
 	const [toolNote, setToolNote] = useState<string | null>(null);
 	/** 本轮过程步骤（实时清单渲染用；与 turnActsRef 同内容） */
 	const [liveActs, setLiveActs] = useState<WireActivity[]>([]);
@@ -528,19 +528,24 @@ export default function App() {
 	}, []);
 
 	/**
-	 * agent 模式的稿子：hello 只带章目录，正文按「目录指纹」变化才拉一次 GET /api/story（gzip）。
-	 * 指纹＝chapterId:version 序列——写章/修订/回退/分叉都会改它；纯讨论一轮不变，零请求。
+	 * agent 模式的稿子：hello 只带目录，正文按「目录指纹」变化才拉一次 GET /api/story（gzip）。
+	 * 指纹＝文件名:字数:mtime 序列——写/改/改名/恢复都会改它；纯讨论一轮不变，零请求。
 	 */
-	const storyKey = storyOutline ? storyOutline.map((c) => `${c.chapterId}:${c.version}`).join("|") : null;
+	const storyKey = storyOutline ? storyOutline.map((f) => `${f.name}:${f.chars}:${f.mtime}`).join("|") : null;
 	useEffect(() => {
-		if (storyKey === null) { setStoryChapters(null); return; }
-		if (storyKey === "") { setStoryChapters([]); return; }
+		if (storyKey === null) { setStoryFiles(null); return; }
+		if (storyKey === "") { setStoryFiles([]); return; }
 		let live = true;
-		void apiGet<{ chapters: StoryChapterView[] }>("/api/story", { bypassCache: true })
-			.then((r) => { if (live) setStoryChapters(r.chapters); })
+		void apiGet<{ files: StoryFileView[] }>("/api/story", { bypassCache: true })
+			.then((r) => { if (live) setStoryFiles(r.files); })
 			.catch((e) => { if (live) pushToast("warning", `读取稿子失败：${e instanceof Error ? e.message : String(e)}`); });
 		return () => { live = false; };
 	}, [storyKey, pushToast]);
+
+	const loadStoryDiff = useCallback(
+		(id: string) => apiGet<{ files: StoryDiffFile[] }>(`/api/story/diff?checkpoint=${encodeURIComponent(id)}`, { bypassCache: true }).then((r) => r.files),
+		[],
+	);
 
 	const doTts = useCallback(
 		async (text: string) => {
@@ -765,8 +770,8 @@ export default function App() {
 					setConversationMode(modeRef.current);
 					streamModeRef.current = frame.turnMode ?? modeRef.current;
 					setStreamMode(streamModeRef.current);
-					setStoryOutline(modeRef.current === "agent" ? frame.story?.chapters ?? [] : null);
-					setStoryPreview(null);
+					setStoryOutline(modeRef.current === "agent" ? frame.story?.files ?? [] : null);
+					setStoryCheckpoints(modeRef.current === "agent" ? frame.story?.checkpoints ?? [] : []);
 					setCharName(frame.charName);
 					setUserName(frame.userName);
 					// wire timeline → 本地 segments：持久化的时间线在刷新后仍按时序渲染
@@ -880,9 +885,6 @@ export default function App() {
 					} else {
 						setMessages((ms) => [...ms, frame.message]);
 					}
-					break;
-				case "story_preview":
-					setStoryPreview(frame.text ? { text: frame.text, ...(frame.title ? { title: frame.title } : {}) } : null);
 					break;
 				case "delta":
 					if (abortingRef.current) break;
@@ -2121,21 +2123,25 @@ export default function App() {
 					{agentSplit && (
 						<aside className={`story-pane ${storyTab === "story" ? "story-pane-active" : ""}`} aria-label="稿子">
 							<StoryPane
-								chapters={storyChapters}
-								preview={storyPreview}
+								files={storyFiles}
+								checkpoints={storyCheckpoints}
 								focus={storyFocus}
 								busy={busy}
 								onBack={() => setStoryTab("chat")}
-								onEdit={async (c, text) => {
+								onEdit={async (f, text) => {
 									try {
-										await apiPost("/api/story/edit", { chapterId: c.chapterId, version: c.version, text });
+										await apiPost("/api/story/edit", { name: f.name, text });
 									} catch (e) {
 										pushToast("error", `保存失败：${e instanceof Error ? e.message : String(e)}`);
 										throw e;
 									}
 								}}
-								onRewind={(c) => {
-									if (window.confirm(`回退到第 ${c.index} 章之后？之后的章会退出当前分支（文件与会话树都还在）。`)) ws.send({ type: "story_rewind", chapterId: c.chapterId });
+								loadDiff={loadStoryDiff}
+								onRestore={(cp, scope) => {
+									const q = scope === "both"
+										? `文件和对话一起回到「${cp.message}」这轮输入之前？之后的讨论会从当前会话里截掉。`
+										: `把稿子恢复到「${cp.message}」之后的样子？讨论不变，恢复本身也会记成一条检查点。`;
+									if (window.confirm(q)) ws.send({ type: "story_restore", checkpointId: cp.id, scope });
 								}}
 							/>
 						</aside>
@@ -2206,7 +2212,7 @@ export default function App() {
 												fallbackName={b.msg.channel === "user" ? userName || "你" : charName}
 												avatarUrl={b.msg.channel === "user" ? userAvatarUrl : charAvatarUrl}
 												skin={cardSkin}
-												onChapter={agentSplit || conversationMode === "agent" ? (chapterId) => { setStoryFocus({ chapterId, tick: Date.now() }); setStoryTab("story"); } : undefined}
+												onChapter={agentSplit || conversationMode === "agent" ? (checkpointId) => { setStoryFocus({ checkpointId, tick: Date.now() }); setStoryTab("story"); } : undefined}
 												onReroll={
 													!busy &&
 													!msgEdit &&

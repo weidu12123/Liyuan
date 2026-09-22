@@ -649,8 +649,8 @@ export interface BubbleProps {
 	edit?: BubbleEditState;
 	/** 一档卡皮肤（显示层；缺省 null=与旧行为一致） */
 	skin?: SkinProp | null;
-	/** agent 模式：章卡片点击 → 稿子视图定位到该章 */
-	onChapter?: (chapterId: string) => void;
+	/** agent 模式：检查点卡片点击 → 稿子视图的历史里展开它 */
+	onChapter?: (checkpointId: string) => void;
 }
 
 export function Bubble({
@@ -676,12 +676,17 @@ export function Bubble({
 		return <div className="info-line">{msg.text}</div>;
 	}
 	if (msg.channel === "chapter") {
-		// agent 模式：章写入/修订留痕成一张内联卡片（不用弹窗），点击定位到稿子里的那一章
-		const c = msg.chapter;
+		// agent 模式：一轮的稿子改动（检查点）留痕成一张内联卡片（不用弹窗），点击到稿子视图的历史里看 diff
+		const c = msg.checkpoint;
+		const ch = c?.changed;
+		const parts = ch ? [
+			...ch.added.map((n) => `新增 ${n}`), ...ch.modified.map((n) => `修改 ${n}`),
+			...ch.renamed.map(([a, b]) => `改名 ${a}→${b}`), ...ch.removed.map((n) => `删除 ${n}`),
+		] : [];
 		return (
-			<button type="button" className={`chapter-card ${c?.kind === "edit" ? "chapter-card-edit" : ""}`} onClick={() => c && onChapter?.(c.chapterId)} disabled={!onChapter}>
-				<span className="chapter-card-kind">{c?.kind === "edit" ? "修订" : "写入"}</span>
-				<span className="chapter-card-text">{msg.text}</span>
+			<button type="button" className={`chapter-card ${c?.author === "user" ? "chapter-card-edit" : ""}`} onClick={() => c && onChapter?.(c.id)} disabled={!onChapter}>
+				<span className="chapter-card-kind">{c?.restoredFrom ? "恢复" : c?.author === "user" ? "手改" : "改稿"}</span>
+				<span className="chapter-card-text">{parts.join("、") || msg.text}</span>
 			</button>
 		);
 	}

@@ -3289,12 +3289,13 @@ wss.on("connection", (ws, req) => {
 						const fileTarget = both ? all[idx - 1] : target;
 						let cp: Checkpoint | undefined;
 						if (fileTarget) cp = history.restore(fileTarget.id) ?? undefined;
-						else if (both) {
+						else {
 							// 第一条检查点之前＝空稿子
 							for (const f of listStoryFiles(storyDirectory(chatDir))) rmSync(join(storyDirectory(chatDir), f.name));
-							cp = history.commit({ author: "user", message: "恢复到最初（空稿子）", restoredFrom: target.id });
 						}
-						if (cp && !both) {
+						// both 且文件本来就一样：仍落一条空改动的检查点——树上要有它，pi 重载时叶子才停在截断处（叶子＝文件里最后一条）
+						if (!cp && both) cp = history.commit({ author: "user", message: `回到「${target.message}」之前`, restoredFrom: target.id, force: true });
+						if (cp) {
 							const { files: _files, ...lite } = cp;
 							session.sessionManager.appendCustomEntry(STORY_CHECKPOINT_TYPE, lite);
 							session.sessionManager.flush();

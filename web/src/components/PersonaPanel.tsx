@@ -16,6 +16,7 @@ import {
 import { IconPlus, IconTrash } from "./icons.tsx";
 import { AvatarCropModal } from "./AvatarCropModal.tsx";
 import { ConfirmButton, Field, PanelStatus, Toggle, useAction, usePanelData } from "./kit.tsx";
+import { t } from "../i18n/index.ts";
 
 function PersonaAvatar({
 	p,
@@ -89,38 +90,38 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			setNewName("");
 			setCreating(false);
 			reload();
-		}, "已创建并切换");
+		}, t("已创建并切换"));
 
 	const remove = (p: PersonaInfo) =>
 		run(async () => {
 			await apiDelete(`/api/personas?id=${encodeURIComponent(p.id)}`);
 			reload();
-		}, `已删除：${p.name}`);
+		}, t("已删除：{name}", { name: p.name }));
 
 	const saveActive = () =>
 		run(async () => {
 			if (!active) return;
 			await apiPut("/api/personas", { id: active.id, name: name.trim(), persona });
 			reload();
-		}, "已保存");
+		}, t("已保存"));
 
 	const setLock = (locked: boolean) =>
 		run(async () => {
 			if (!active) return;
 			await apiPost("/api/personas/select", { id: active.id, lockToCard: locked });
 			reload();
-		}, locked ? "已锁定到当前角色卡" : "已解除锁定");
+		}, locked ? t("已锁定到当前角色卡") : t("已解除锁定"));
 
 	const saveDisplayName = () =>
 		run(async () => {
 			await apiPut("/api/config", { displayName: displayName.trim() });
 			config.reload();
-		}, "已保存并重载会话");
+		}, t("已保存并重载会话"));
 
 	const onPickFile = (file: File | undefined) => {
 		if (!file) return;
 		if (!/^image\/(png|jpeg|jpg|webp|gif)$/i.test(file.type) && !/\.(png|jpe?g|webp|gif)$/i.test(file.name)) {
-			toast("error", "请选择图片文件（PNG / JPG / WebP）");
+			toast("error", t("请选择图片文件（PNG / JPG / WebP）"));
 			return;
 		}
 		setCropFile(file);
@@ -136,11 +137,11 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 				body: blob,
 			});
 			const data = (await res.json().catch(() => ({}))) as { error?: string };
-			if (!res.ok || data.error) throw new Error(data.error || `上传失败（HTTP ${res.status}）`);
+			if (!res.ok || data.error) throw new Error(data.error || t("上传失败（HTTP {status}）", { status: res.status }));
 			setCropFile(null);
 			setAvatarBust(Date.now());
 			reload();
-			toast("info", "头像已更新");
+			toast("info", t("头像已更新"));
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
 		} finally {
@@ -154,7 +155,7 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			await apiDelete(`/api/personas/avatar?id=${encodeURIComponent(active.id)}`);
 			setAvatarBust(Date.now());
 			reload();
-		}, "已清除头像");
+		}, t("已清除头像"));
 
 	return (
 		<div className="panel-body">
@@ -180,9 +181,9 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			{data && (
 				<>
 					<section className="sp-section">
-						<h4>我的身份（{data.personas.length}）</h4>
+						<h4>{t("我的身份（{n}）", { n: data.personas.length })}</h4>
 						<div className="field-hint">
-							你以谁的身份在玩（剧情中的 {"{{user}}"}）。点选即切换；可设置头像（导入图片并裁剪）。
+							{t("你以谁的身份在玩（剧情中的 {{user}}）。点选即切换；可设置头像（导入图片并裁剪）。")}
 						</div>
 						<div className="persona-list">
 							{data.personas.map((p) => (
@@ -192,14 +193,14 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 										<span className="persona-info">
 											<span className="persona-name">
 												{p.name}
-												{p.id === data.current && <span className="chip">默认</span>}
-												{p.id === data.lockedForCard && <span className="chip chip-constant">本卡锁定</span>}
+												{p.id === data.current && <span className="chip">{t("默认")}</span>}
+												{p.id === data.lockedForCard && <span className="chip chip-constant">{t("本卡锁定")}</span>}
 											</span>
 											{p.persona && <span className="session-preview">{p.persona.slice(0, 50)}</span>}
 										</span>
 									</button>
 									{data.personas.length > 1 && (
-										<ConfirmButton disabled={busy} title={`删除「${p.name}」`} aria-label="删除身份" confirmText="确认删除" onConfirm={() => remove(p)}>
+										<ConfirmButton disabled={busy} title={t("删除「{name}」", { name: p.name })} aria-label={t("删除身份")} confirmText={t("确认删除")} onConfirm={() => remove(p)}>
 											<IconTrash size={13} />
 										</ConfirmButton>
 									)}
@@ -208,13 +209,13 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 						</div>
 						{!creating ? (
 							<button className="drawer-btn" onClick={() => setCreating(true)}>
-								<IconPlus size={13} /> 新建身份
+								<IconPlus size={13} /> {t("新建身份")}
 							</button>
 						) : (
 							<div className="panel-row">
 								<input
 									className="panel-search"
-									placeholder="名字…"
+									placeholder={t("名字…")}
 									value={newName}
 									autoFocus
 									onChange={(e) => setNewName(e.target.value)}
@@ -224,7 +225,7 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 									}}
 								/>
 								<button className="drawer-btn" disabled={busy || !newName.trim()} onClick={() => void create()}>
-									创建
+									{t("创建")}
 								</button>
 							</div>
 						)}
@@ -232,22 +233,22 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 
 					{active && (
 						<section className="sp-section">
-							<h4>当前身份</h4>
+							<h4>{t("当前身份")}</h4>
 							<div className="persona-avatar-edit">
 								<PersonaAvatar p={{ ...active, name }} bust={avatarBust} size="lg" />
 								<div className="persona-avatar-acts">
 									<button type="button" className="drawer-btn" disabled={busy || uploading} onClick={() => fileRef.current?.click()}>
-										{active.avatar ? "更换头像" : "导入头像"}
+										{active.avatar ? t("更换头像") : t("导入头像")}
 									</button>
 									{active.avatar && (
 										<button type="button" className="drawer-btn" disabled={busy || uploading} onClick={() => void clearAvatar()}>
-											清除头像
+											{t("清除头像")}
 										</button>
 									)}
-									<div className="field-hint">从相册选图 → 拖动/缩放裁剪 → 保存为圆形头像</div>
+									<div className="field-hint">{t("从相册选图 → 拖动/缩放裁剪 → 保存为圆形头像")}</div>
 								</div>
 							</div>
-							<Field label="名字" hint="即剧情中的 {{user}}，场记与提示词都用它">
+							<Field label={t("名字")} hint={t("即剧情中的 {{user}}，场记与提示词都用它")}>
 								<input
 									className="panel-search"
 									value={name}
@@ -257,7 +258,7 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 									}}
 								/>
 							</Field>
-							<Field label="人设（可选）" hint="身份、外貌、背景……会进入角色卡的设定区">
+							<Field label={t("人设（可选）")} hint={t("身份、外貌、背景……会进入角色卡的设定区")}>
 								<textarea
 									className="panel-search ta"
 									rows={5}
@@ -269,22 +270,22 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 								/>
 							</Field>
 							<button className="drawer-btn" disabled={busy || !dirty || !name.trim()} onClick={saveActive}>
-								{dirty ? "保存并重载会话" : "已保存"}
+								{dirty ? t("保存并重载会话") : t("已保存")}
 							</button>
 							<div className="toggle-row">
-								<span>锁定到当前角色卡</span>
+								<span>{t("锁定到当前角色卡")}</span>
 								<Toggle checked={data.lockedForCard === active.id} disabled={busy} onChange={(v) => setLock(v)} />
 							</div>
-							<div className="field-hint">锁定后，切到这张卡时自动使用该身份（其他卡仍用全局默认）。</div>
+							<div className="field-hint">{t("锁定后，切到这张卡时自动使用该身份（其他卡仍用全局默认）。")}</div>
 						</section>
 					)}
 
 					<section className="sp-section">
-						<h4>对方显示名覆盖</h4>
-						<Field label="显示名（可选）" hint="仅界面显示；适用于卡名是剧本标题而非角色名的场景卡">
+						<h4>{t("对方显示名覆盖")}</h4>
+						<Field label={t("显示名（可选）")} hint={t("仅界面显示；适用于卡名是剧本标题而非角色名的场景卡")}>
 							<input
 								className="panel-search"
-								placeholder="留空使用卡名"
+								placeholder={t("留空使用卡名")}
 								value={displayName}
 								onChange={(e) => {
 									setDisplayName(e.target.value);
@@ -293,7 +294,7 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 							/>
 						</Field>
 						<button className="drawer-btn" disabled={busy || !displayDirty} onClick={saveDisplayName}>
-							{displayDirty ? "保存并重载会话" : "已保存"}
+							{displayDirty ? t("保存并重载会话") : t("已保存")}
 						</button>
 					</section>
 				</>

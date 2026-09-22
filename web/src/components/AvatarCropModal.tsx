@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IconClose } from "./icons.tsx";
+import { t } from "../i18n/index.ts";
 
 const VIEW = 280; // 预览视口边长
 const OUT = 256; // 导出边长
@@ -140,11 +141,11 @@ export function AvatarCropModal({
 	return (
 		<div className="avatar-crop-modal" role="dialog" aria-modal="true" aria-labelledby="avatar-crop-title">
 			<div className="avatar-crop-dialog">
-				<button type="button" className="icon-btn card-lore-x" title="取消" aria-label="关闭" onClick={onCancel} disabled={busy}>
+				<button type="button" className="icon-btn card-lore-x" title={t("取消")} aria-label={t("关闭")} onClick={onCancel} disabled={busy}>
 					<IconClose size={18} />
 				</button>
-				<h3 id="avatar-crop-title">裁剪头像</h3>
-				<p className="field-hint">拖动调整位置，滑块缩放；圆内区域将保存为头像（参考 SillyTavern）。</p>
+				<h3 id="avatar-crop-title">{t("裁剪头像")}</h3>
+				<p className="field-hint">{t("拖动调整位置，滑块缩放；圆内区域将保存为头像（参考 SillyTavern）。")}</p>
 				<div className="avatar-crop-stage">
 					<canvas
 						ref={canvasRef}
@@ -156,7 +157,7 @@ export function AvatarCropModal({
 					/>
 				</div>
 				<label className="avatar-crop-zoom">
-					<span>缩放</span>
+					<span>{t("缩放")}</span>
 					<input
 						type="range"
 						min={minScale}
@@ -169,10 +170,10 @@ export function AvatarCropModal({
 				</label>
 				<div className="panel-row card-lore-actions">
 					<button type="button" className="drawer-btn save-btn" disabled={!ready || busy} onClick={exportBlob}>
-						{busy ? "上传中…" : "用作头像"}
+						{busy ? t("上传中…") : t("用作头像")}
 					</button>
 					<button type="button" className="drawer-btn" disabled={busy} onClick={onCancel}>
-						取消
+						{t("取消")}
 					</button>
 				</div>
 			</div>

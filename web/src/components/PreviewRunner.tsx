@@ -8,6 +8,7 @@ import type { CardProjectPreview } from "../../../src/card-authoring-types.ts";
 import { apiPost } from "../api.ts";
 import { buildCardAuthoringPreview, CARD_PREVIEW_SANDBOX, cardPreviewUrl } from "../cardAuthoringPreview.ts";
 import "./CardAuthoring.css";
+import { t } from "../i18n/index.ts";
 
 export interface CardPreviewRequestFrame {
 	id: string;
@@ -86,12 +87,12 @@ export function PreviewRunner({ request, onClose }: { request: CardPreviewReques
 		<div className="card-preview-runner">
 			<div className="card-preview-runner-head">
 				<span>
-					Agent 预览 · {state === "running" ? "运行中" : state === "reported" ? "已回报" : "回报失败"}
-					{errors ? ` · ${errors} 个错误` : ""}
+					{t("Agent 预览 · {state}", { state: state === "running" ? t("运行中") : state === "reported" ? t("已回报") : t("回报失败") })}
+					{errors ? t(" · {n} 个错误", { n: errors }) : ""}
 				</span>
-				<button type="button" className="act" onClick={onClose}>关闭</button>
+				<button type="button" className="act" onClick={onClose}>{t("关闭")}</button>
 			</div>
-			<iframe key={request.id} ref={frame} title="Agent 预览" sandbox={CARD_PREVIEW_SANDBOX} src={url} />
+			<iframe key={request.id} ref={frame} title={t("Agent 预览")} sandbox={CARD_PREVIEW_SANDBOX} src={url} />
 			<PreviewEventList events={events} />
 		</div>
 	);

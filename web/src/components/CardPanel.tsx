@@ -17,6 +17,7 @@ import {
 import { IconBack, IconClose, IconGrid, IconList, IconStar, IconUploads } from "./icons.tsx";
 import { bumpWatchPanels, ConfirmButton, Field, PanelStatus, SearchInput, useAction, usePanelData } from "./kit.tsx";
 import { CardAuthoring } from "./CardAuthoring.tsx";
+import { t } from "../i18n/index.ts";
 
 type CardSort = "recent" | "name" | "fav";
 type CardView = "grid" | "list";
@@ -83,9 +84,9 @@ function EditableSection({
 					setDraft("");
 					setEditing(true);
 				}}
-				title={`填写${title}`}
+				title={t("填写{title}", { title })}
 			>
-				＋ {title}
+				{t("＋ {title}", { title })}
 			</button>
 		);
 	}
@@ -93,7 +94,7 @@ function EditableSection({
 		<details className="legacy-group" open={open || editing}>
 			<summary>
 				{title}
-				{text ? `（${text.length} 字）` : "（空）"}
+				{text ? t("（{n} 字）", { n: text.length }) : t("（空）")}
 			</summary>
 			{editing ? (
 				<div className="skill-edit">
@@ -106,10 +107,10 @@ function EditableSection({
 								setEditing(false);
 							}}
 						>
-							保存
+							{t("保存")}
 						</button>
 						<button className="drawer-btn" onClick={() => setEditing(false)}>
-							取消
+							{t("取消")}
 						</button>
 					</div>
 				</div>
@@ -124,7 +125,7 @@ function EditableSection({
 								setEditing(true);
 							}}
 						>
-							编辑
+							{t("编辑")}
 						</button>
 					)}
 				</>
@@ -165,7 +166,7 @@ function GreetingCard({
 		if (!editing) setDraft(text);
 	}, [text, editing]);
 
-	const preview = text.trim() || "（空）";
+	const preview = text.trim() || t("（空）");
 	const lines = preview.split("\n");
 	const previewBlock = lines.slice(0, 3).join("\n") + (lines.length > 3 || preview.length > 180 ? "…" : "");
 	const canUp = index > 0;
@@ -174,18 +175,18 @@ function GreetingCard({
 	return (
 		<div className={`greeting-card ${selected ? "current" : ""} ${open ? "open" : ""}`}>
 			<div className="greeting-card-head">
-				<button type="button" className="greeting-pick" disabled={busy} onClick={onSelect} title="选为新会话开场白">
+				<button type="button" className="greeting-pick" disabled={busy} onClick={onSelect} title={t("选为新会话开场白")}>
 					<span className={`radio ${selected ? "on" : ""}`} />
 					<span className="greeting-label">{label}</span>
-					{selected && <span className="chip chip-cap">选用</span>}
+					{selected && <span className="chip chip-cap">{t("选用")}</span>}
 				</button>
 				<span className="greeting-card-acts">
 					<button
 						type="button"
 						className="act"
 						disabled={busy || !canUp}
-						title="上移"
-						aria-label="上移开场白"
+						title={t("上移")}
+						aria-label={t("上移开场白")}
 						onClick={() => onMove(-1)}
 					>
 						↑
@@ -194,8 +195,8 @@ function GreetingCard({
 						type="button"
 						className="act"
 						disabled={busy || !canDown}
-						title="下移"
-						aria-label="下移开场白"
+						title={t("下移")}
+						aria-label={t("下移开场白")}
 						onClick={() => onMove(1)}
 					>
 						↓
@@ -209,7 +210,7 @@ function GreetingCard({
 							setEditing(false);
 						}}
 					>
-						{open ? "收起" : "展开"}
+						{open ? t("收起") : t("展开")}
 					</button>
 					<button
 						type="button"
@@ -221,23 +222,23 @@ function GreetingCard({
 							setDraft(text);
 						}}
 					>
-						编辑
+						{t("编辑")}
 					</button>
 					{canDelete && (
-						<ConfirmButton className="act" disabled={busy} confirmText="确认删除" onConfirm={onDelete}>
-							删除
+						<ConfirmButton className="act" disabled={busy} confirmText={t("确认删除")} onConfirm={onDelete}>
+							{t("删除")}
 						</ConfirmButton>
 					)}
 				</span>
 			</div>
 			{!open && (
-				<pre className="greeting-preview" onClick={() => setOpen(true)} title="点击展开">
+				<pre className="greeting-preview" onClick={() => setOpen(true)} title={t("点击展开")}>
 					{previewBlock}
 				</pre>
 			)}
 			{open && !editing && (
 				<div className="greeting-body">
-					<pre className="greeting-full">{text || "（空）"}</pre>
+					<pre className="greeting-full">{text || t("（空）")}</pre>
 				</div>
 			)}
 			{open && editing && (
@@ -259,7 +260,7 @@ function GreetingCard({
 								setEditing(false);
 							}}
 						>
-							保存
+							{t("保存")}
 						</button>
 						<button
 							type="button"
@@ -270,7 +271,7 @@ function GreetingCard({
 								setEditing(false);
 							}}
 						>
-							取消
+							{t("取消")}
 						</button>
 					</div>
 				</div>
@@ -338,13 +339,13 @@ function CardDetail({
 			await apiPut<{ ok: boolean; enabled: boolean }>("/api/cardfront", { enabled });
 			setFront((f) => (f ? { ...f, enabled } : f));
 			onFrontChange?.();
-		}, enabled ? "已开启原卡界面美化" : "已关闭原卡界面美化");
+		}, enabled ? t("已开启原卡界面美化") : t("已关闭原卡界面美化"));
 
 	const saveField = (patch: Record<string, string>) =>
 		run(async () => {
 			await apiPut("/api/card", patch);
 			reload();
-		}, "已保存并重载会话");
+		}, t("已保存并重载会话"));
 
 	/** 导出当前卡（默认并入活跃世界书：挂载书+补充设定+原内嵌） */
 	const doExport = (format: "json" | "png") => {
@@ -357,7 +358,7 @@ function CardDetail({
 		document.body.appendChild(a);
 		a.click();
 		a.remove();
-		toast("info", format === "png" ? "正在导出 PNG 角色卡…" : "正在导出 JSON 角色卡…");
+		toast("info", format === "png" ? t("正在导出 PNG 角色卡…") : t("正在导出 JSON 角色卡…"));
 	};
 
 	const pickGreeting = (index: number) =>
@@ -365,25 +366,25 @@ function CardDetail({
 			// apply: 未开聊时即时替换对话开场白；已开聊则只记配置
 			await apiPost("/api/greeting", { index, apply: true });
 			reload();
-		}, "开场白已更新");
+		}, t("开场白已更新"));
 
 	const saveGreeting = (index: number, text: string) =>
 		run(async () => {
 			await apiPut("/api/card/greetings", { index, text });
 			reload();
-		}, "开场白已保存");
+		}, t("开场白已保存"));
 
 	const addGreeting = () =>
 		run(async () => {
 			await apiPost("/api/card/greetings", { text: "" });
 			reload();
-		}, "已新建开场白");
+		}, t("已新建开场白"));
 
 	const deleteGreeting = (index: number) =>
 		run(async () => {
 			await apiDelete(`/api/card/greetings?index=${index}`);
 			reload();
-		}, "已删除开场白");
+		}, t("已删除开场白"));
 
 	const moveGreeting = (index: number, delta: -1 | 1) =>
 		run(async () => {
@@ -394,7 +395,7 @@ function CardDetail({
 	return (
 		<div className="card-detail-scroll">
 			<button type="button" className="act back-btn" onClick={onBack}>
-				<IconBack size={14} /> 返回卡库
+				<IconBack size={14} /> {t("返回卡库")}
 			</button>
 			<PanelStatus loading={loading} error={error} hasData={!!data} />
 			{data && (
@@ -406,7 +407,7 @@ function CardDetail({
 							)}
 							<div className="card-hero-info">
 								<div className="model-current">{data.name}</div>
-								{data.displayName && <div className="field-hint">显示名：{data.displayName}</div>}
+								{data.displayName && <div className="field-hint">{t("显示名：{name}", { name: data.displayName })}</div>}
 								<div className="field-hint">{data.path}</div>
 								{data.tags.length > 0 && (
 									<div className="tag-row">
@@ -422,14 +423,14 @@ function CardDetail({
 						<div className="panel-row card-actions-row" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
 							<div className="card-export-group" style={{ display: "inline-flex", gap: 6 }}>
 								<button type="button" className="drawer-btn" disabled={busy} onClick={() => doExport("json")}>
-									导出 JSON
+									{t("导出 JSON")}
 								</button>
 								<button type="button" className="drawer-btn" disabled={busy} onClick={() => doExport("png")}>
-									导出 PNG
+									{t("导出 PNG")}
 								</button>
 							</div>
-							<button type="button" className="drawer-btn card-delete-btn" disabled={busy} onClick={onDelete} title="删除角色卡">
-								删除
+							<button type="button" className="drawer-btn card-delete-btn" disabled={busy} onClick={onDelete} title={t("删除角色卡")}>
+								{t("删除")}
 							</button>
 						</div>
 						{front?.hasSkin && (
@@ -440,34 +441,34 @@ function CardDetail({
 									disabled={busy}
 									onChange={(e) => void toggleFront(e.target.checked)}
 								/>
-								原卡界面美化（卡作者的状态栏/界面样式）
+								{t("原卡界面美化（卡作者的状态栏/界面样式）")}
 							</label>
 						)}
 						<div className="field-hint">
-							导出含当前卡字段 + 活跃世界书（挂载书、本卡补充设定、原内嵌书合并去重）。PNG 保留立绘；纯 JSON 卡导出 PNG 时用占位图。
+							{t("导出含当前卡字段 + 活跃世界书（挂载书、本卡补充设定、原内嵌书合并去重）。PNG 保留立绘；纯 JSON 卡导出 PNG 时用占位图。")}
 						</div>
-						<EditableSection title="简介" text={data.description} editable={fieldEditable} onSave={(v) => saveField({ description: v })} />
-						<EditableSection title="性格" text={data.personality} editable={fieldEditable} onSave={(v) => saveField({ personality: v })} />
-						<EditableSection title="场景" text={data.scenario} editable={fieldEditable} onSave={(v) => saveField({ scenario: v })} />
-						<EditableSection title="作者注" text={data.creatorNotes} editable={fieldEditable} onSave={(v) => saveField({ creatorNotes: v })} />
+						<EditableSection title={t("简介")} text={data.description} editable={fieldEditable} onSave={(v) => saveField({ description: v })} />
+						<EditableSection title={t("性格")} text={data.personality} editable={fieldEditable} onSave={(v) => saveField({ personality: v })} />
+						<EditableSection title={t("场景")} text={data.scenario} editable={fieldEditable} onSave={(v) => saveField({ scenario: v })} />
+						<EditableSection title={t("作者注")} text={data.creatorNotes} editable={fieldEditable} onSave={(v) => saveField({ creatorNotes: v })} />
 					</section>
 
 					<CardAuthoring key={data.path} card={data.path} onApplied={() => { reload(); onFrontChange?.(); }} />
 					<section className="sp-section">
 						<div className="greeting-sec-head">
-							<h4>开场白（{data.greetings.length}）</h4>
+							<h4>{t("开场白（{n}）", { n: data.greetings.length })}</h4>
 							<button type="button" className="drawer-btn" disabled={busy} onClick={() => void addGreeting()}>
-								＋ 新建开场白
+								{t("＋ 新建开场白")}
 							</button>
 						</div>
 						<div className="field-hint">
-							点左侧圆点选用：若当前会话还没开聊会立刻换掉对话里的开场白；已开聊则记入下次新会话。↑↓ 调整顺序；可展开编辑。
+							{t("点左侧圆点选用：若当前会话还没开聊会立刻换掉对话里的开场白；已开聊则记入下次新会话。↑↓ 调整顺序；可展开编辑。")}
 						</div>
 						{data.greetings.map((g) => (
 							<GreetingCard
 								key={`${g.index}-${g.text.slice(0, 24)}`}
 								index={g.index}
-								label={g.index === 0 ? "默认开场白" : `备选 ${g.index}`}
+								label={g.index === 0 ? t("默认开场白") : t("备选 {n}", { n: g.index })}
 								text={g.text}
 								selected={data.greetingIndex === g.index}
 								busy={busy}
@@ -510,7 +511,7 @@ function CardItem({
 			<button
 				className="card-pick"
 				disabled={busy}
-				title={current ? "当前使用中（点击进详情）" : `切换到「${c.name}」并打开详情`}
+				title={current ? t("当前使用中（点击进详情）") : t("切换到「{name}」并打开详情", { name: c.name })}
 				onClick={() => onPick(c)}
 			>
 				{c.isPng || c.hasCover ? (
@@ -533,8 +534,8 @@ function CardItem({
 			</button>
 			<button
 				className={`card-fav ${c.fav ? "on" : ""}`}
-				title={c.fav ? "取消收藏" : "收藏（排序可选「收藏」查看）"}
-				aria-label={c.fav ? "取消收藏" : "收藏"}
+				title={c.fav ? t("取消收藏") : t("收藏（排序可选「收藏」查看）")}
+				aria-label={c.fav ? t("取消收藏") : t("收藏")}
 				onClick={() => onFav(c)}
 			>
 				<IconStar size={14} filled={c.fav} />
@@ -544,8 +545,8 @@ function CardItem({
 					type="button"
 					className="card-fav card-del"
 					disabled={busy}
-					title="删除这张卡…"
-					aria-label={`删除角色卡「${c.name}」`}
+					title={t("删除这张卡…")}
+					aria-label={t("删除角色卡「{name}」", { name: c.name })}
 					onClick={() => onDelete(c)}
 				>
 					<IconClose size={13} />
@@ -729,7 +730,7 @@ export function CardPanel({
 					/* ignore */
 				}
 			}
-		}, mountCurrent ? "配套世界书已导入并加入挂载" : "配套世界书已导入（未挂载）");
+		}, mountCurrent ? t("配套世界书已导入并加入挂载") : t("配套世界书已导入（未挂载）"));
 
 	// ST 交互：点卡即切换并进对话；同卡再点也进对话（不重复 switch）
 	const pick = (c: CardLibItem) => {
@@ -794,7 +795,7 @@ export function CardPanel({
 			}
 			lib.reload();
 			bumpWatchPanels();
-		}, `已删除「${deletePrompt?.name ?? ""}」${delData ? "" : "（数据保留，重新导入可续玩）"}`);
+		}, delData ? t("已删除「{name}」", { name: deletePrompt?.name ?? "" }) : t("已删除「{name}」（数据保留，重新导入可续玩）", { name: deletePrompt?.name ?? "" }));
 
 	/**
 	 * 新建一张空白角色卡（8/29）：与「导入卡」并列的另一条入口——用户自己创作，不必先有酒馆卡。
@@ -806,8 +807,8 @@ export function CardPanel({
 		run(async () => {
 			const name = newCardName.trim();
 			const firstMes = newFirstMes.trim();
-			if (!name) throw new Error("请先填卡名");
-			if (!firstMes) throw new Error("请写开场白——新会话的首条消息");
+			if (!name) throw new Error(t("请先填卡名"));
+			if (!firstMes) throw new Error(t("请写开场白——新会话的首条消息"));
 			await apiPost<{ name: string; path: string }>("/api/cards", {
 				name,
 				firstMes,
@@ -829,7 +830,7 @@ export function CardPanel({
 			for (const f of Array.from(files)) {
 				try {
 					const r = await importCard(f);
-					toast("info", `已导入「${r.name}」`);
+					toast("info", t("已导入「{name}」", { name: r.name }));
 					if ((r.embeddedLoreCount ?? 0) > 0) {
 						markLorePending(r.path);
 						withLore.push({
@@ -844,7 +845,7 @@ export function CardPanel({
 						embeddedLoreCount: r.embeddedLoreCount ?? 0,
 					};
 				} catch (e) {
-					toast("error", `「${f.name}」导入失败：${e instanceof Error ? e.message : String(e)}`);
+					toast("error", t("「{name}」导入失败：{err}", { name: f.name, err: e instanceof Error ? e.message : String(e) }));
 				}
 			}
 			lib.reload();
@@ -889,25 +890,25 @@ export function CardPanel({
 					<button
 						type="button"
 						className="icon-btn card-lore-x"
-						title="关闭"
-						aria-label="关闭"
+						title={t("关闭")}
+						aria-label={t("关闭")}
 						onClick={skipLoreImport}
 					>
 						<IconClose size={18} />
 					</button>
-					<h3 id="card-lore-title">配套世界书</h3>
+					<h3 id="card-lore-title">{t("配套世界书")}</h3>
 					{items.length === 1 ? (
 						<p>
-							角色卡「{items[0].cardName}」打包了配套世界书 <strong>{items[0].entryCount}</strong> 条。
+							{t("角色卡「{name}」打包了配套世界书 {n} 条。", { name: items[0].cardName, n: items[0].entryCount })}
 							<br />
-							世界书导入后可在世界书面板管理，也可随时挂载到对话。
+							{t("世界书导入后可在世界书面板管理，也可随时挂载到对话。")}
 						</p>
 					) : (
 						<p>
-							本次导入有 <strong>{items.length}</strong> 张角色卡包含配套世界书（共 <strong>{totalEntries}</strong> 条）：
+							{t("本次导入有 {cards} 张角色卡包含配套世界书（共 {entries} 条）：", { cards: items.length, entries: totalEntries })}
 							<br />
 							<span style={{ fontSize: "12.5px", color: "var(--text-soft)" }}>
-								{items.map((it) => `「${it.cardName}」（${it.entryCount} 条）`).join("、")}
+								{items.map((it) => t("「{name}」（{n} 条）", { name: it.cardName, n: it.entryCount })).join(t("、"))}
 							</span>
 						</p>
 					)}
@@ -918,7 +919,7 @@ export function CardPanel({
 							checked={importLore}
 							onChange={(e) => setImportLore(e.target.checked)}
 						/>
-						<span>导入配套世界书{items.length > 1 ? `（${items.length} 本，共 ${totalEntries} 条）` : ""}</span>
+						<span>{items.length > 1 ? t("导入配套世界书（{books} 本，共 {entries} 条）", { books: items.length, entries: totalEntries }) : t("导入配套世界书")}</span>
 					</label>
 
 					<div className="panel-row card-lore-actions">
@@ -931,8 +932,8 @@ export function CardPanel({
 									onClick={() => void confirmLoreImport(true)}
 								>
 									{items.length > 1
-										? `全部导入，并挂载「${currentItem.cardName}」`
-										: "导入并挂载"}
+										? t("全部导入，并挂载「{name}」", { name: currentItem.cardName })
+										: t("导入并挂载")}
 								</button>
 								<button
 									type="button"
@@ -940,7 +941,7 @@ export function CardPanel({
 									disabled={busy}
 									onClick={() => void confirmLoreImport(false)}
 								>
-									导入但暂不挂载
+									{t("导入但暂不挂载")}
 								</button>
 							</>
 						) : (
@@ -950,7 +951,7 @@ export function CardPanel({
 								disabled={busy}
 								onClick={skipLoreImport}
 							>
-								不导入世界书
+								{t("不导入世界书")}
 							</button>
 						)}
 					</div>
@@ -962,29 +963,28 @@ export function CardPanel({
 	const deleteModal = deletePrompt && (
 		<div className="card-lore-modal" role="dialog" aria-modal="true" aria-labelledby="card-del-title">
 			<div className="card-lore-dialog">
-				<button type="button" className="icon-btn card-lore-x" title="取消" aria-label="关闭" onClick={() => setDeletePrompt(null)}>
+				<button type="button" className="icon-btn card-lore-x" title={t("取消")} aria-label={t("关闭")} onClick={() => setDeletePrompt(null)}>
 					<IconClose size={18} />
 				</button>
-				<h3 id="card-del-title">删除角色卡「{deletePrompt.name}」？</h3>
+				<h3 id="card-del-title">{t("删除角色卡「{name}」？", { name: deletePrompt.name })}</h3>
 				<p>
-					卡片文件将从卡库移除
-					{deletePrompt.path === effectiveCurrent ? "；这是当前对话中的卡，删除后将回到主页" : ""}。
+					{deletePrompt.path === effectiveCurrent ? t("卡片文件将从卡库移除；这是当前对话中的卡，删除后将回到主页。") : t("卡片文件将从卡库移除。")}
 				</p>
 				<label className="card-del-opt">
 					<input type="checkbox" checked={delLore} onChange={(e) => setDelLore(e.target.checked)} />
-					同时删除配套世界书（以这张卡命名导入的书）
+					{t("同时删除配套世界书（以这张卡命名导入的书）")}
 				</label>
 				<label className="card-del-opt">
 					<input type="checkbox" checked={delData} onChange={(e) => setDelData(e.target.checked)} />
-					同时删除相关数据（该卡全部会话记录与补充设定）
+					{t("同时删除相关数据（该卡全部会话记录与补充设定）")}
 				</label>
-				<p className="field-hint">不勾「相关数据」时数据保留在本机：日后重新导入同一张卡，会话与设定无缝衔接。</p>
+				<p className="field-hint">{t("不勾「相关数据」时数据保留在本机：日后重新导入同一张卡，会话与设定无缝衔接。")}</p>
 				<div className="panel-row card-lore-actions">
 					<button type="button" className="drawer-btn save-btn" disabled={busy} onClick={() => void confirmDelete()}>
-						删除
+						{t("删除")}
 					</button>
 					<button type="button" className="drawer-btn" disabled={busy} onClick={() => setDeletePrompt(null)}>
-						取消
+						{t("取消")}
 					</button>
 				</div>
 			</div>
@@ -1015,7 +1015,7 @@ export function CardPanel({
 									onEnterChat?.();
 									setDetail(true);
 								}}
-								title="打开当前卡详情并进入对话"
+								title={t("打开当前卡详情并进入对话")}
 							>
 								{currentLibItem.isPng || currentLibItem.hasCover ? (
 									<img className="card-thumb" src={cardImgUrl(currentLibItem.path)} alt={currentLibItem.name} />
@@ -1023,37 +1023,37 @@ export function CardPanel({
 									<span className="card-thumb card-thumb-json">JSON</span>
 								)}
 								<span className="current-card-info">
-									<span className="current-card-label">当前使用</span>
+									<span className="current-card-label">{t("当前使用")}</span>
 									<span className="current-card-name">{currentLibItem.name}</span>
 								</span>
-								<span className="act">详情 ›</span>
+								<span className="act">{t("详情 ›")}</span>
 							</button>
 						)}
 
-						<SearchInput value={query} onChange={setQuery} placeholder="搜索卡名 / 标签…" />
+						<SearchInput value={query} onChange={setQuery} placeholder={t("搜索卡名 / 标签…")} />
 						<div className="panel-row list-toolbar">
-							<select className="panel-search" value={sort} onChange={(e) => setSortP(e.target.value as CardSort)} aria-label="排序方式">
-								<option value="recent">最近修改</option>
-								<option value="name">按名字</option>
-								<option value="fav">收藏</option>
+							<select className="panel-search" value={sort} onChange={(e) => setSortP(e.target.value as CardSort)} aria-label={t("排序方式")}>
+								<option value="recent">{t("最近修改")}</option>
+								<option value="name">{t("按名字")}</option>
+								<option value="fav">{t("收藏")}</option>
 							</select>
 							<button
 								className="drawer-btn"
-								title={view === "grid" ? "切换到列表视图" : "切换到网格视图"}
-								aria-label="切换视图"
+								title={view === "grid" ? t("切换到列表视图") : t("切换到网格视图")}
+								aria-label={t("切换视图")}
 								onClick={() => setViewP(view === "grid" ? "list" : "grid")}
 							>
 								{view === "grid" ? <IconList size={14} /> : <IconGrid size={14} />}
 							</button>
 							<button
 								className="drawer-btn"
-								title="自己新建一张角色卡（不必先有酒馆卡）"
+								title={t("自己新建一张角色卡（不必先有酒馆卡）")}
 								onClick={() => setCreating((v) => !v)}
 							>
-								＋ 新建卡
+								{t("＋ 新建卡")}
 							</button>
 							<button className="drawer-btn" disabled={importing} onClick={() => fileRef.current?.click()}>
-								<IconUploads size={13} /> {importing ? "导入中…" : "导入卡"}
+								<IconUploads size={13} /> {importing ? t("导入中…") : t("导入卡")}
 							</button>
 							<input
 								ref={fileRef}
@@ -1068,42 +1068,42 @@ export function CardPanel({
 						</div>
 						{creating && (
 							<div className="lore-edit" onClick={(ev) => ev.stopPropagation()}>
-								<Field label="卡名" hint="也是文件名；建完不会自动切换，去库里点开">
+								<Field label={t("卡名")} hint={t("也是文件名；建完不会自动切换，去库里点开")}>
 									<input
 										className="panel-search"
 										autoFocus
 										value={newCardName}
-										placeholder="例：青梧"
+										placeholder={t("例：青梧")}
 										onChange={(ev) => setNewCardName(ev.target.value)}
 										onKeyDown={(ev) => {
 											if (ev.key === "Escape") setCreating(false);
 										}}
 									/>
 								</Field>
-								<Field label="开场白" hint="必填——新会话的首条消息，没有它开不了场">
+								<Field label={t("开场白")} hint={t("必填——新会话的首条消息，没有它开不了场")}>
 									<textarea
 										className="panel-search"
 										rows={3}
 										value={newFirstMes}
-										placeholder="她抬头看了你一眼，把茶碗往你那边推了推。"
+										placeholder={t("她抬头看了你一眼，把茶碗往你那边推了推。")}
 										onChange={(ev) => setNewFirstMes(ev.target.value)}
 									/>
 								</Field>
-								<Field label="描述（选填）" hint="性格/场景/对白示例等建完在详情里补">
+								<Field label={t("描述（选填）")} hint={t("性格/场景/对白示例等建完在详情里补")}>
 									<textarea
 										className="panel-search"
 										rows={2}
 										value={newDesc}
-										placeholder="外貌、身份、背景…"
+										placeholder={t("外貌、身份、背景…")}
 										onChange={(ev) => setNewDesc(ev.target.value)}
 									/>
 								</Field>
 								<div className="panel-row" style={{ marginTop: 6 }}>
 									<button className="drawer-btn" disabled={busy || !canCreateCard} onClick={() => void doCreateCard()}>
-										新建
+										{t("新建")}
 									</button>
 									<button className="drawer-btn" onClick={() => setCreating(false)}>
-										取消
+										{t("取消")}
 									</button>
 								</div>
 							</div>
@@ -1121,7 +1121,7 @@ export function CardPanel({
 								))}
 							</div>
 						)}
-						{shown.length === 0 && <div className="sp-empty">没有匹配的卡。把 PNG/JSON 角色卡拖进面板即可导入。</div>}
+						{shown.length === 0 && <div className="sp-empty">{t("没有匹配的卡。把 PNG/JSON 角色卡拖进面板即可导入。")}</div>}
 						<div className={view === "grid" ? "card-grid" : "card-list"}>
 							{shown.map((c) => (
 								<CardItem
@@ -1136,11 +1136,11 @@ export function CardPanel({
 								/>
 							))}
 						</div>
-						<div className="field-hint">点卡即切换会话、进入对话，并在侧栏打开详情。返回卡库时封面不重载。</div>
+						<div className="field-hint">{t("点卡即切换会话、进入对话，并在侧栏打开详情。返回卡库时封面不重载。")}</div>
 
 						<details className="legacy-group">
-							<summary>按路径换卡（卡库扫不到的位置）</summary>
-							<Field label="角色卡路径（.png / .json，相对 app/ 或绝对路径）">
+							<summary>{t("按路径换卡（卡库扫不到的位置）")}</summary>
+							<Field label={t("角色卡路径（.png / .json，相对 app/ 或绝对路径）")}>
 								<input
 									className="panel-search"
 									placeholder="assets/cards/xxx.png"
@@ -1156,7 +1156,7 @@ export function CardPanel({
 									setPathInput("");
 								}}
 							>
-								切换角色卡
+								{t("切换角色卡")}
 							</button>
 						</details>
 					</section>

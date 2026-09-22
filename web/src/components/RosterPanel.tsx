@@ -8,13 +8,14 @@ import type { WorldState } from "../wire.ts";
 import { IconTrash } from "./icons.tsx";
 import { ConfirmButton, useAction } from "./kit.tsx";
 import { Editable } from "./StatusStrip.tsx";
+import { t } from "../i18n/index.ts";
 
 /** 四表的展示配置：label + 判断条目当前是否活跃 */
 const ROSTER_TABLES = [
-	{ key: "characters", label: "人物", activeMark: "在场", goneMark: "已离场" },
-	{ key: "places", label: "地点", activeMark: "此处", goneMark: "去过" },
-	{ key: "items", label: "物品", activeMark: "持有", goneMark: "已失去" },
-	{ key: "events", label: "事件", activeMark: "进行中", goneMark: "已了结" },
+	{ key: "characters", label: "人物", activeMark: "在场", goneMark: "已离场" }, // i18n-ignore：用时 t()
+	{ key: "places", label: "地点", activeMark: "此处", goneMark: "去过" }, // i18n-ignore：用时 t()
+	{ key: "items", label: "物品", activeMark: "持有", goneMark: "已失去" }, // i18n-ignore：用时 t()
+	{ key: "events", label: "事件", activeMark: "进行中", goneMark: "已了结" }, // i18n-ignore：用时 t()
 ] as const;
 
 export function RosterPanel({
@@ -45,25 +46,25 @@ export function RosterPanel({
 		items: new Set(state?.inventory ?? []),
 		events: new Set(state?.plot_threads ?? []),
 	};
-	const tables = ROSTER_TABLES.map((t) => ({
-		...t,
-		rows: Object.entries(roster?.[t.key] ?? {}),
+	const tables = ROSTER_TABLES.map((tb) => ({
+		...tb,
+		rows: Object.entries(roster?.[tb.key] ?? {}),
 	}));
 
 	return (
 		<div className="roster-panel">
-			{tables.map((t) => (
-				<section key={t.key} className="roster-section">
+			{tables.map((tb) => (
+				<section key={tb.key} className="roster-section">
 					<div className="roster-section-head">
-						<span className="roster-section-title">{t.label}名录</span>
-						{t.rows.length > 0 && <span className="roster-section-badge">{t.rows.length} 条在册</span>}
+						<span className="roster-section-title">{t("{label}名录", { label: t(tb.label) })}</span>
+						{tb.rows.length > 0 && <span className="roster-section-badge">{t("{n} 条在册", { n: tb.rows.length })}</span>}
 					</div>
-					{t.rows.length === 0 ? (
-						<div className="roster-empty">暂无{t.label}记录（随剧情自动登记）</div>
+					{tb.rows.length === 0 ? (
+						<div className="roster-empty">{t("暂无{label}记录（随剧情自动登记）", { label: t(tb.label) })}</div>
 					) : (
 						<div className="roster-rows">
-							{t.rows.map(([name, blurb]) => {
-								const active = activeSets[t.key].has(name);
+							{tb.rows.map(([name, blurb]) => {
+								const active = activeSets[tb.key].has(name);
 								return (
 									<div key={name} className={`roster-row ${active ? "" : "roster-gone"}`}>
 										<span className="roster-name" title={name}>
@@ -72,17 +73,17 @@ export function RosterPanel({
 										<span className="roster-blurb">
 											<Editable
 												value={blurb}
-												placeholder="（登场时间）"
-												onSave={(v) => patch({ roster: { [t.key]: { [name]: v } } })}
+												placeholder={t("（登场时间）")}
+												onSave={(v) => patch({ roster: { [tb.key]: { [name]: v } } })}
 											/>
 										</span>
-										<span className={`roster-mark ${active ? "on" : ""}`}>{active ? t.activeMark : t.goneMark}</span>
+										<span className={`roster-mark ${active ? "on" : ""}`}>{active ? t(tb.activeMark) : t(tb.goneMark)}</span>
 										{!active && (
 											<ConfirmButton
-												title={`从名录移除「${name}」`}
-												aria-label="从名录移除"
-												confirmText="删除"
-												onConfirm={() => patch({ roster: { [t.key]: { [name]: null } } })}
+												title={t("从名录移除「{name}」", { name })}
+												aria-label={t("从名录移除")}
+												confirmText={t("删除")}
+												onConfirm={() => patch({ roster: { [tb.key]: { [name]: null } } })}
 											>
 												<IconTrash size={12} />
 											</ConfirmButton>

@@ -11,6 +11,7 @@
 import { CardPanel } from "./CardPanel.tsx";
 import { IconEdit } from "./icons.tsx";
 import { PersonaPanel } from "./PersonaPanel.tsx";
+import { t } from "../i18n/index.ts";
 
 export type RolesTab = "card" | "persona";
 
@@ -43,19 +44,19 @@ export function RolesPanel({
 	return (
 		<div className="roles-panel">
 			{!headerTabs && (
-				<div className="roles-tabs" role="group" aria-label="角色">
+				<div className="roles-tabs" role="group" aria-label={t("角色")}>
 					<button type="button" aria-pressed={tab === "card"} onClick={() => onTab?.("card")}>
-						角色卡库
+						{t("角色卡库")}
 					</button>
 					<button type="button" aria-pressed={tab === "persona"} onClick={() => onTab?.("persona")}>
-						用户角色
+						{t("用户角色")}
 					</button>
 					{tab === "card" && onOpenStudio && (
 						<button
 							type="button"
 							className="roles-studio"
-							title="角色卡工坊"
-							aria-label="打开角色卡工坊"
+							title={t("角色卡工坊")}
+							aria-label={t("打开角色卡工坊")}
 							onClick={onOpenStudio}
 						>
 							<IconEdit size={15} />

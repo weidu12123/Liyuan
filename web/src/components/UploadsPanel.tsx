@@ -11,6 +11,7 @@ import { apiDelete, apiGet, uploadFile, type UploadInfo, type UploadsResponse } 
 import { attachmentUrl, toAttachmentView } from "../attachments.ts";
 import { IconDownload, IconTrash, IconUploads } from "./icons.tsx";
 import { ConfirmButton, PanelStatus, SearchInput, useAction, usePanelData } from "./kit.tsx";
+import { fmtDateTime, t } from "../i18n/index.ts";
 
 type UploadSort = "recent" | "size" | "name";
 type UploadFilter = "all" | "image" | "file";
@@ -72,14 +73,14 @@ function ItemGrid({
 								<>
 									<img src={attachmentUrl(toAttachmentView(u.file))} alt={u.name} loading="lazy" />
 									<div className="upload-cell-acts">
-										<button type="button" className="act" title="附到消息（不重新上传）" onClick={() => onAttach(u)}>
-											附到消息
+										<button type="button" className="act" title={t("附到消息（不重新上传）")} onClick={() => onAttach(u)}>
+											{t("附到消息")}
 										</button>
-										<a className="act" href={attachmentUrl(toAttachmentView(u.file))} target="_blank" rel="noreferrer" aria-label="查看">
+										<a className="act" href={attachmentUrl(toAttachmentView(u.file))} target="_blank" rel="noreferrer" aria-label={t("查看")}>
 											<IconDownload size={12} />
 										</a>
 										{canDelete && (
-											<ConfirmButton confirmText="确认" disabled={busy} aria-label="删除" onConfirm={() => onRemove(u)}>
+											<ConfirmButton confirmText={t("确认")} disabled={busy} aria-label={t("删除")} onConfirm={() => onRemove(u)}>
 												<IconTrash size={12} />
 											</ConfirmButton>
 										)}
@@ -104,19 +105,19 @@ function ItemGrid({
 								{view.label}
 							</div>
 							<div className="lore-meta">
-								{u.size} · {new Date(u.mtimeMs).toLocaleString()}
+								{u.size} · {fmtDateTime(u.mtimeMs)}
 							</div>
 						</div>
 						{!bulk && (
 							<div className="upload-acts">
-								<button type="button" className="act" title="附到消息（不重新上传）" onClick={() => onAttach(u)}>
-									附到消息
+								<button type="button" className="act" title={t("附到消息（不重新上传）")} onClick={() => onAttach(u)}>
+									{t("附到消息")}
 								</button>
-								<a className="act" href={attachmentUrl(view)} target="_blank" rel="noreferrer" title="下载" aria-label="下载">
+								<a className="act" href={attachmentUrl(view)} target="_blank" rel="noreferrer" title={t("下载")} aria-label={t("下载")}>
 									<IconDownload size={14} />
 								</a>
 								{canDelete && (
-									<ConfirmButton disabled={busy} title="删除" aria-label="删除" confirmText="确认删除" onConfirm={() => onRemove(u)}>
+									<ConfirmButton disabled={busy} title={t("删除")} aria-label={t("删除")} confirmText={t("确认删除")} onConfirm={() => onRemove(u)}>
 										<IconTrash size={14} />
 									</ConfirmButton>
 								)}
@@ -168,7 +169,7 @@ export function UploadsPanel({
 		run(async () => {
 			await apiDelete(`/api/uploads?file=${encodeURIComponent(u.file)}`);
 			reload();
-		}, `已删除：${u.name}`);
+		}, t("已删除：{name}", { name: u.name }));
 
 	const removeSelected = () =>
 		run(async () => {
@@ -182,7 +183,7 @@ export function UploadsPanel({
 			setSelected(new Set());
 			setBulk(false);
 			reload();
-		}, "已删除所选");
+		}, t("已删除所选"));
 
 	const doUpload = async (fl: FileList | File[]) => {
 		setUploading(true);
@@ -191,7 +192,7 @@ export function UploadsPanel({
 				try {
 					await uploadFile(f);
 				} catch (e) {
-					toast("error", `「${f.name}」上传失败：${e instanceof Error ? e.message : String(e)}`);
+					toast("error", t("「{name}」上传失败：{err}", { name: f.name, err: e instanceof Error ? e.message : String(e) }));
 				}
 			}
 			reload();
@@ -224,21 +225,21 @@ export function UploadsPanel({
 			{data && (
 				<>
 					<div className="field-hint" style={{ marginBottom: 8 }}>
-						「附到消息」只引用已有路径，<strong>不会再次上传</strong>；发送后 AI 直接 read 文件夹里的文件。
+						{t("「附到消息」只引用已有路径，")}<strong>{t("不会再次上传")}</strong>{t("；发送后 AI 直接 read 文件夹里的文件。")}
 					</div>
 					<div className="panel-row list-toolbar">
 						<button className="drawer-btn" disabled={uploading} onClick={() => fileRef.current?.click()}>
-							<IconUploads size={13} /> {uploading ? "上传中…" : "上传到「我的」"}
+							<IconUploads size={13} /> {uploading ? t("上传中…") : t("上传到「我的」")}
 						</button>
-						<select className="panel-search" value={sort} onChange={(e) => setSortP(e.target.value as UploadSort)} aria-label="排序">
-							<option value="recent">最近</option>
-							<option value="size">大小</option>
-							<option value="name">名字</option>
+						<select className="panel-search" value={sort} onChange={(e) => setSortP(e.target.value as UploadSort)} aria-label={t("排序")}>
+							<option value="recent">{t("最近")}</option>
+							<option value="size">{t("大小")}</option>
+							<option value="name">{t("名字")}</option>
 						</select>
-						<select className="panel-search" value={filter} onChange={(e) => setFilter(e.target.value as UploadFilter)} aria-label="类型过滤">
-							<option value="all">全部</option>
-							<option value="image">图片</option>
-							<option value="file">文件</option>
+						<select className="panel-search" value={filter} onChange={(e) => setFilter(e.target.value as UploadFilter)} aria-label={t("类型过滤")}>
+							<option value="all">{t("全部")}</option>
+							<option value="image">{t("图片")}</option>
+							<option value="file">{t("文件")}</option>
 						</select>
 						<button
 							type="button"
@@ -248,7 +249,7 @@ export function UploadsPanel({
 								setSelected(new Set());
 							}}
 						>
-							{bulk ? "退出" : "批量"}
+							{bulk ? t("退出") : t("批量")}
 						</button>
 						<input
 							ref={fileRef}
@@ -260,20 +261,20 @@ export function UploadsPanel({
 							}}
 						/>
 					</div>
-					{total > 6 && <SearchInput value={query} onChange={setQuery} placeholder="搜索文件名…" />}
+					{total > 6 && <SearchInput value={query} onChange={setQuery} placeholder={t("搜索文件名…")} />}
 					{bulk && selected.size > 0 && (
 						<div className="panel-row">
-							<ConfirmButton className="drawer-btn" disabled={busy} confirmText={`确认删除 ${selected.size} 个`} onConfirm={removeSelected}>
-								删除所选（{selected.size}）
+							<ConfirmButton className="drawer-btn" disabled={busy} confirmText={t("确认删除 {n} 个", { n: selected.size })} onConfirm={removeSelected}>
+								{t("删除所选（{n}）", { n: selected.size })}
 							</ConfirmButton>
 						</div>
 					)}
 
 					<section className="sp-section">
-						<h4>我的上传（{data.uploads.length}）</h4>
-						<div className="field-hint">上传区 · 你上传的素材，跨会话可用</div>
-						{data.uploads.length === 0 && <div className="sp-empty">还没有上传。拖文件进面板，或点上方「上传到我的」。</div>}
-						{myUploads.length === 0 && data.uploads.length > 0 && <div className="sp-empty">没有匹配的文件。</div>}
+						<h4>{t("我的上传（{n}）", { n: data.uploads.length })}</h4>
+						<div className="field-hint">{t("上传区 · 你上传的素材，跨会话可用")}</div>
+						{data.uploads.length === 0 && <div className="sp-empty">{t("还没有上传。拖文件进面板，或点上方「上传到我的」。")}</div>}
+						{myUploads.length === 0 && data.uploads.length > 0 && <div className="sp-empty">{t("没有匹配的文件。")}</div>}
 						<ItemGrid
 							items={myUploads}
 							bulk={bulk}
@@ -287,10 +288,10 @@ export function UploadsPanel({
 					</section>
 
 					<section className="sp-section">
-						<h4>本地图片（{data.media.length}）</h4>
-						<div className="field-hint">本地出图 · AI 展示/生成后落盘的图，同样可「附到消息」再引用</div>
-						{data.media.length === 0 && <div className="sp-empty">还没有本地出图。对话里 AI 用 show_image 展示后会出现在这里。</div>}
-						{mediaList.length === 0 && data.media.length > 0 && <div className="sp-empty">没有匹配的图片。</div>}
+						<h4>{t("本地图片（{n}）", { n: data.media.length })}</h4>
+						<div className="field-hint">{t("本地出图 · AI 展示/生成后落盘的图，同样可「附到消息」再引用")}</div>
+						{data.media.length === 0 && <div className="sp-empty">{t("还没有本地出图。对话里 AI 用 show_image 展示后会出现在这里。")}</div>}
+						{mediaList.length === 0 && data.media.length > 0 && <div className="sp-empty">{t("没有匹配的图片。")}</div>}
 						<ItemGrid
 							items={mediaList}
 							bulk={bulk}

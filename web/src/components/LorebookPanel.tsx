@@ -21,11 +21,12 @@ import {
 	type LoreSearchHit,
 } from "../api.ts";
 import { bumpWatchPanels, ConfirmButton, Field, PanelStatus, SearchInput, Toggle, useAction, usePanelData } from "./kit.tsx";
+import { t } from "../i18n/index.ts";
 
 const SOURCE_LABEL: Record<LoreEntryView["source"], string> = {
-	card: "卡内嵌",
-	file: "独立文件",
-	agent: "agent 补充",
+	card: "卡内嵌", // i18n-ignore：用时 t(SOURCE_LABEL[k])
+	file: "独立文件", // i18n-ignore
+	agent: "agent 补充", // i18n-ignore
 };
 
 type LoreSort = "book" | "name" | "chars" | "order";
@@ -51,10 +52,10 @@ function LoreLight({
 }) {
 	const kind = !enabled ? "off" : constant ? "blue" : "green";
 	const title = !enabled
-		? "已停用（开关打开后：蓝灯=常驻 / 绿灯=关键词）"
+		? t("已停用（开关打开后：蓝灯=常驻 / 绿灯=关键词）")
 		: constant
-			? "蓝灯 · 常驻（每轮注入，点击改为绿灯关键词）"
-			: "绿灯 · 关键词触发（命中 key 才注入，点击改为蓝灯常驻）";
+			? t("蓝灯 · 常驻（每轮注入，点击改为绿灯关键词）")
+			: t("绿灯 · 关键词触发（命中 key 才注入，点击改为蓝灯常驻）");
 	return (
 		<button
 			type="button"
@@ -160,7 +161,7 @@ function EntryRow({
 				secondaryKeys,
 				content: draftContent,
 			},
-			"条目已保存",
+			t("条目已保存"),
 		);
 		setEditing(false);
 		setFull(draftContent);
@@ -170,7 +171,7 @@ function EntryRow({
 		if (!e.enabled) return;
 		onPatch(
 			{ fingerprint: e.fingerprint, constant: !e.constant },
-			e.constant ? "已改为绿灯（关键词触发）" : "已改为蓝灯（常驻）",
+			e.constant ? t("已改为绿灯（关键词触发）") : t("已改为蓝灯（常驻）"),
 		);
 	};
 
@@ -180,32 +181,32 @@ function EntryRow({
 				<LoreLight constant={e.constant} enabled={e.enabled} disabled={busy} onClick={e.enabled ? flipLight : undefined} />
 				<details open={open} onToggle={(ev) => setOpen((ev.target as HTMLDetailsElement).open)}>
 					<summary>
-						<span className="lore-title">{e.comment || e.keys[0] || "（未命名）"}</span>
-						<span className="lore-order" title="插入优先级 order（越小越靠前）">
+						<span className="lore-title">{e.comment || e.keys[0] || t("（未命名）")}</span>
+						<span className="lore-order" title={t("插入优先级 order（越小越靠前）")}>
 							#{e.order}
 						</span>
 						{e.selective && e.secondaryKeys.length > 0 && (
-							<span className="chip chip-selective" title="次要关键词也需命中（selective）">
+							<span className="chip chip-selective" title={t("次要关键词也需命中（selective）")}>
 								AND
 							</span>
 						)}
-						<span className={`chip chip-src chip-src-${e.source}`}>{SOURCE_LABEL[e.source]}</span>
-						<span className="lore-meta">{e.chars} 字</span>
+						<span className={`chip chip-src chip-src-${e.source}`}>{t(SOURCE_LABEL[e.source])}</span>
+						<span className="lore-meta">{t("{n} 字", { n: e.chars })}</span>
 					</summary>
 
 					{!editing && (
 						<>
-							{e.keys.length > 0 && <div className="lore-keys">关键词：{e.keys.join("、")}</div>}
-							{e.secondaryKeys.length > 0 && <div className="lore-keys">次要：{e.secondaryKeys.join("、")}</div>}
-							{e.constant && <div className="lore-keys">类型：蓝灯常驻（不扫关键词）</div>}
-							{!e.constant && <div className="lore-keys">类型：绿灯关键词{e.keys.length === 0 ? "（无 key，不会触发）" : ""}</div>}
+							{e.keys.length > 0 && <div className="lore-keys">{t("关键词：{keys}", { keys: e.keys.join(t("、")) })}</div>}
+							{e.secondaryKeys.length > 0 && <div className="lore-keys">{t("次要：{keys}", { keys: e.secondaryKeys.join(t("、")) })}</div>}
+							{e.constant && <div className="lore-keys">{t("类型：蓝灯常驻（不扫关键词）")}</div>}
+							{!e.constant && <div className="lore-keys">{t("类型：绿灯关键词")}{e.keys.length === 0 ? t("（无 key，不会触发）") : ""}</div>}
 							<div className="longtext">{full ?? e.preview}</div>
 							<div className="panel-row" style={{ marginTop: 6 }}>
 								<button type="button" className="drawer-btn" disabled={busy} onClick={() => void startEdit()}>
-									编辑
+									{t("编辑")}
 								</button>
-								<ConfirmButton disabled={busy} confirmText="确认删除" onConfirm={() => onDelete(e.fingerprint)}>
-									删除
+								<ConfirmButton disabled={busy} confirmText={t("确认删除")} onConfirm={() => onDelete(e.fingerprint)}>
+									{t("删除")}
 								</ConfirmButton>
 							</div>
 						</>
@@ -213,11 +214,11 @@ function EntryRow({
 
 					{editing && (
 						<div className="lore-edit" onClick={(ev) => ev.stopPropagation()}>
-							<Field label="标题（comment）">
+							<Field label={t("标题（comment）")}>
 								<input className="panel-search" value={draftComment} onChange={(ev) => setDraftComment(ev.target.value)} />
 							</Field>
 							<div className="panel-row lore-edit-row">
-								<Field label="优先级 order" hint="越小越靠前">
+								<Field label={t("优先级 order")} hint={t("越小越靠前")}>
 									<input
 										className="panel-search lore-order-input"
 										type="number"
@@ -227,23 +228,23 @@ function EntryRow({
 										onChange={(ev) => setDraftOrder(ev.target.value)}
 									/>
 								</Field>
-								<Field label="类型">
+								<Field label={t("类型")}>
 									<select
 										className="panel-search"
 										value={draftConstant ? "constant" : "keyed"}
 										onChange={(ev) => setDraftConstant(ev.target.value === "constant")}
 									>
-										<option value="constant">蓝灯 · 常驻</option>
-										<option value="keyed">绿灯 · 关键词</option>
+										<option value="constant">{t("蓝灯 · 常驻")}</option>
+										<option value="keyed">{t("绿灯 · 关键词")}</option>
 									</select>
 								</Field>
 							</div>
 							{!draftConstant && (
 								<>
-									<Field label="主关键词" hint="逗号 / 顿号分隔">
-										<input className="panel-search" value={draftKeys} onChange={(ev) => setDraftKeys(ev.target.value)} placeholder="如：南京、某角色" />
+									<Field label={t("主关键词")} hint={t("逗号 / 顿号分隔")}>
+										<input className="panel-search" value={draftKeys} onChange={(ev) => setDraftKeys(ev.target.value)} placeholder={t("如：南京、某角色")} />
 									</Field>
-									<Field label="次要关键词" hint="可选；勾选 AND 后需同时命中">
+									<Field label={t("次要关键词")} hint={t("可选；勾选 AND 后需同时命中")}>
 										<input className="panel-search" value={draftSec} onChange={(ev) => setDraftSec(ev.target.value)} />
 									</Field>
 									<label className="lore-check">
@@ -253,24 +254,24 @@ function EntryRow({
 											onChange={(ev) => setDraftSelective(ev.target.checked)}
 											disabled={parseKeyLine(draftSec).length === 0}
 										/>
-										次要也要命中（selective / AND）
+										{t("次要也要命中（selective / AND）")}
 									</label>
 								</>
 							)}
 							{draftConstant && (
-								<div className="field-hint">常驻条目不依赖关键词；仍可保留 key 供检索测试与 lorebook_search。</div>
+								<div className="field-hint">{t("常驻条目不依赖关键词；仍可保留 key 供检索测试与 lorebook_search。")}</div>
 							)}
 							{draftConstant && (
-								<Field label="关键词（可选，供检索）">
+								<Field label={t("关键词（可选，供检索）")}>
 									<input className="panel-search" value={draftKeys} onChange={(ev) => setDraftKeys(ev.target.value)} />
 								</Field>
 							)}
-							<Field label="正文">
+							<Field label={t("正文")}>
 								<textarea className="panel-search lore-content-edit" rows={8} value={draftContent} onChange={(ev) => setDraftContent(ev.target.value)} />
 							</Field>
 							<div className="panel-row">
 								<button type="button" className="drawer-btn save-btn" disabled={busy} onClick={saveEdit}>
-									保存
+									{t("保存")}
 								</button>
 								<button
 									type="button"
@@ -280,7 +281,7 @@ function EntryRow({
 										setEditing(false);
 									}}
 								>
-									取消
+									{t("取消")}
 								</button>
 							</div>
 						</div>
@@ -289,7 +290,7 @@ function EntryRow({
 				<Toggle
 					checked={e.enabled}
 					disabled={busy}
-					title={e.enabled ? "停用该条目" : "启用该条目"}
+					title={e.enabled ? t("停用该条目") : t("启用该条目")}
 					onChange={(v) => onToggle(e.fingerprint, v)}
 				/>
 			</div>
@@ -363,7 +364,7 @@ function BooksSection({
 			await apiPost("/api/lorebooks/select", { paths: [] });
 			reload();
 			onMountChanged();
-		}, "已卸下全部世界书");
+		}, t("已卸下全部世界书"));
 
 	const remove = (path: string) =>
 		run(async () => {
@@ -374,13 +375,13 @@ function BooksSection({
 				const rest = data.books.filter((b) => b.path !== path);
 				if (rest[0]) onView({ kind: "file", path: rest[0].path });
 			}
-		}, "已删除");
+		}, t("已删除"));
 
 	const exportBook = async (path: string) => {
 		try {
 			const r = await apiGet<{ name: string; json: unknown }>(`/api/lorebook/export?path=${encodeURIComponent(path)}`);
 			downloadJson(`${r.name}.json`, r.json);
-			toast("info", `已导出「${r.name}」`);
+			toast("info", t("已导出「{name}」", { name: r.name }));
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
 		}
@@ -390,7 +391,7 @@ function BooksSection({
 		try {
 			const r = await apiGet<{ name: string; json: unknown }>("/api/lorebook/export");
 			downloadJson(`${r.name}.json`, r.json);
-			toast("info", "已导出会话合并世界书（全部挂载书 + agent 补充）");
+			toast("info", t("已导出会话合并世界书（全部挂载书 + agent 补充）"));
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
 		}
@@ -405,8 +406,8 @@ function BooksSection({
 		run(async () => {
 			const name = newName.trim();
 			const content = newFirstContent.trim();
-			if (!name) throw new Error("请先填书名");
-			if (!content) throw new Error("请写第一条条目的正文");
+			if (!name) throw new Error(t("请先填书名"));
+			if (!content) throw new Error(t("请写第一条条目的正文"));
 			const r = await apiPost<{ path: string; didMount: boolean }>("/api/lorebooks", {
 				name,
 				mount: newMount,
@@ -430,7 +431,7 @@ function BooksSection({
 				`/api/lorebooks/import?name=${encodeURIComponent(file.name.replace(/\.json$/i, ""))}`,
 				json,
 			);
-			toast("info", `已导入（${r.entryCount} 条）——点书名看条目，勾选才挂进会话`);
+			toast("info", t("已导入（{n} 条）——点书名看条目，勾选才挂进会话", { n: r.entryCount }));
 			reload();
 			onView({ kind: "file", path: r.path });
 			// 条目区等其它 watch 订阅一并刷新
@@ -447,18 +448,18 @@ function BooksSection({
 
 	return (
 		<section className="sp-section">
-			<h4>世界书</h4>
+			<h4>{t("世界书")}</h4>
 			<div className="field-hint">
-				<strong>勾选</strong>＝挂进会话（可多本）· <strong>点书名</strong>＝下方只显示该本条目（不合并其它书）。
+				<strong>{t("勾选")}</strong>{t("＝挂进会话（可多本）·")} <strong>{t("点书名")}</strong>{t("＝下方只显示该本条目（不合并其它书）。")}
 			</div>
 			<PanelStatus loading={loading} error={error} hasData={!!data} />
 			{data && (
 				<>
 					<div className="book-row book-toolbar">
-						<span className="lore-meta">会话已挂 {active.length} 本</span>
+						<span className="lore-meta">{t("会话已挂 {n} 本", { n: active.length })}</span>
 						{active.length > 0 && (
 							<button type="button" className="act" disabled={busy} onClick={() => clearAll()}>
-								全部卸下
+								{t("全部卸下")}
 							</button>
 						)}
 					</div>
@@ -471,7 +472,7 @@ function BooksSection({
 									type="button"
 									className="book-check"
 									disabled={busy}
-									title={mounted ? "卸下（不进会话）" : "挂载（进会话）"}
+									title={mounted ? t("卸下（不进会话）") : t("挂载（进会话）")}
 									onClick={(ev) => toggleMount(b.path, ev)}
 								>
 									<span className={`check ${mounted ? "on" : ""}`} aria-checked={mounted} role="checkbox" />
@@ -479,20 +480,20 @@ function BooksSection({
 								<button
 									type="button"
 									className="book-pick"
-									title={`查看条目：${b.path}`}
+									title={t("查看条目：{path}", { path: b.path })}
 									onClick={() => onView({ kind: "file", path: b.path })}
 								>
 									<span className="book-name">{b.name}</span>
-									<span className="lore-meta">{b.entryCount} 条</span>
-									{mounted && <span className="lore-meta book-mounted-tag">已挂</span>}
+									<span className="lore-meta">{t("{n} 条条目", { n: b.entryCount })}</span>
+									{mounted && <span className="lore-meta book-mounted-tag">{t("已挂")}</span>}
 								</button>
 								<span className="book-acts">
 									<button type="button" className="act" onClick={() => void exportBook(b.path)}>
-										导出
+										{t("导出")}
 									</button>
 									{b.path.startsWith("assets/lorebooks/") && (
-										<ConfirmButton disabled={busy} confirmText="确认删除" onConfirm={() => remove(b.path)}>
-											删除
+										<ConfirmButton disabled={busy} confirmText={t("确认删除")} onConfirm={() => remove(b.path)}>
+											{t("删除")}
 										</ConfirmButton>
 									)}
 								</span>
@@ -501,19 +502,19 @@ function BooksSection({
 					})}
 					<div className={`book-row ${viewingAgent ? "current" : ""}`}>
 						<button type="button" className="book-pick book-pick-full" onClick={() => onView({ kind: "agent" })}>
-							<span className="book-name">agent 补充设定</span>
-							<span className="lore-meta">按卡自动</span>
+							<span className="book-name">{t("agent 补充设定")}</span>
+							<span className="lore-meta">{t("按卡自动")}</span>
 						</button>
 					</div>
-					{data.books.length === 0 && <div className="sp-empty">还没有世界书——可以「＋ 新建」自己写，也可以导入 JSON</div>}
+					{data.books.length === 0 && <div className="sp-empty">{t("还没有世界书——可以「＋ 新建」自己写，也可以导入 JSON")}</div>}
 					{creating && (
 						<div className="lore-edit" onClick={(ev) => ev.stopPropagation()}>
-							<Field label="书名" hint="文件名同名；建完可直接加条目">
+							<Field label={t("书名")} hint={t("文件名同名；建完可直接加条目")}>
 								<input
 									className="panel-search"
 									autoFocus
 									value={newName}
-									placeholder="例：主世界设定"
+									placeholder={t("例：主世界设定")}
 									onChange={(ev) => setNewName(ev.target.value)}
 									onKeyDown={(ev) => {
 										if (ev.key === "Enter") void doCreate();
@@ -523,13 +524,13 @@ function BooksSection({
 							</Field>
 							<label className="lore-check">
 								<input type="checkbox" checked={newMount} onChange={(ev) => setNewMount(ev.target.checked)} />
-								建完挂进本会话
+								{t("建完挂进本会话")}
 							</label>
-							<Field label="第一条条目" hint="必填——空书挂不上，也不会出现在书单里">
+							<Field label={t("第一条条目")} hint={t("必填——空书挂不上，也不会出现在书单里")}>
 								<input
 									className="panel-search"
 									value={newFirstTitle}
-									placeholder="标题，留空用书名"
+									placeholder={t("标题，留空用书名")}
 									onChange={(ev) => setNewFirstTitle(ev.target.value)}
 								/>
 							</Field>
@@ -537,15 +538,15 @@ function BooksSection({
 								className="panel-search lore-content-edit"
 								rows={3}
 								value={newFirstContent}
-								placeholder="第一条的正文内容（必填）"
+								placeholder={t("第一条的正文内容（必填）")}
 								onChange={(ev) => setNewFirstContent(ev.target.value)}
 							/>
 							<div className="panel-row" style={{ marginTop: 6 }}>
 								<button type="button" className="drawer-btn" disabled={busy || !canCreate} onClick={() => void doCreate()}>
-									新建
+									{t("新建")}
 								</button>
 								<button type="button" className="drawer-btn" onClick={() => setCreating(false)}>
-									取消
+									{t("取消")}
 								</button>
 							</div>
 						</div>
@@ -554,13 +555,13 @@ function BooksSection({
 						<button
 							type="button"
 							className="drawer-btn"
-							title="自己新建一本世界书（不必先有酒馆 JSON）"
+							title={t("自己新建一本世界书（不必先有酒馆 JSON）")}
 							onClick={() => setCreating((v) => !v)}
 						>
-							＋ 新建世界书
+							{t("＋ 新建世界书")}
 						</button>
 						<label className="drawer-btn book-import">
-							{importing ? "导入中…" : "导入世界书 JSON"}
+							{importing ? t("导入中…") : t("导入世界书 JSON")}
 							<input
 								type="file"
 								accept=".json,application/json"
@@ -572,8 +573,8 @@ function BooksSection({
 								}}
 							/>
 						</label>
-						<button type="button" className="drawer-btn" title="导出会话里全部挂载书+补充" onClick={() => void exportMerged()}>
-							导出合并
+						<button type="button" className="drawer-btn" title={t("导出会话里全部挂载书+补充")} onClick={() => void exportMerged()}>
+							{t("导出合并")}
 						</button>
 					</div>
 				</>
@@ -674,7 +675,7 @@ export function LorebookPanel({ toast }: { toast: (level: "info" | "warning" | "
 		run(async () => {
 			await apiDelete(`/api/lorebook/entry?fp=${encodeURIComponent(fingerprint)}&path=${encodeURIComponent(scopePath)}`);
 			reload();
-		}, "条目已删除");
+		}, t("条目已删除"));
 
 	const resetAddForm = () => {
 		setAdding(false);
@@ -698,8 +699,8 @@ export function LorebookPanel({ toast }: { toast: (level: "info" | "warning" | "
 			});
 			resetAddForm();
 			reload();
-			if (r.duplicate) toast("warning", "正文与本书已有条目重复，未重复写入");
-		}, "条目已添加");
+			if (r.duplicate) toast("warning", t("正文与本书已有条目重复，未重复写入"));
+		}, t("条目已添加"));
 
 	const filtered = useMemo(() => {
 		const list = data?.entries ?? [];
@@ -718,31 +719,31 @@ export function LorebookPanel({ toast }: { toast: (level: "info" | "warning" | "
 	}, [data, query, sort]);
 
 	const titleName =
-		data?.viewName ?? (view?.kind === "agent" ? "agent 补充设定" : view?.kind === "file" ? "…" : "未选择");
+		data?.viewName ?? (view?.kind === "agent" ? t("agent 补充设定") : view?.kind === "file" ? "…" : t("未选择"));
 
 	return (
 		<div className="panel-body">
 			<BooksSection toast={toast} view={view} onView={setView} onMountChanged={reload} />
 			<PanelStatus loading={loading} error={error} hasData={!!data && !!view} />
-			{!view && <div className="sp-empty">点上方书名查看该本条目</div>}
+			{!view && <div className="sp-empty">{t("点上方书名查看该本条目")}</div>}
 			{view && data && (
 				<>
 					<section className="sp-section">
-						<h4>检索测试</h4>
-						<div className="field-hint">回车测的是会话已挂载书的合并检索；下方列表始终只显示当前点开的书。</div>
+						<h4>{t("检索测试")}</h4>
+						<div className="field-hint">{t("回车测的是会话已挂载书的合并检索；下方列表始终只显示当前点开的书。")}</div>
 						<SearchInput
 							value={query}
 							onChange={(v) => {
 								setQuery(v);
 								if (!v.trim()) setHits(null);
 							}}
-							placeholder="过滤当前书条目 / 回车测会话检索…"
+							placeholder={t("过滤当前书条目 / 回车测会话检索…")}
 							onEnter={() => void doSearch()}
 						/>
-						{searching && <div className="sp-empty">检索中…</div>}
+						{searching && <div className="sp-empty">{t("检索中…")}</div>}
 						{hits !== null && !searching && (
 							<div className="lore-hits">
-								{hits.length === 0 && <div className="sp-empty">无命中——这个说法模型也检索不到。</div>}
+								{hits.length === 0 && <div className="sp-empty">{t("无命中——这个说法模型也检索不到。")}</div>}
 								{hits.map((h, i) => (
 									<details key={i} className="lore-hit">
 										<summary>
@@ -758,22 +759,22 @@ export function LorebookPanel({ toast }: { toast: (level: "info" | "warning" | "
 
 					<section className="sp-section">
 						<h4>
-							条目 · {titleName}
+							{t("条目 · {name}", { name: titleName })}
 							<span className="lore-meta" style={{ marginLeft: 8, fontWeight: 400 }}>
-								{filtered.length === data.total ? `共 ${data.total} 条` : `筛选 ${filtered.length} / ${data.total}`}
+								{filtered.length === data.total ? t("共 {n} 条", { n: data.total }) : t("筛选 {shown} / {total}", { shown: filtered.length, total: data.total })}
 							</span>
 						</h4>
 						<div className="field-hint">
-							仅当前书，不合并其它挂载。
-							<span className="lore-light lore-light-blue lore-light-inline" /> 蓝灯常驻 ·{" "}
-							<span className="lore-light lore-light-green lore-light-inline" /> 绿灯关键词
+							{t("仅当前书，不合并其它挂载。")}
+							<span className="lore-light lore-light-blue lore-light-inline" /> {t("蓝灯常驻 ·")}{" "}
+							<span className="lore-light lore-light-green lore-light-inline" /> {t("绿灯关键词")}
 						</div>
 						<div className="panel-row list-toolbar">
-							<select className="panel-search" value={sort} onChange={(e) => setSort(e.target.value as LoreSort)} aria-label="排序">
-								<option value="order">优先级 order</option>
-								<option value="book">书内顺序</option>
-								<option value="name">按标题</option>
-								<option value="chars">按字数</option>
+							<select className="panel-search" value={sort} onChange={(e) => setSort(e.target.value as LoreSort)} aria-label={t("排序")}>
+								<option value="order">{t("优先级 order")}</option>
+								<option value="book">{t("书内顺序")}</option>
+								<option value="name">{t("按标题")}</option>
+								<option value="chars">{t("按字数")}</option>
 							</select>
 							<button
 								className="drawer-btn"
@@ -782,37 +783,37 @@ export function LorebookPanel({ toast }: { toast: (level: "info" | "warning" | "
 									setExpandTick((t) => t + 1);
 								}}
 							>
-								{expanded ? "全部收起" : "全部展开"}
+								{expanded ? t("全部收起") : t("全部展开")}
 							</button>
 						</div>
 						{!adding ? (
 							<button className="drawer-btn" disabled={busy} onClick={() => setAdding(true)}>
-								＋ 新增条目
+								{t("＋ 新增条目")}
 							</button>
 						) : (
 							<div className="lore-edit lore-add-form">
-								<div className="field-hint">写进「{titleName}」。关键词留空会自动按标题生成。</div>
-								<Field label="标题">
+								<div className="field-hint">{t("写进「{name}」。关键词留空会自动按标题生成。", { name: titleName })}</div>
+								<Field label={t("标题")}>
 									<input
 										className="panel-search"
-										placeholder="如：南阳城 · 宵禁"
+										placeholder={t("如：南阳城 · 宵禁")}
 										value={newComment}
 										autoFocus
 										onChange={(ev) => setNewComment(ev.target.value)}
 									/>
 								</Field>
 								<div className="panel-row lore-edit-row">
-									<Field label="类型">
+									<Field label={t("类型")}>
 										<select
 											className="panel-search"
 											value={newConstant ? "constant" : "keyed"}
 											onChange={(ev) => setNewConstant(ev.target.value === "constant")}
 										>
-											<option value="keyed">绿灯 · 关键词</option>
-											<option value="constant">蓝灯 · 常驻</option>
+											<option value="keyed">{t("绿灯 · 关键词")}</option>
+											<option value="constant">{t("蓝灯 · 常驻")}</option>
 										</select>
 									</Field>
-									<Field label="优先级 order" hint="越小越靠前">
+									<Field label={t("优先级 order")} hint={t("越小越靠前")}>
 										<input
 											className="panel-search lore-order-input"
 											type="number"
@@ -823,14 +824,14 @@ export function LorebookPanel({ toast }: { toast: (level: "info" | "warning" | "
 										/>
 									</Field>
 								</div>
-								<Field label="关键词" hint={newConstant ? "常驻条目不靠关键词触发；填了可供检索" : "逗号 / 顿号分隔；留空则按标题生成"}>
-									<input className="panel-search" value={newKeys} onChange={(ev) => setNewKeys(ev.target.value)} placeholder="如：南阳、宵禁" />
+								<Field label={t("关键词")} hint={newConstant ? t("常驻条目不靠关键词触发；填了可供检索") : t("逗号 / 顿号分隔；留空则按标题生成")}>
+									<input className="panel-search" value={newKeys} onChange={(ev) => setNewKeys(ev.target.value)} placeholder={t("如：南阳、宵禁")} />
 								</Field>
-								<Field label="正文">
+								<Field label={t("正文")}>
 									<textarea
 										className="panel-search lore-content-edit"
 										rows={8}
-										placeholder="这条设定的具体内容…"
+										placeholder={t("这条设定的具体内容…")}
 										value={newContent}
 										onChange={(ev) => setNewContent(ev.target.value)}
 									/>
@@ -842,15 +843,15 @@ export function LorebookPanel({ toast }: { toast: (level: "info" | "warning" | "
 										disabled={busy || !newComment.trim() || !newContent.trim()}
 										onClick={addEntry}
 									>
-										添加
+										{t("添加")}
 									</button>
 									<button type="button" className="drawer-btn" disabled={busy} onClick={resetAddForm}>
-										取消
+										{t("取消")}
 									</button>
 								</div>
 							</div>
 						)}
-						{filtered.length === 0 && <div className="sp-empty">此书无匹配条目。</div>}
+						{filtered.length === 0 && <div className="sp-empty">{t("此书无匹配条目。")}</div>}
 						{filtered.slice(0, limit).map((e) => (
 							<EntryRow
 								key={e.fingerprint}
@@ -865,7 +866,7 @@ export function LorebookPanel({ toast }: { toast: (level: "info" | "warning" | "
 						))}
 						{filtered.length > limit && (
 							<button className="drawer-btn" onClick={() => setLimit((n) => n + 40)}>
-								显示更多（还有 {filtered.length - limit} 条）
+								{t("显示更多（还有 {n} 条）", { n: filtered.length - limit })}
 							</button>
 						)}
 					</section>

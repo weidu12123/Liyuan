@@ -20,6 +20,7 @@ import { useEffect, useRef } from "react";
 import { authorScriptSig } from "../../../src/authorScripts.ts";
 import type { AuthorScript } from "../wire.ts";
 import { AUTHOR_SCRIPTS_GLOBAL, buildScriptHostDoc, SCRIPT_HOST_SANDBOX } from "../scriptHostDoc.ts";
+import { t } from "../i18n/index.ts";
 
 type HostWindow = Window & { [AUTHOR_SCRIPTS_GLOBAL]?: AuthorScript[] };
 
@@ -88,9 +89,10 @@ export function ScriptHost({ scripts }: { scripts: AuthorScript[] }) {
 			window.setTimeout(() => {
 				const n = authorMounted().length;
 				if (rep.ok > 0 && n === 0) {
+					// 开发者控制台诊断，不是界面文案
 					console.warn(
-						`[liyuan scriptHost] ${rep.ok} 份作者脚本已执行，但父页没有新增节点——` +
-							`若卡带悬浮球却不见踪影，检查宿主帧的 same-origin 是否生效`,
+						`[liyuan scriptHost] ${rep.ok} 份作者脚本已执行，但父页没有新增节点——` + // i18n-ignore
+							`若卡带悬浮球却不见踪影，检查宿主帧的 same-origin 是否生效`, // i18n-ignore
 					);
 				}
 			}, 1200);
@@ -126,7 +128,7 @@ export function ScriptHost({ scripts }: { scripts: AuthorScript[] }) {
 			ref={frameRef}
 			name="liyuan-script-host"
 			data-liyuan-card-runtime="script"
-			title="作者脚本宿主"
+			title={t("作者脚本宿主")}
 			aria-hidden="true"
 			tabIndex={-1}
 			sandbox={SCRIPT_HOST_SANDBOX}

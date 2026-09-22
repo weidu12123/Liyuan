@@ -7,8 +7,9 @@ import { apiDelete, apiPost } from "../api.ts";
 import type { RpPanel } from "../wire.ts";
 import { IconDownload, IconRoster, IconTrash } from "./icons.tsx";
 import { ConfirmButton } from "./kit.tsx";
+import { t } from "../i18n/index.ts";
 
-const KIND_LABEL: Record<string, string> = { markdown: "文档", svg: "图形", html: "网页" };
+const KIND_LABEL: Record<string, string> = { markdown: "文档", svg: "图形", html: "网页" }; // i18n-ignore：用时经 t() 翻
 
 export interface PanelDockProps {
 	panels: RpPanel[];
@@ -56,10 +57,10 @@ export function PanelDock({
 		try {
 			const body: unknown = JSON.parse(await file.text());
 			const r = await apiPost<{ imported: number; names: string[]; errors: string[] }>("/api/panels/import", body);
-			if (r.errors?.length) toast("warning", `导入完成但有失败：\n${r.errors.join("\n")}`);
+			if (r.errors?.length) toast("warning", t("导入完成但有失败：\n{errors}", { errors: r.errors.join("\n") }));
 			if (r.names?.[0]) onOpen(r.names[0]);
 		} catch (err) {
-			toast("error", `导入失败：${err instanceof Error ? err.message : String(err)}`);
+			toast("error", t("导入失败：{err}", { err: err instanceof Error ? err.message : String(err) }));
 		}
 	};
 
@@ -84,30 +85,30 @@ export function PanelDock({
 					<div className={`dock-row dock-row-system ${rosterActive ? "current" : ""}`}>
 						<button type="button" className="dock-name" onClick={onOpenRoster}>
 							<IconRoster size={14} />
-							登场名录
-							<span className="dock-kind">系统</span>
+							{t("登场名录")}
+							<span className="dock-kind">{t("系统")}</span>
 						</button>
 					</div>
 				</div>
 			)}
 			<div className="field-hint" style={{ marginBottom: 10 }}>
-				本会话里由 {charName} 搭建的面板。点名称在侧栏打开；可导入 / 导出社区格式。
+				{t("本会话里由 {charName} 搭建的面板。点名称在侧栏打开；可导入 / 导出社区格式。", { charName })}
 			</div>
 			{panels.length === 0 && (
-				<div className="sp-empty">还没有面板——剧情需要时角色会自己搭，也可以从文件导入。</div>
+				<div className="sp-empty">{t("还没有面板——剧情需要时角色会自己搭，也可以从文件导入。")}</div>
 			)}
 			<div className="dock-list">
 				{panels.map((p) => (
 					<div key={p.name} className={`dock-row ${activeAgent === p.name ? "current" : ""}`}>
 						<button type="button" className="dock-name" onClick={() => onOpen(p.name)}>
 							{p.name}
-							<span className="dock-kind">{KIND_LABEL[p.kind] ?? p.kind}</span>
+							<span className="dock-kind">{KIND_LABEL[p.kind] ? t(KIND_LABEL[p.kind]) : p.kind}</span>
 						</button>
 						<button
 							type="button"
 							className="dock-act"
-							title="导出此面板"
-							aria-label="导出此面板"
+							title={t("导出此面板")}
+							aria-label={t("导出此面板")}
 							onClick={() => exportPanels([p], p.name)}
 						>
 							<IconDownload size={14} />
@@ -115,9 +116,9 @@ export function PanelDock({
 						<ConfirmButton
 							className="dock-act"
 							disabled={busy}
-							title="删除此面板"
-							aria-label={`删除面板「${p.name}」`}
-							confirmText="确认删除"
+							title={t("删除此面板")}
+							aria-label={t("删除面板「{name}」", { name: p.name })}
+							confirmText={t("确认删除")}
 							onConfirm={() => void removePanel(p.name)}
 						>
 							<IconTrash size={14} />
@@ -127,11 +128,11 @@ export function PanelDock({
 			</div>
 			<div className="dock-foot">
 				<button type="button" className="drawer-btn" onClick={() => fileRef.current?.click()}>
-					导入
+					{t("导入")}
 				</button>
 				{panels.length > 0 && (
-					<button type="button" className="drawer-btn" onClick={() => exportPanels(panels, charName || "面板")}>
-						全部导出
+					<button type="button" className="drawer-btn" onClick={() => exportPanels(panels, charName || t("面板"))}>
+						{t("全部导出")}
 					</button>
 				)}
 			</div>

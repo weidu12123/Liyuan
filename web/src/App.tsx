@@ -194,20 +194,22 @@ const FLOAT_PANELS = new Set<PanelId>([]);
 const isFloatPanel = (id: PanelId | AgentPanelId | null): id is PanelId | AgentPanelId =>
 	id != null && FLOAT_PANELS.has(id as PanelId);
 
+// 面板名表：用时经 t() 翻（locale 运行时可切）
 const PANEL_LABEL: Record<PanelId, string> = {
-	sessions: "会话",
-	worldline: "世界线",
-	connect: "连接",
-	preset: "提示词",
-	powers: "扩展",
-	settings: "设置",
-	about: "关于",
-	roles: "角色",
-	lorebook: "世界书",
-	roster: "登场名录",
-	uploads: "资料",
-	status: "状态栏",
+	sessions: "会话", // i18n-ignore
+	worldline: "世界线", // i18n-ignore
+	connect: "连接", // i18n-ignore
+	preset: "提示词", // i18n-ignore
+	powers: "扩展", // i18n-ignore
+	settings: "设置", // i18n-ignore
+	about: "关于", // i18n-ignore
+	roles: "角色", // i18n-ignore
+	lorebook: "世界书", // i18n-ignore
+	roster: "登场名录", // i18n-ignore
+	uploads: "资料", // i18n-ignore
+	status: "状态栏", // i18n-ignore
 };
+const panelLabel = (id: PanelId | string | null | undefined): string => (id && id in PANEL_LABEL ? t(PANEL_LABEL[id as PanelId]) : "");
 
 /** 图标承载识别，文字进 tooltip/aria-label */
 const PANEL_ICON: Record<PanelId, (p: { size?: number }) => React.JSX.Element> = {
@@ -248,7 +250,7 @@ function loadPanelPrefs(): { left: PanelId | null; right: PanelId | null; lastSe
 export default function App() {
 	useLocale(); // 顶层订阅界面语言：切换时整棵树重渲染
 	const [conn, setConn] = useState<ConnState>("connecting");
-	const [charName, setCharName] = useState("梨园");
+	const [charName, setCharName] = useState("梨园"); // i18n-ignore：hello 到达前的占位，随即被卡名覆盖
 	const [userName, setUserName] = useState("");
 	/** 对话头像：角色卡 PNG / 当前用户身份 */
 	const [charAvatarUrl, setCharAvatarUrl] = useState<string | null>(null);
@@ -404,7 +406,7 @@ export default function App() {
 	const openStoreModal = useCallback(() => {
 		const d = new Date();
 		const pad = (n: number) => String(n).padStart(2, "0");
-		setStoreDefaultName(`存档 ${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`);
+		setStoreDefaultName(t("存档 {date} {time}", { date: `${d.getMonth() + 1}/${d.getDate()}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` }));
 		setStoreOpen(true);
 	}, []);
 
@@ -540,7 +542,7 @@ export default function App() {
 		let live = true;
 		void apiGet<{ files: StoryFileView[] }>("/api/story", { bypassCache: true })
 			.then((r) => { if (live) setStoryFiles(r.files); })
-			.catch((e) => { if (live) pushToast("warning", `读取稿子失败：${e instanceof Error ? e.message : String(e)}`); });
+			.catch((e) => { if (live) pushToast("warning", t("读取稿子失败：{err}", { err: e instanceof Error ? e.message : String(e) })); });
 		return () => { live = false; };
 	}, [storyKey, pushToast]);
 
@@ -551,15 +553,15 @@ export default function App() {
 
 	const doTts = useCallback(
 		async (text: string) => {
-			const t = text.trim();
-			if (!t || ttsBusy) return;
+			const body = text.trim();
+			if (!body || ttsBusy) return;
 			setTtsBusy(true);
 			try {
 				await apiPost<{ ok: boolean; src: string }>("/api/tts", {
-					text: t.slice(0, 4000),
-					caption: t.slice(0, 40),
+					text: body.slice(0, 4000),
+					caption: body.slice(0, 40),
 				});
-				pushToast("info", "配音已生成");
+				pushToast("info", t("配音已生成"));
 			} catch (err) {
 				pushToast("error", err instanceof Error ? err.message : String(err));
 			} finally {
@@ -836,7 +838,7 @@ export default function App() {
 						// 同会话 hello（重载）：刷新列表
 						sendRef.current({ type: "sessions" });
 					}
-						document.title = "梨园";
+						document.title = t("梨园");
 						setDraftWorkspace(frame.workspace);
 						setDraftHistory(undefined);
 						setBusy(frame.streaming === true);
@@ -970,7 +972,7 @@ export default function App() {
 									channel: streamModeRef.current !== "roleplay" ? "authoring" : "narrative",
 									...(streamModeRef.current !== "roleplay" ? { mode: streamModeRef.current } : {}),
 									// 仅有思维链时也留痕；unfinished 与 resync 的 aborted 稿对齐
-									text: text.trim() ? text : "（正文未流出，见思维链）",
+									text: text.trim() ? text : t("（正文未流出，见思维链）"),
 									...(thinking ? { thinking } : {}),
 									...(acts.length ? { activities: acts } : {}),
 									...(segs.length ? { segments: segs } : {}),
@@ -1023,7 +1025,7 @@ export default function App() {
 							const q = prev.find((x) => x.name === p.name);
 							return q && q.updatedAt !== p.updatedAt;
 						});
-						if (updated && sel !== agentId(updated.name)) pushToast("info", `面板「${updated.name}」已更新`);
+						if (updated && sel !== agentId(updated.name)) pushToast("info", t("面板「{name}」已更新", { name: updated.name }));
 					}
 					if (sel?.startsWith("agent:") && !next.some((p) => agentId(p.name) === sel)) {
 						setLeftPanel(null);
@@ -1034,8 +1036,8 @@ export default function App() {
 					setStats(frame.stats);
 					break;
 				case "compaction":
-					setToolNote(frame.state === "start" ? "压缩上下文…" : null);
-					if (frame.state === "end") pushToast(frame.ok === false ? "warning" : "info", frame.ok === false ? "压缩失败" : "上下文已压缩");
+					setToolNote(frame.state === "start" ? t("压缩上下文…") : null);
+					if (frame.state === "end") pushToast(frame.ok === false ? "warning" : "info", frame.ok === false ? t("压缩失败") : t("上下文已压缩"));
 					break;
 				case "sessions":
 					setSessions(frame.list);
@@ -1059,7 +1061,7 @@ export default function App() {
 					if (frame.update.phase === "downloading" || frame.update.phase === "ready") setUpdateToastDismissed(false);
 					// 下载失败（downloading→available+error）：临时气泡提示，否则用户不重开弹窗看不到原因
 					if (frame.update.error && frame.update.error !== prevErr) {
-						pushToast("error", `更新失败：${frame.update.error}（点主页提示可重试/设镜像）`);
+						pushToast("error", t("更新失败：{err}（点主页提示可重试/设镜像）", { err: frame.update.error }));
 					}
 					break;
 				}
@@ -1068,11 +1070,9 @@ export default function App() {
 					if (frame.level !== "info") {
 						setWarnings((ws) => [{ ts: Date.now(), level: frame.level as "warning" | "error", text: frame.text }, ...ws].slice(0, 30));
 					}
-					// 新建/切换后服务端会 notify；若会话面板开着，确保列表与 current 标记更新
-					if (
-						(frame.text.includes("新建会话") || frame.text.includes("切换会话")) &&
-						(welcomeRef.current || leftPanelRef.current === "sessions")
-					) {
+					// 新建/切换后服务端会 notify；若会话面板开着，确保列表与 current 标记更新。
+					// 不按 notify 文案判断（文案随界面语言变）：面板可见时任何 notify 都刷一次，请求很轻。
+					if (welcomeRef.current || leftPanelRef.current === "sessions") {
 						// 同上：不清空，就地替换（清空 = 面板空白一下）
 						sendRef.current({ type: "sessions" });
 						window.setTimeout(() => sendRef.current({ type: "sessions" }), 350);
@@ -1262,7 +1262,7 @@ export default function App() {
 			sent = ws.send({ type: "prompt", text });
 		}
 		if (!sent) {
-			pushToast("warning", "连接还没好，内容还在输入框里");
+			pushToast("warning", t("连接还没好，内容还在输入框里"));
 			return;
 		}
 		setWelcome(false);
@@ -1300,12 +1300,12 @@ export default function App() {
 			},
 			sendPrompt: (text) => {
 				if (connRef.current !== "open") {
-					pushToast("warning", "连接未就绪，无法从界面发送");
+					pushToast("warning", t("连接未就绪，无法从界面发送"));
 					return;
 				}
 				const body = (text || inputRefForBridge.current || "").trim();
 				if (!body) {
-					pushToast("warning", "没有可发送的内容");
+					pushToast("warning", t("没有可发送的内容"));
 					return;
 				}
 				setWelcome(false);
@@ -1317,7 +1317,7 @@ export default function App() {
 				atBottomRef.current = true;
 				setAtBottom(true);
 				if (inputRef.current) inputRef.current.style.height = "auto";
-				pushToast("info", "已从界面注入并发送");
+				pushToast("info", t("已从界面注入并发送"));
 			},
 			runCommand: (cmd) => {
 				if (connRef.current !== "open") return;
@@ -1345,7 +1345,7 @@ export default function App() {
 						const r = await uploadFile(f);
 						setPending((prev) => [...prev, { ...toAttachmentView(r.file), size: r.size }]);
 					} catch (err) {
-						pushToast("error", `「${f.name}」上传失败：${err instanceof Error ? err.message : String(err)}`);
+						pushToast("error", t("「{name}」上传失败：{err}", { name: f.name, err: err instanceof Error ? err.message : String(err) }));
 					}
 				}
 			} finally {
@@ -1393,7 +1393,7 @@ export default function App() {
 			}
 		}
 		if (!sent) {
-			pushToast("warning", "连接还没好，改写还在编辑框里");
+			pushToast("warning", t("连接还没好，改写还在编辑框里"));
 			return;
 		}
 		setMsgEdit(null);
@@ -1413,13 +1413,13 @@ export default function App() {
 
 	const deleteLastUserTurn = useCallback(() => {
 		if (busy || lastUserIdx < 0) return;
-		if (!window.confirm("删除本轮对话（你的输入 + 角色回复）？内容会留在会话树旁支，可从世界线找回。")) return;
+		if (!window.confirm(t("删除本轮对话（你的输入 + 角色回复）？内容会留在会话树旁支，可从世界线找回。"))) return;
 		ws.send({ type: "prompt", text: "/rewind 1" });
 	}, [busy, lastUserIdx, ws]);
 
 	const dropLastReply = useCallback(() => {
 		if (busy || lastNarrativeIdx < 0) return;
-		if (!window.confirm("删除最后一条角色回复？你的输入会保留，可编辑后再发。")) return;
+		if (!window.confirm(t("删除最后一条角色回复？你的输入会保留，可编辑后再发。"))) return;
 		ws.send({ type: "prompt", text: "/drop" });
 	}, [busy, lastNarrativeIdx, ws]);
 
@@ -1470,7 +1470,7 @@ export default function App() {
 	};
 
 	const doCopy = (text: string) => {
-		pushToast("info", copyText(text) ? "已复制正文" : "复制失败（浏览器限制）");
+		pushToast("info", copyText(text) ? t("已复制正文") : t("复制失败（浏览器限制）"));
 	};
 
 	// 面板开合：点同侧同钮=收起；桌面端右侧面板统一走平立分栏（会话左移）
@@ -1642,7 +1642,7 @@ export default function App() {
 							setPending((prev) =>
 								prev.some((x) => x.file === u.file) ? prev : [...prev, { ...toAttachmentView(u.file), size: u.size }],
 							);
-							pushToast("info", `已附到待发送：${u.name}`);
+							pushToast("info", t("已附到待发送：{name}", { name: u.name }));
 						}}
 					/>
 				);
@@ -1685,12 +1685,12 @@ export default function App() {
 			>
 				{/* 左抽屉的轨：品牌在顶、板块在中、设置在底（PLAN-FRONTEND-V2 §三） */}
 				{side === "left" && (
-					<nav className="drawer-rail" aria-label="板块">
+					<nav className="drawer-rail" aria-label={t("板块")}>
 						<button
 							type="button"
 							className="drawer-rail-brand"
-							title="欢迎页"
-							aria-label="打开欢迎页"
+							title={t("欢迎页")}
+							aria-label={t("打开欢迎页")}
 							onClick={() => {
 								if (welcome) listRef.current?.scrollTo({ top: 0, behavior: "smooth" });
 								else showWelcome();
@@ -1707,9 +1707,9 @@ export default function App() {
 										type="button"
 										className={`drawer-rail-btn ${leftPanel === sid ? "active" : ""}`}
 										onClick={() => openLeft(sid)}
-										aria-label={PANEL_LABEL[sid]}
+										aria-label={panelLabel(sid)}
 										aria-current={leftPanel === sid}
-										data-tip={PANEL_LABEL[sid]}
+										data-tip={panelLabel(sid)}
 									>
 										<Ic size={19} />
 									</button>
@@ -1723,12 +1723,12 @@ export default function App() {
 								const next = dark ? "light" : "dark";
 								setTheme(next);
 								setDark(next === "dark");
-								pushToast("info", next === "dark" ? "已切换到黑夜模式" : "已切换到白昼模式");
+								pushToast("info", next === "dark" ? t("已切换到黑夜模式") : t("已切换到白昼模式"));
 							}}
-							aria-label={dark ? "切换到白天" : "切换到黑夜"}
+							aria-label={dark ? t("切换到白天") : t("切换到黑夜")}
 							aria-pressed={dark}
-							data-tip={dark ? "白天" : "黑夜"}
-							title={dark ? "白天" : "黑夜"}
+							data-tip={dark ? t("白天") : t("黑夜")}
+							title={dark ? t("白天") : t("黑夜")}
 						>
 							{dark ? <IconSun size={19} /> : <IconMoon size={19} />}
 						</button>
@@ -1736,9 +1736,9 @@ export default function App() {
 							type="button"
 							className={`drawer-rail-btn drawer-rail-foot ${leftPanel === "settings" ? "active" : ""}`}
 							onClick={() => openLeft("settings")}
-							aria-label="设置"
+							aria-label={t("设置")}
 							aria-current={leftPanel === "settings"}
-							data-tip="设置"
+							data-tip={t("设置")}
 						>
 							<IconSettings size={19} />
 						</button>
@@ -1746,9 +1746,9 @@ export default function App() {
 							type="button"
 							className={`drawer-rail-btn drawer-rail-foot ${leftPanel === "about" ? "active" : ""}`}
 							onClick={() => openLeft("about")}
-							aria-label="关于"
+							aria-label={t("关于")}
 							aria-current={leftPanel === "about"}
-							data-tip="关于"
+							data-tip={t("关于")}
 						>
 							<IconInfo size={19} />
 						</button>
@@ -1758,26 +1758,26 @@ export default function App() {
 				{open && (
 					<div className="panel-head">
 						{headId === "roles" ? (
-							<div className="panel-head-tabs" role="group" aria-label="角色视图">
+							<div className="panel-head-tabs" role="group" aria-label={t("角色视图")}>
 								<button
 									type="button"
 									className={`panel-head-tab ${rolesTab === "card" ? "active" : ""}`}
 									onClick={() => setRolesTab("card")}
 								>
-									角色卡库
+									{t("角色卡库")}
 								</button>
 								<button
 									type="button"
 									className={`panel-head-tab ${rolesTab === "persona" ? "active" : ""}`}
 									onClick={() => setRolesTab("persona")}
 								>
-									用户角色
+									{t("用户角色")}
 								</button>
 							</div>
 						) : (
 							<span className="panel-head-title">
 								<HeadIcon size={15} />
-								{agent ? agent.name : PANEL_LABEL[headId as PanelId]}
+								{agent ? agent.name : panelLabel(headId)}
 							</span>
 						)}
 						<span className="panel-head-actions">
@@ -1785,22 +1785,22 @@ export default function App() {
 								<button
 									className="icon-btn"
 									onClick={() => setStudioOpen(true)}
-									title="角色卡工坊"
-									aria-label="打开角色卡工坊"
+									title={t("角色卡工坊")}
+									aria-label={t("打开角色卡工坊")}
 								>
 									<IconEdit size={15} />
 								</button>
 							)}
 							{refreshable && (
-								<button className="icon-btn" onClick={doRefresh} title="刷新" aria-label="刷新面板">
+								<button className="icon-btn" onClick={doRefresh} title={t("刷新")} aria-label={t("刷新面板")}>
 									<IconRefresh size={15} />
 								</button>
 							)}
 							<button
 								className="icon-btn"
 								onClick={() => (side === "left" ? setLeftPanel(null) : setRightPanel(null))}
-								title="收起"
-								aria-label="收起面板"
+								title={t("收起")}
+								aria-label={t("收起面板")}
 							>
 								<IconClose size={16} />
 							</button>
@@ -1944,10 +1944,10 @@ export default function App() {
 							type="button"
 							className={`tb-btn ${leftPanel ? "active" : ""}`}
 							onClick={toggleDrawer}
-							aria-label="板块"
+							aria-label={t("板块")}
 							aria-expanded={!!leftPanel}
-							data-tip="板块"
-							title="板块"
+							data-tip={t("板块")}
+							title={t("板块")}
 						>
 							<IconPanelLeft size={18} />
 						</button>
@@ -1958,10 +1958,10 @@ export default function App() {
 									className={`tb-btn ${newMenuOpen ? "active" : ""}`}
 									onClick={() => setNewMenuOpen((v) => !v)}
 									disabled={conn !== "open"}
-									aria-label="新建"
+									aria-label={t("新建")}
 									aria-expanded={newMenuOpen}
-									data-tip="新建"
-									title="新建项目 / 新建对话"
+									data-tip={t("新建")}
+									title={t("新建项目 / 新建对话")}
 								>
 									<IconNewChat size={18} />
 								</button>
@@ -1978,8 +1978,8 @@ export default function App() {
 													setNamingProject(true);
 												}}
 											>
-												新建项目
-												<span className="tb-new-item-sub">新的一层，起名后建</span>
+												{t("新建项目")}
+												<span className="tb-new-item-sub">{t("新的一层，起名后建")}</span>
 											</button>
 											<button
 												type="button"
@@ -1995,8 +1995,8 @@ export default function App() {
 													dismissWelcome();
 												}}
 											>
-												新建对话
-												<span className="tb-new-item-sub">在当前项目里再开一个</span>
+												{t("新建对话")}
+												<span className="tb-new-item-sub">{t("在当前项目里再开一个")}</span>
 											</button>
 										</div>
 									</>
@@ -2011,9 +2011,9 @@ export default function App() {
 									dismissWelcome();
 								}}
 								disabled={conn !== "open"}
-								aria-label="新建对话"
-								data-tip="新建"
-								title="新建对话"
+								aria-label={t("新建对话")}
+								data-tip={t("新建")}
+								title={t("新建对话")}
 							>
 								<IconNewChat size={18} />
 							</button>
@@ -2024,16 +2024,16 @@ export default function App() {
 				  * 忙闲与连接态（原右 gutter）三样合并到这里，右 gutter 整个退场。
 				  */}
 				<div className="tb-title">
-					<span className="tb-title-main" title={currentSession?.name ? `${charName || "新对话"} · ${currentSession.name}` : (charName || "新对话")}>
-						{charName || "新对话"}
+					<span className="tb-title-main" title={currentSession?.name ? `${charName || t("新对话")} · ${currentSession.name}` : (charName || t("新对话"))}>
+						{charName || t("新对话")}
 					</span>
 					<span className="tb-title-sub">
 						{conversationMode === "agent" ? (
-							<button type="button" className="tb-sub-mode tb-sub-mode-agent" title="agent 模式：正文是稿子里的章，这里的对话是讨论；手机上点它看稿子" onClick={() => setStoryTab("story")}>
-								agent<span className="tb-sub-mode-agent-story">· 稿子{storyOutline?.length ? ` ${storyOutline.length} 章` : ""}</span>
+							<button type="button" className="tb-sub-mode tb-sub-mode-agent" title={t("agent 模式：正文是稿子里的章，这里的对话是讨论；手机上点它看稿子")} onClick={() => setStoryTab("story")}>
+								agent<span className="tb-sub-mode-agent-story">{storyOutline?.length ? t("· 稿子 {n} 章", { n: storyOutline.length }) : t("· 稿子")}</span>
 							</button>
 						) : (
-						<div className="tb-sub-mode" role="radiogroup" aria-label="对话模式" title="扮演：演剧情；工作：改卡、写前端/脚本、任何要动代码与文件的任务">
+						<div className="tb-sub-mode" role="radiogroup" aria-label={t("对话模式")} title={t("扮演：演剧情；工作：改卡、写前端/脚本、任何要动代码与文件的任务")}>
 							{(["roleplay", "authoring"] as const).map((m) => (
 								<button
 									key={m}
@@ -2044,7 +2044,7 @@ export default function App() {
 									disabled={busy || conn !== "open" || conversationMode === m}
 									onClick={() => ws.send({ type: "conversation_mode", mode: m })}
 								>
-									{m === "authoring" ? "工作" : "扮演"}
+									{m === "authoring" ? t("工作") : t("扮演")}
 								</button>
 							))}
 						</div>
@@ -2055,7 +2055,7 @@ export default function App() {
 									·
 								</span>
 								<span className={`tb-sub-state tb-sub-state-${conn === "open" ? (busy ? "busy" : "idle") : conn}`}>
-									{conn === "open" ? (busy ? "生成中" : "空闲") : conn === "connecting" ? "连接中" : "已断开"}
+									{conn === "open" ? (busy ? t("生成中") : t("空闲")) : conn === "connecting" ? t("连接中") : t("已断开")}
 								</span>
 							</>
 						)}
@@ -2064,8 +2064,8 @@ export default function App() {
 								type="button"
 								className={`tb-warn ${bellOpen ? "active" : ""}`}
 								onClick={() => setBellOpen((v) => !v)}
-								aria-label={`告警 ${warnings.length} 条`}
-								title={`告警 ${warnings.length} 条`}
+								aria-label={t("告警 {n} 条", { n: warnings.length })}
+								title={t("告警 {n} 条", { n: warnings.length })}
 							>
 								<IconBell size={13} />
 								{warnings.length > 9 ? "9+" : warnings.length}
@@ -2074,7 +2074,7 @@ export default function App() {
 					</span>
 					{bellOpen && (
 						<div className="bell-pop">
-							{warnings.length === 0 && <div className="sp-empty">暂无告警（旁侧审计的警告会留在这里）</div>}
+							{warnings.length === 0 && <div className="sp-empty">{t("暂无告警（旁侧审计的警告会留在这里）")}</div>}
 							{warnings.map((w, i) => (
 								<div key={i} className={`sp-warn ${w.level === "error" ? "sp-warn-error" : ""}`}>
 									<span className="sp-warn-time">{new Date(w.ts).toLocaleTimeString()}</span>
@@ -2090,7 +2090,7 @@ export default function App() {
 										setBellOpen(false);
 									}}
 								>
-									清空
+									{t("清空")}
 								</button>
 							)}
 						</div>
@@ -2102,9 +2102,9 @@ export default function App() {
 							type="button"
 							className={`tb-btn ${studioOpen ? "active" : ""}`}
 							onClick={toggleStudio}
-							aria-label="写卡平台"
-							data-tip="写卡平台"
-							title="写卡平台"
+							aria-label={t("写卡平台")}
+							data-tip={t("写卡平台")}
+							title={t("写卡平台")}
 						>
 							<IconEdit size={18} />
 						</button>
@@ -2112,9 +2112,9 @@ export default function App() {
 							type="button"
 							className={`tb-btn ${rightPanel === "sessions" ? "active" : ""}`}
 							onClick={() => togglePanel("sessions")}
-							aria-label="会话树"
-							data-tip="会话树"
-							title="会话树"
+							aria-label={t("会话树")}
+							data-tip={t("会话树")}
+							title={t("会话树")}
 						>
 							<IconSessions size={18} />
 						</button>
@@ -2124,7 +2124,7 @@ export default function App() {
 				<div className="layout">
 					{/* agent 模式：稿子在中间（桌面 60%），讨论在右（40%）；手机上两者是页签（story-pane 覆盖式） */}
 					{agentSplit && (
-						<aside className={`story-pane ${storyTab === "story" ? "story-pane-active" : ""}`} aria-label="稿子">
+						<aside className={`story-pane ${storyTab === "story" ? "story-pane-active" : ""}`} aria-label={t("稿子")}>
 							<StoryPane
 								files={storyFiles}
 								checkpoints={storyCheckpoints}
@@ -2136,15 +2136,15 @@ export default function App() {
 									try {
 										await apiPost("/api/story/edit", { name: f.name, text });
 									} catch (e) {
-										pushToast("error", `保存失败：${e instanceof Error ? e.message : String(e)}`);
+										pushToast("error", t("保存失败：{err}", { err: e instanceof Error ? e.message : String(e) }));
 										throw e;
 									}
 								}}
 								loadDiff={loadStoryDiff}
 								onRestore={(cp, scope) => {
 									const q = scope === "both"
-										? `文件和对话一起回到「${cp.message}」这轮输入之前？之后的讨论会从当前会话里截掉。`
-										: `把稿子恢复到「${cp.message}」之后的样子？讨论不变，恢复本身也会记成一条检查点。`;
+										? t("文件和对话一起回到「{msg}」这轮输入之前？之后的讨论会从当前会话里截掉。", { msg: cp.message })
+										: t("把稿子恢复到「{msg}」之后的样子？讨论不变，恢复本身也会记成一条检查点。", { msg: cp.message });
 									if (window.confirm(q)) ws.send({ type: "story_restore", checkpointId: cp.id, scope });
 								}}
 							/>
@@ -2157,11 +2157,11 @@ export default function App() {
 							<div className="stage-col-head">
 								<span className="stage-col-title">
 									<IconCard size={14} />
-									<span>{agentSplit ? "讨论" : "剧情推演"}</span>
+									<span>{agentSplit ? t("讨论") : t("剧情推演")}</span>
 								</span>
 								{agentSplit && (
 									<button type="button" className="story-tab-btn" onClick={() => setStoryTab("story")}>
-										稿子{storyOutline?.length ? `（${storyOutline.length} 章）` : ""}
+										{storyOutline?.length ? t("稿子（{n} 章）", { n: storyOutline.length }) : t("稿子")}
 									</button>
 								)}
 							</div>
@@ -2194,9 +2194,9 @@ export default function App() {
 										<div className="empty-state">
 											<div className="empty-brand" aria-hidden="true">
 												<BrandLogo className="empty-logo" size={96} />
-												<span className="empty-title">梨园</span>
+												<span className="empty-title">{t("梨园")}</span>
 											</div>
-											<div className="empty-hint">{conn === "open" ? "新的会话，开始对话吧。" : "连接后台中…"}</div>
+											<div className="empty-hint">{conn === "open" ? t("新的会话，开始对话吧。") : t("连接后台中…")}</div>
 										</div>
 									)}
 									{blocks.map((b, bi) =>
@@ -2213,7 +2213,7 @@ export default function App() {
 												key={b.idx}
 												msg={b.msg}
 												floor={b.floor}
-												fallbackName={b.msg.channel === "user" ? userName || "你" : charName}
+												fallbackName={b.msg.channel === "user" ? userName || t("你") : charName}
 												avatarUrl={b.msg.channel === "user" ? userAvatarUrl : charAvatarUrl}
 												skin={cardSkin}
 												onChapter={agentSplit || conversationMode === "agent" ? (checkpointId) => { setStoryFocus({ checkpointId, tick: Date.now() }); setStoryTab("story"); } : undefined}
@@ -2319,8 +2319,8 @@ export default function App() {
 																onSubmit: submitMsgEdit,
 																submitLabel:
 																	msgEdit.kind === "user"
-																		? "按修改后的输入重新生成"
-																		: "采用改写（或未改时重新生成）",
+																		? t("按修改后的输入重新生成")
+																		: t("采用改写（或未改时重新生成）"),
 															}
 														: undefined
 												}
@@ -2334,14 +2334,14 @@ export default function App() {
 								<div className="msg msg-char msg-live">
 									<div className="msg-head">
 										<MsgAvatar src={charAvatarUrl} name={charName} kind="char" />
-										<span className="msg-name msg-name-char">{streamMode === "authoring" ? "工作" : streamMode === "agent" ? "agent" : charName}</span>
-										<span className="msg-live-tag">生成中</span>
+										<span className="msg-name msg-name-char">{streamMode === "authoring" ? t("工作") : streamMode === "agent" ? "agent" : charName}</span>
+										<span className="msg-live-tag">{t("生成中")}</span>
 									</div>
 									{liveSegs.length > 0 ? (
 										<TurnTimeline segments={liveSegs} skin={streamMode !== "roleplay" ? null : liveSkin} plain={streamMode !== "roleplay"} live />
 									) : (
 										<div className="info-line pulse" style={{ margin: "0.4rem 0 0" }}>
-											{`${streamMode === "authoring" ? "工作" : streamMode === "agent" ? "agent" : charName} ${thinkingLive ? "正在思考…" : "工作中…"}`}
+											{`${streamMode === "authoring" ? t("工作") : streamMode === "agent" ? "agent" : charName} ${thinkingLive ? t("正在思考…") : t("工作中…")}`}
 										</div>
 									)}
 									{toolNote && (
@@ -2369,13 +2369,13 @@ export default function App() {
 					</div>
 
 					{!welcome && !atBottom && (
-						<button className="jump-bottom" onClick={jumpToBottom} title="回到最新" aria-label="回到最新">
+						<button className="jump-bottom" onClick={jumpToBottom} title={t("回到最新")} aria-label={t("回到最新")}>
 							<IconChevronDown size={17} />
 						</button>
 					)}
 					</div>
 					{rightPanel && (
-						<aside className="stage-col stage-col-right" aria-label={PANEL_LABEL[rightPanel as PanelId] || "状态栏"}>
+						<aside className="stage-col stage-col-right" aria-label={panelLabel(rightPanel) || t("状态栏")}>
 							<div className="stage-col-head">
 								<span className="stage-col-title">
 									{(() => {
@@ -2385,7 +2385,7 @@ export default function App() {
 										return (
 											<>
 												<Icon size={14} />
-												<span>{ag ? ag.name : PANEL_LABEL[rightPanel as PanelId] || "状态栏"}</span>
+												<span>{ag ? ag.name : panelLabel(rightPanel) || t("状态栏")}</span>
 											</>
 										);
 									})()}
@@ -2394,8 +2394,8 @@ export default function App() {
 									type="button"
 									className="icon-btn"
 									onClick={() => openRight(null)}
-									title="收起"
-									aria-label="收起状态栏"
+									title={t("收起")}
+									aria-label={t("收起状态栏")}
 								>
 									<IconClose size={15} />
 								</button>
@@ -2438,15 +2438,15 @@ export default function App() {
 										<span className="attach-label">{p.label}</span>
 										<button
 											className="attach-x"
-											title="不随消息发送（文件保留在上传区）"
-											aria-label="移除附件"
+											title={t("不随消息发送（文件保留在上传区）")}
+											aria-label={t("移除附件")}
 											onClick={() => setPending((prev) => prev.filter((x) => x.file !== p.file))}
 										>
 											<IconClose size={12} />
 										</button>
 									</span>
 								))}
-								{uploading && <span className="attach-chip attach-uploading">上传中…</span>}
+								{uploading && <span className="attach-chip attach-uploading">{t("上传中…")}</span>}
 							</div>
 						)}
 						<div className="composer-shell composer-box">
@@ -2476,8 +2476,8 @@ export default function App() {
 							<button
 								type="button"
 								className={`dock-btn composer-more ${composerTools ? "active" : ""}`}
-								title="更多工具"
-								aria-label="更多工具"
+								title={t("更多工具")}
+								aria-label={t("更多工具")}
 								aria-expanded={composerTools}
 								onClick={() => setComposerTools((v) => !v)}
 							>
@@ -2488,41 +2488,41 @@ export default function App() {
 								<button
 									type="button"
 									className={`dock-btn ${rightPanel === "worldline" ? "active" : ""}`}
-									title="世界线"
-									aria-label="世界线"
+									title={t("世界线")}
+									aria-label={t("世界线")}
 									onClick={() => {
 										toggleRight("worldline");
 										setComposerTools(false);
 									}}
 								>
 									<IconWorldline size={18} />
-									<span className="composer-tool-label">世界线</span>
+									<span className="composer-tool-label">{t("世界线")}</span>
 								</button>
 								<button
 									type="button"
 									className={`dock-btn ${rightPanel === "roster" ? "active" : ""}`}
-									title="登场名录"
-									aria-label="登场名录"
+									title={t("登场名录")}
+									aria-label={t("登场名录")}
 									onClick={() => {
 										toggleRight("roster");
 										setComposerTools(false);
 									}}
 								>
 									<IconRoster size={18} />
-									<span className="composer-tool-label">名录</span>
+									<span className="composer-tool-label">{t("名录")}</span>
 								</button>
 								<button
 									type="button"
 									className="dock-btn"
-									title="上传图片/文件（也可拖入或粘贴）"
-									aria-label="上传图片或文件"
+									title={t("上传图片/文件（也可拖入或粘贴）")}
+									aria-label={t("上传图片或文件")}
 									onClick={() => {
 										uploadInputRef.current?.click();
 										setComposerTools(false);
 									}}
 								>
 									<IconAttach size={18} />
-									<span className="composer-tool-label">上传</span>
+									<span className="composer-tool-label">{t("上传")}</span>
 								</button>
 							</div>
 							<input
@@ -2538,7 +2538,7 @@ export default function App() {
 							<textarea
 								ref={inputRef}
 								value={input}
-								placeholder={conn === "open" ? (conversationMode === "authoring" ? "描述要做的事：改卡、写前端或脚本、整理文件…" : conversationMode === "agent" ? "讨论剧情、下达写作指令；正文由 agent 写进稿子…" : userName ? `以「${userName}」的身份发言…` : "输入消息…") : "等待连接…"}
+								placeholder={conn === "open" ? (conversationMode === "authoring" ? t("描述要做的事：改卡、写前端或脚本、整理文件…") : conversationMode === "agent" ? t("讨论剧情、下达写作指令；正文由 agent 写进稿子…") : userName ? t("以「{name}」的身份发言…", { name: userName }) : t("输入消息…")) : t("等待连接…")}
 								rows={1}
 								onFocus={() => {
 									setComposerTools(false);
@@ -2617,8 +2617,8 @@ export default function App() {
 											text: text.trim()
 												? text
 												: thinking
-													? "（正文未流出，见思维链）"
-													: "（已停止）",
+													? t("（正文未流出，见思维链）")
+													: t("（已停止）"),
 											...(thinking ? { thinking } : {}),
 											...(acts.length ? { activities: acts } : {}),
 											...(segs.length ? { segments: segs } : {}),
@@ -2627,8 +2627,8 @@ export default function App() {
 										setMessages((ms) => upsertTurnReply(ms, leftover));
 										ws.send({ type: "abort" });
 									}}
-									title="停止"
-									aria-label="停止生成"
+									title={t("停止")}
+									aria-label={t("停止生成")}
 								>
 									<IconStop size={18} />
 								</button>
@@ -2637,8 +2637,8 @@ export default function App() {
 									className="btn btn-send"
 									onClick={send}
 									disabled={(!input.trim() && pending.length === 0) || conn !== "open"}
-									title="发送"
-									aria-label="发送"
+									title={t("发送")}
+									aria-label={t("发送")}
 								>
 									<IconSend size={17} />
 								</button>
@@ -2653,7 +2653,7 @@ export default function App() {
 					</footer>
 				</main>
 				{studioOpen && (
-					<aside className="studio-split-pane" aria-label="写卡平台">
+					<aside className="studio-split-pane" aria-label={t("写卡平台")}>
 						<CardStudio
 							onClose={() => setStudioOpen(false)}
 							onApplied={() => { apiGetCacheClear("/api/card"); void refreshCardFront(); }}
@@ -2672,7 +2672,7 @@ export default function App() {
 					return (
 						<FloatWindow
 							id={floatPanel}
-							title={ag ? ag.name : PANEL_LABEL[floatPanel as PanelId]}
+							title={ag ? ag.name : panelLabel(floatPanel)}
 							icon={<Icon size={15} />}
 							{...(ag
 								? {}
@@ -2714,19 +2714,19 @@ export default function App() {
 					entries={[
 					{
 						id: "status",
-						label: "状态栏",
+						label: t("状态栏"),
 						icon: <IconStatus size={14} />,
 						active: rightPanel === "status",
 					},
 					{
 						id: "worldline",
-						label: "世界线",
+						label: t("世界线"),
 						icon: <IconWorldline size={14} />,
 						active: rightPanel === "worldline",
 					},
 					{
 						id: "roster",
-						label: "登场名录",
+						label: t("登场名录"),
 						icon: <IconRoster size={14} />,
 						active: rightPanel === "roster",
 					},

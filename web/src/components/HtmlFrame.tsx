@@ -14,6 +14,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { buildSrcDoc, looksLikeProgramApp, programViewportHeight } from "../frameDoc.ts";
+import { t } from "../i18n/index.ts";
 
 export { looksLikeProgramApp, programViewportHeight } from "../frameDoc.ts";
 
@@ -186,11 +187,11 @@ export function HtmlFrame({
 		>
 			{!seamless && (
 				<div className="msg-html-bar">
-					<span className="msg-html-title">{title?.trim() || (scripts ? "交互界面" : "HTML")}</span>
+					<span className="msg-html-title">{title?.trim() || (scripts ? t("交互界面") : "HTML")}</span>
 					<span className="msg-html-tags">
-						{scripts ? <span className="chip chip-html-js">脚本</span> : <span className="chip chip-html-static">静态</span>}
+						{scripts ? <span className="chip chip-html-js">{t("脚本")}</span> : <span className="chip chip-html-static">{t("静态")}</span>}
 						<button type="button" className="act" onClick={() => setShowSource((v) => !v)}>
-							{showSource ? "收起源码" : "源码"}
+							{showSource ? t("收起源码") : t("源码")}
 						</button>
 					</span>
 				</div>
@@ -198,7 +199,7 @@ export function HtmlFrame({
 			{seamless && (
 				<div className="msg-html-ghost">
 					<button type="button" className="act" onClick={() => setShowSource((v) => !v)}>
-						{showSource ? "收起源码" : "源码"}
+						{showSource ? t("收起源码") : t("源码")}
 					</button>
 				</div>
 			)}
@@ -208,7 +209,7 @@ export function HtmlFrame({
 					name={frameId}
 					className="msg-html-frame"
 					data-liyuan-card-runtime="message"
-					title={title || (seamless ? "界面" : "HTML")}
+					title={title || (seamless ? t("界面") : "HTML")}
 					sandbox={sandbox}
 					srcDoc={srcDoc}
 					style={{ height }}

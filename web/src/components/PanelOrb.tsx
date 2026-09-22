@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IconClose, IconDock } from "./icons.tsx";
 import { readUiJson, writeUiJson } from "../uiStore.ts";
+import { t } from "../i18n/index.ts";
 
 export interface OrbEntry {
 	/** 传回给调用方的面板 id */
@@ -127,8 +128,8 @@ export function PanelOrb({ entries, onPick }: { entries: OrbEntry[]; onPick: (id
 				<button
 					type="button"
 					className={`orb-ball ${open ? "open" : ""} ${anyActive ? "has-active" : ""}`}
-					title="梨园面板"
-					aria-label="梨园面板"
+					title={t("梨园面板")}
+					aria-label={t("梨园面板")}
 					aria-expanded={open}
 					onPointerDown={onPointerDown}
 					onPointerMove={onPointerMove}

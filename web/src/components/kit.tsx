@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { apiGetPeek, runWithPanelFetchBypass } from "../api.ts";
 import { IconClose } from "./icons.tsx";
+import { t } from "../i18n/index.ts";
 
 /**
  * 面板刷新上下文（横切基建 §1 数据时效）：App 在每轮 agent 结束时递增 tick。
@@ -166,7 +167,7 @@ export function PanelStatus({
 	hasData?: boolean;
 }) {
 	if (error) return <div className="panel-error">{error}</div>;
-	if (loading && !hasData) return <div className="sp-empty">读取中…</div>;
+	if (loading && !hasData) return <div className="sp-empty">{t("读取中…")}</div>;
 	return null;
 }
 
@@ -202,7 +203,7 @@ export function Toggle({
 export function ConfirmButton({
 	onConfirm,
 	children,
-	confirmText = "再点一次确认",
+	confirmText,
 	className = "act",
 	disabled,
 	title,
@@ -247,7 +248,7 @@ export function ConfirmButton({
 				setArming(false);
 			}}
 		>
-			{arming ? confirmText : children}
+			{arming ? confirmText ?? t("再点一次确认") : children}
 		</button>
 	);
 }
@@ -278,7 +279,7 @@ export function SearchInput({
 				}}
 			/>
 			{value && (
-				<button type="button" className="search-clear" aria-label="清空搜索" onClick={() => onChange("")}>
+				<button type="button" className="search-clear" aria-label={t("清空搜索")} onClick={() => onChange("")}>
 					<IconClose size={13} />
 				</button>
 			)}

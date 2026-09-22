@@ -5,6 +5,8 @@
  * 写操作按路径前缀失效，避免一次 POST 清空全部缓存。
  */
 
+import { t } from "./i18n/index.ts";
+
 /** GET 响应缓存（完整 path 含 query → 数据） */
 const getCache = new Map<string, { at: number; data: unknown }>();
 /** 同一 path 并发合并 */
@@ -82,7 +84,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 		// 非 JSON
 	}
 	const err = (data as { error?: string } | null)?.error;
-	if (!res.ok || err) throw new Error(err || `请求失败（HTTP ${res.status}）`);
+	if (!res.ok || err) throw new Error(err || t("请求失败（HTTP {status}）", { status: res.status }));
 	if (method !== "GET" && method !== "HEAD") invalidateAfterWrite(path);
 	return data as T;
 }
@@ -97,7 +99,7 @@ export async function apiPostFile<T>(path: string, file: Blob): Promise<T> {
 		// 非 JSON
 	}
 	const err = (data as { error?: string } | null)?.error;
-	if (!res.ok || err) throw new Error(err || `请求失败（HTTP ${res.status}）`);
+	if (!res.ok || err) throw new Error(err || t("请求失败（HTTP {status}）", { status: res.status }));
 	invalidateAfterWrite(path);
 	return data as T;
 }

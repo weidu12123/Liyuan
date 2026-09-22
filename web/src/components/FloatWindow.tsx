@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IconClose, IconRefresh } from "./icons.tsx";
 import { readUiJson, writeUiJson } from "../uiStore.ts";
+import { t } from "../i18n/index.ts";
 
 export interface FloatRect {
 	x: number;
@@ -311,11 +312,11 @@ export function FloatWindow({
 				</span>
 				<span className="floatwin-actions" onPointerDown={(e) => e.stopPropagation()}>
 					{onRefresh && (
-						<button className="icon-btn" onClick={onRefresh} title="刷新" aria-label="刷新面板">
+						<button className="icon-btn" onClick={onRefresh} title={t("刷新")} aria-label={t("刷新面板")}>
 							<IconRefresh size={15} />
 						</button>
 					)}
-					<button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭悬浮窗">
+					<button className="icon-btn" onClick={onClose} title={t("关闭")} aria-label={t("关闭悬浮窗")}>
 						<IconClose size={16} />
 					</button>
 				</span>
@@ -324,7 +325,7 @@ export function FloatWindow({
 			<div
 				className="floatwin-grip"
 				role="presentation"
-				title="拖动缩放"
+				title={t("拖动缩放")}
 				onPointerDown={startDrag("size")}
 				onPointerMove={onMove}
 				onPointerUp={endDrag}

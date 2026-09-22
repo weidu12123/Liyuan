@@ -18,7 +18,8 @@ export interface AttachmentView {
 	kind: "upload" | "media";
 }
 
-const PREFIX = "（附件：";
+// 附件清单是写进消息正文尾行的协议标记，不是界面文案（解析历史消息也靠它）
+const PREFIX = "（附件："; // i18n-ignore
 const SUFFIX = "）";
 export const UPLOAD_DIR = ".liyuan-uploads/";
 export const MEDIA_DIR = ".liyuan-media/";

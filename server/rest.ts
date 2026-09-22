@@ -60,7 +60,7 @@ import {
 	type CardFrontSnapshot,
 } from "../src/cardfront.ts";
 import { RP_COMMANDS } from "../src/commands.ts";
-import { setUiLocale } from "../src/i18n/index.ts";
+import { setUiLocale, t } from "../src/i18n/index.ts";
 import {
 	getMemoryStatus,
 	memoryClearStore,
@@ -380,7 +380,7 @@ function readBodyRaw(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
 		req.on("data", (c: Buffer) => {
 			size += c.length;
 			if (size > maxBytes) {
-				reject(new Error("请求体过大"));
+				reject(new Error(t("请求体过大")));
 				req.destroy();
 				return;
 			}
@@ -715,7 +715,7 @@ function listCardLibrary(cwd: string, config: RpConfig): CardLibItem[] {
 /** 校验 query 里的卡路径确属卡库（一切卡文件读操作的门），返回绝对路径 */
 function assertLibraryCard(cwd: string, config: RpConfig, relPath: string): string {
 	const item = listCardLibrary(cwd, config).find((c) => c.path === relPath);
-	if (!item) throw new Error("不是卡库中的角色卡");
+	if (!item) throw new Error(t("不是卡库中的角色卡"));
 	return resolvePath(cwd, relPath);
 }
 
@@ -760,7 +760,7 @@ async function loadOrSeedAgentConfig(host: RestHost): Promise<{ path: string; ex
 	// 仓库为空时，把当前启用配置拆进仓库（迁移）
 	const mig = migrateActiveConfigIntoProfiles(host.cwd);
 	if (mig.migrated) {
-		host.notify("info", `已建立配置仓库：${mig.ids.join("、")}`);
+		host.notify("info", t("已建立配置仓库：{ids}", { ids: mig.ids.join(t("、")) }));
 	}
 
 	const loaded = loadAgentConfig(host.cwd);
@@ -920,8 +920,8 @@ async function probeModelsEndpoint(
 			ok: true,
 			status: r.status,
 			detail: ids.length
-				? `连通（HTTP ${r.status}，${ids.length} 个模型）`
-				: `连通（HTTP ${r.status}，模型清单为空）`,
+				? t("连通（HTTP {status}，{n} 个模型）", { status: r.status, n: ids.length })
+				: t("连通（HTTP {status}，模型清单为空）", { status: r.status }),
 			ids,
 		};
 	} catch (e) {
@@ -942,7 +942,7 @@ function validatePresetPath(p: string): string {
 	const norm = p.replace(/\\/g, "/");
 	if (norm === "liyuan-preset.json") return norm;
 	const base = norm.startsWith(`${PRESETS_DIR}/`) ? norm.slice(PRESETS_DIR.length + 1) : "";
-	if (!base || base.includes("/") || base.includes("..") || !base.endsWith(".json")) throw new Error("非法预设路径");
+	if (!base || base.includes("/") || base.includes("..") || !base.endsWith(".json")) throw new Error(t("非法预设路径"));
 	return norm;
 }
 
@@ -1041,9 +1041,9 @@ export function presetLibrary(cwd: string): { presets: Array<{ file: string; nam
 /** 把补丁打进**运行时草稿**（不落盘）。返回改了几块、新增了哪些 id */
 export function writePresetDraft(cwd: string, patch: PresetPatch): { blocks: number; added: string[] } {
 	const config = loadConfig(cwd);
-	if (!config.preset) throw new Error("当前未配置预设文件");
+	if (!config.preset) throw new Error(t("当前未配置预设文件"));
 	const base = loadEffectivePreset(cwd).doc ?? loadDiskPreset(cwd)?.doc;
-	if (!base) throw new Error(`预设文件不存在：${config.preset}`);
+	if (!base) throw new Error(t("预设文件不存在：{file}", { file: config.preset }));
 	const beforeIds = new Set(presetDocView(base).map((b) => b.id));
 	const next = patchPresetRaw(base, patch);
 	const ovr = presetOverridePath(cwd);
@@ -1062,9 +1062,9 @@ export function savePresetDraft(cwd: string, save: boolean): void {
 		return;
 	}
 	const config = loadConfig(cwd);
-	if (!config.preset) throw new Error("当前未配置预设文件");
+	if (!config.preset) throw new Error(t("当前未配置预设文件"));
 	const doc = loadEffectivePreset(cwd).doc ?? loadDiskPreset(cwd)?.doc;
-	if (!doc) throw new Error(`预设文件不存在：${config.preset}`);
+	if (!doc) throw new Error(t("预设文件不存在：{file}", { file: config.preset }));
 	writeJsonWithBackup(resolvePath(cwd, config.preset), doc.raw);
 	clearPresetOverride(cwd);
 }
@@ -1079,7 +1079,7 @@ export function createBlankPreset(cwd: string, name: string): { file: string } |
 	if (existsSync(abs)) return null;
 	const raw = {
 		prompts: [
-			{ identifier: "main", name: "主提示词", role: "system", content: "", system_prompt: true, marker: false },
+			{ identifier: "main", name: t("主提示词"), role: "system", content: "", system_prompt: true, marker: false },
 			{ identifier: "chatHistory", name: "Chat History", marker: true },
 		],
 		prompt_order: [
@@ -1162,11 +1162,11 @@ export interface PresetSyncResult {
  * 都问一次模型（实测 20+ 秒），2026-09-13 改全局共享，一份预设只声明一次。
  */
 const declarationPath = (cwd: string, presetName: string): string =>
-	join(cwd, PRESETS_DIR, ".liyuan", `预设声明-${presetSlug(presetName)}.json`);
+	join(cwd, PRESETS_DIR, ".liyuan", `预设声明-${presetSlug(presetName)}.json`); // i18n-ignore：文件名协议
 
 /** 旧按卡留档：全局档缺失时的回读来源（读到即上提全局），只读不写 */
 const legacyDeclarationPath = (cardDir: string, presetName: string): string =>
-	join(cardDir, ".liyuan", `预设声明-${presetSlug(presetName)}.json`);
+	join(cardDir, ".liyuan", `预设声明-${presetSlug(presetName)}.json`); // i18n-ignore：文件名协议
 
 /** 声明失败后的退避（同一预设 60 秒内不再问模型）——每拨一次开关就撞一次 402 没有意义 */
 const declareFailedAt = new Map<string, number>();
@@ -1177,7 +1177,7 @@ const DECLARE_RETRY_MS = 60_000;
 /** 机制表：一份 JSON 映射（assets/presets/.liyuan/预设机制.json），按预设名记；缺省＝declare */
 export type PresetMode = "declare" | "process";
 
-const presetModesPath = (cwd: string): string => join(cwd, PRESETS_DIR, ".liyuan", "预设机制.json");
+const presetModesPath = (cwd: string): string => join(cwd, PRESETS_DIR, ".liyuan", "预设机制.json"); // i18n-ignore：文件名协议
 
 function readPresetModes(cwd: string): Record<string, PresetMode> {
 	try {
@@ -1204,11 +1204,11 @@ function setPresetMode(cwd: string, presetName: string, mode: PresetMode): void 
 
 /** 处理留档（机制二）：一份预设一份档，按原文指纹命中复用；换卡只做机械落盘 */
 const processStorePath = (cwd: string, presetName: string): string =>
-	join(cwd, PRESETS_DIR, ".liyuan", `预设处理-${presetSlug(presetName)}.json`);
+	join(cwd, PRESETS_DIR, ".liyuan", `预设处理-${presetSlug(presetName)}.json`); // i18n-ignore：文件名协议
 
 /** 处理失败留档（实弹教训：只报 toast 不够定位）——存响应原文头尾＋解析报错，成功即删 */
 const processFailurePath = (cwd: string, presetName: string): string =>
-	join(cwd, PRESETS_DIR, ".liyuan", `预设处理失败-${presetSlug(presetName)}.json`);
+	join(cwd, PRESETS_DIR, ".liyuan", `预设处理失败-${presetSlug(presetName)}.json`); // i18n-ignore：文件名协议
 
 export interface ProcessFailureRecord {
 	version: 1;
@@ -1335,7 +1335,7 @@ export async function syncPresetTranslation(
 		const key = doc.name;
 		const failedAt = declareFailedAt.get(key) ?? 0;
 		if (Date.now() - failedAt < DECLARE_RETRY_MS) {
-			declareError = "声明模型刚失败过，稍后再试";
+			declareError = t("声明模型刚失败过，稍后再试");
 		} else {
 			const prompt = buildDeclarePrompt(missing, { preset: doc.name });
 			const resp = await deps.runSideText(prompt.systemPrompt, prompt.userText, {
@@ -1394,7 +1394,7 @@ export async function syncPresetTranslation(
 	const a = mergePresetEntriesInto(appendPath, r.appendMarkdown, "");
 	const b = mergePresetEntriesInto(agentsAbs, r.agentsSection, agentsBase);
 	if (a.changed || b.changed || declared > 0) {
-		const reportAbs = join(cardDir, ".liyuan", `转译报告-${presetSlug(doc.name)}.md`);
+		const reportAbs = join(cardDir, ".liyuan", `转译报告-${presetSlug(doc.name)}.md`); // i18n-ignore：文件名协议
 		mkdirSync(dirname(reportAbs), { recursive: true });
 		writeFileSync(reportAbs, declareTranslateReport(doc, r, declaration, config.preset ?? doc.name), "utf8");
 	}
@@ -1427,8 +1427,8 @@ export function syncLorebookMirror(cwd: string): { state: "none" | "unchanged" |
 	const used = new Set<string>();
 	const mirror: string[] = [];
 	for (const e of constantLoreOf(materials)) {
-		const book = bookOf(e) ?? "补充设定";
-		const title = (e.comment || e.keys?.[0] || `条目 ${e.uid}`).trim();
+		const book = bookOf(e) ?? "补充设定"; // i18n-ignore：镜像进 AGENTS.md，送模
+		const title = (e.comment || e.keys?.[0] || `条目 ${e.uid}`).trim(); // i18n-ignore：送模
 		mirror.push(formatEntry(uniqueEntryName(title, lorebookSourceSuffix(book), used), e.content));
 	}
 	const raw = readFileSync(agentsAbs, "utf8");
@@ -1480,7 +1480,7 @@ async function syncPresetProcess(
 	if (!store || opts.reprocess) {
 		const failedAt = processFailedAt.get(doc.name) ?? 0;
 		if (!opts.reprocess && Date.now() - failedAt < PROCESS_RETRY_MS) {
-			processError = "处理模型刚失败过，稍后再试";
+			processError = t("处理模型刚失败过，稍后再试");
 		} else if (pieces.length === 0) {
 			// 全关/零料：空产物也落档，别让每次装载都惦记
 			store = {
@@ -1522,7 +1522,7 @@ async function syncPresetProcess(
 					clearProcessFailure(failAbs);
 				} else {
 					processFailedAt.set(doc.name, Date.now());
-					processError = "处理响应不可解析";
+					processError = t("处理响应不可解析");
 					writeProcessFailure(failAbs, {
 						version: 1,
 						preset: doc.name,
@@ -1573,7 +1573,7 @@ async function syncPresetProcess(
 	const a = mergePresetEntriesInto(appendPath, entries.appendMarkdown, "");
 	const b = mergePresetEntriesInto(agentsAbs, entries.agentsSection, agentsBase);
 	if (a.changed || b.changed || processed) {
-		const reportAbs = join(cardDir, ".liyuan", `处理报告-${presetSlug(doc.name)}.md`);
+		const reportAbs = join(cardDir, ".liyuan", `处理报告-${presetSlug(doc.name)}.md`); // i18n-ignore：文件名协议
 		mkdirSync(dirname(reportAbs), { recursive: true });
 		writeFileSync(
 			reportAbs,
@@ -1585,7 +1585,7 @@ async function syncPresetProcess(
 					dropped: store.dropped,
 					unsupportedMacros: entries.unsupportedMacros,
 					usesLastUserMessage: compiled.usesLastUserMessage,
-					disabledCount: compiled.report.filter((it) => it.action === "关闭").length,
+					disabledCount: compiled.report.filter((it) => it.action === "关闭").length, // i18n-ignore：与处理报告数据比对
 				},
 				store,
 				config.preset ?? doc.name,
@@ -1692,7 +1692,7 @@ export function loreWriteTargets(cwd: string, config: RpConfig, scope?: string):
 	if (p === "agent") return [overlay];
 	const known = listLorebookFiles(cwd, config).map((b) => b.path);
 	if (p) {
-		if (!known.includes(p)) throw new Error("不是已知的世界书文件");
+		if (!known.includes(p)) throw new Error(t("不是已知的世界书文件"));
 		return [resolvePath(cwd, p)];
 	}
 	return [...known.map((k) => resolvePath(cwd, k)), overlay];
@@ -1763,7 +1763,7 @@ export function setLorebookMounted(cwd: string, config: RpConfig, path: string, 
 	if (mounted) {
 		const abs = resolvePath(cwd, p);
 		if (!existsSync(abs) || loadLorebookFile(abs).length === 0) {
-			throw new Error(`不是有效的世界书文件（空书要先写入条目）：${p}`);
+			throw new Error(t("不是有效的世界书文件（空书要先写入条目）：{path}", { path: p }));
 		}
 	}
 	const cur = new Set(mountedLorebookPaths(config));
@@ -1802,7 +1802,7 @@ export function createLorebookWithEntry(
 	opts?: { mount?: boolean },
 ): { path: string; mounted: string[] } | null {
 	const safe = `${name.trim().replace(/[\\/:*?"<>|]/g, "-").replace(/\.json$/i, "")}.json`;
-	if (safe === ".json") throw new Error("书名无效");
+	if (safe === ".json") throw new Error(t("书名无效"));
 	const rel = `${LOREBOOKS_DIR}/${safe}`;
 	const abs = join(cwd, LOREBOOKS_DIR, safe);
 	if (existsSync(abs)) return null;
@@ -1810,7 +1810,7 @@ export function createLorebookWithEntry(
 	writeFileSync(abs, `${JSON.stringify({ name: name.trim(), entries: {} }, null, "\t")}\n`, "utf8");
 	if (!appendLorebookFileEntry(abs, first)) {
 		unlinkSync(abs); // 首条没写进去 = 建出来的是挂不上、列不出的空书，不留盘
-		throw new Error("首条内容为空，未建书");
+		throw new Error(t("首条内容为空，未建书"));
 	}
 	try {
 		return {
@@ -1835,7 +1835,7 @@ export function loadMergedLoreMarked(cwd: string, config: RpConfig): Array<Loreb
 		const abs = resolvePath(cwd, rel);
 		if (existsSync(abs)) for (const entry of loadLorebookFile(abs)) sources.set(loreFingerprint(entry.content), rel);
 	}
-	return entries.map((e) => ({ ...e, source: sources.get(loreFingerprint(e.content)) ?? "补充设定集", ...(sourceOf(e) === "agent" ? { agentWritten: true } : {}) }));
+	return entries.map((e) => ({ ...e, source: sources.get(loreFingerprint(e.content)) ?? t("补充设定集"), ...(sourceOf(e) === "agent" ? { agentWritten: true } : {}) }));
 }
 
 // ---------- persona 投影（PLAN-PANELS-V2 §2.5：config.userName/userPersona=当前 persona 的镜像） ----------
@@ -1876,7 +1876,7 @@ export interface NewCardInput {
  */
 export function createCardFile(cwd: string, input: NewCardInput): { name: string; path: string; abs: string } | null {
 	const safe = input.name.replace(/[\\/<>:"|?*]/g, "_").slice(0, 120).trim();
-	if (!safe) throw new Error("卡名无效");
+	if (!safe) throw new Error(t("卡名无效"));
 	const fileName = `${safe}.json`;
 	const dest = join(cwd, "assets", "cards", fileName);
 	// 同名拒写：暂存里没有（创建后即升格清空），也要查已升格的卡空间
@@ -1900,21 +1900,21 @@ export function createCardFile(cwd: string, input: NewCardInput): { name: string
 	mkdirSync(dirname(dest), { recursive: true });
 	writeFileSync(dest, `${JSON.stringify(card, null, 2)}\n`, "utf8");
 	try {
-		if (!loadCardFile(dest).name) throw new Error("角色卡解析失败");
+		if (!loadCardFile(dest).name) throw new Error(t("角色卡解析失败"));
 	} catch (e) {
 		try {
 			unlinkSync(dest); // 不留一张打不开的卡
 		} catch {
 			/* best-effort */
 		}
-		throw e instanceof Error ? new Error(`${e.message}，已回滚`) : e;
+		throw e instanceof Error ? new Error(t("{message}，已回滚", { message: e.message })) : e;
 	}
 	// 落库即建卡空间（与导入同一条）：新卡从出生就在两层布局里；升格失败留在暂存，仍可用
 	try {
 		const space = createCardSpace(cwd, dest, safe, { move: true });
 		return { name: safe, path: `${CARDS_ROOT}/${space.folder}/${basename(space.cardFile)}`, abs: space.cardFile };
 	} catch (err) {
-		console.error(`[liyuan] 新建卡升格失败（留在暂存）：${err instanceof Error ? err.message : String(err)}`);
+		console.error(`[liyuan] 新建卡升格失败（留在暂存）：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：服务端日志
 		return { name: safe, path: `assets/cards/${fileName}`, abs: dest };
 	}
 }
@@ -2019,7 +2019,7 @@ export function importEmbeddedLoreForCards(
 	newlyMounted: string[];
 	nextConfig: RpConfig | null;
 } {
-	if (targets.length === 0) throw new Error("缺少角色卡");
+	if (targets.length === 0) throw new Error(t("缺少角色卡"));
 
 	mkdirSync(join(cwd, LOREBOOKS_DIR), { recursive: true });
 	const results: Array<{ path: string; entryCount: number; name: string; mounted: boolean }> = [];
@@ -2057,7 +2057,7 @@ export function importEmbeddedLoreForCards(
 	}
 
 	if (results.length === 0) {
-		throw new Error("所选角色卡均无内嵌世界书");
+		throw new Error(t("所选角色卡均无内嵌世界书"));
 	}
 
 	let nextConfig: RpConfig | null = null;
@@ -2082,7 +2082,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 	/** 触发会话重载/切换的写操作在流式中拒绝 */
 	const refuseWhileStreaming = (): boolean => {
 		if (!host.isStreaming()) return false;
-		sendJson(res, 409, { error: "正在生成回复，请稍候（或先停止）再操作" });
+		sendJson(res, 409, { error: t("正在生成回复，请稍候（或先停止）再操作") });
 		return true;
 	};
 
@@ -2099,10 +2099,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const text = (body.text ?? "").trim();
 				const m = /^\/(\w+)(?:\s|$)/.exec(text);
 				if (!m || !RP_COMMANDS.some((c) => c.name === m[1])) {
-					throw new Error(`不是可用命令：${text.slice(0, 40)}（可用：${RP_COMMANDS.map((c) => `/${c.name}`).join(" ")}）`);
+					throw new Error(t("不是可用命令：{text}（可用：{list}）", { text: text.slice(0, 40), list: RP_COMMANDS.map((c) => `/${c.name}`).join(" ") }));
 				}
 				const queued = host.queueCommand(text);
-				sendJson(res, 200, { ok: true, queued, note: queued ? "生成中：已排队到本轮结束执行" : "已提交执行" });
+				sendJson(res, 200, { ok: true, queued, note: queued ? t("生成中：已排队到本轮结束执行") : t("已提交执行") });
 				return true;
 			}
 
@@ -2110,7 +2110,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "POST /api/tts": {
 				const body = JSON.parse(await readBody(req)) as { text?: string; caption?: string };
 				const text = (body.text ?? "").trim();
-				if (!text) throw new Error("缺少 text");
+				if (!text) throw new Error(t("缺少 text"));
 				const r = await host.ttsSpeak(text, body.caption?.trim() || undefined);
 				sendJson(res, 200, { ok: true, ...r });
 				return true;
@@ -2123,7 +2123,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "GET /api/story/diff": {
 				const id = (query.get("checkpoint") ?? "").trim();
-				if (!id) throw new Error("需要 checkpoint");
+				if (!id) throw new Error(t("需要 checkpoint"));
 				sendJson(res, 200, host.storyDiff(id));
 				return true;
 			}
@@ -2131,7 +2131,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { name?: string; text?: string | null };
 				const name = (body.name ?? "").trim();
-				if (!name || (typeof body.text !== "string" && body.text !== null)) throw new Error("需要 name 与 text（null＝删除）");
+				if (!name || (typeof body.text !== "string" && body.text !== null)) throw new Error(t("需要 name 与 text（null＝删除）"));
 				sendJson(res, 200, { ok: true, ...(await host.editStoryFile({ name, text: body.text })) });
 				return true;
 			}
@@ -2145,7 +2145,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { saveId?: string };
 				const saveId = (body.saveId ?? "").trim();
-				if (!saveId) throw new Error("缺少 saveId");
+				if (!saveId) throw new Error(t("缺少 saveId"));
 				host.deleteWorldlineSave(saveId);
 				sendJson(res, 200, { ok: true, view: host.worldlineView() });
 				return true;
@@ -2154,7 +2154,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as { worldlineId?: string; name?: string };
 				const worldlineId = (body.worldlineId ?? "").trim();
 				const name = (body.name ?? "").trim();
-				if (!worldlineId || !name) throw new Error("需要 worldlineId 与 name");
+				if (!worldlineId || !name) throw new Error(t("需要 worldlineId 与 name"));
 				host.renameWorldline(worldlineId, name);
 				sendJson(res, 200, { ok: true, view: host.worldlineView() });
 				return true;
@@ -2164,9 +2164,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// 不触碰会话：流式中也允许（agent 下一轮注入的【上传文件】速览自然可见）
 			case "POST /api/upload": {
 				const rawName = (query.get("name") ?? "").trim();
-				if (!rawName) throw new Error("缺少 name（URL 编码的原始文件名）");
+				if (!rawName) throw new Error(t("缺少 name（URL 编码的原始文件名）"));
 				const data = await readBodyRaw(req, MAX_UPLOAD);
-				if (data.length === 0) throw new Error("文件内容为空");
+				if (data.length === 0) throw new Error(t("文件内容为空"));
 				const saved = saveUpload(host.cwd, rawName, data);
 				sendJson(res, 200, { ok: true, file: saved.file, bytes: saved.bytes, size: formatBytes(saved.bytes) });
 				return true;
@@ -2199,10 +2199,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					dir = DIRS.media;
 				}
 				if (!dir || !base || base.includes("/") || base.includes("\\") || base.includes("..")) {
-					throw new Error("非法路径");
+					throw new Error(t("非法路径"));
 				}
 				const abs = join(host.cwd, dir, base);
-				if (!existsSync(abs)) throw new Error("文件不存在");
+				if (!existsSync(abs)) throw new Error(t("文件不存在"));
 				unlinkSync(abs);
 				sendJson(res, 200, { ok: true });
 				return true;
@@ -2263,7 +2263,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as { storeId?: string; query?: string; topK?: number };
 				const storeId = (body.storeId ?? "narrative").trim();
 				const query = (body.query ?? "").trim();
-				if (!query) throw new Error("缺少 query");
+				if (!query) throw new Error(t("缺少 query"));
 				const hits = await memorySearch(host.cwd, host.memoryScope(), storeId, query, body.topK);
 				sendJson(res, 200, { hits });
 				return true;
@@ -2277,17 +2277,17 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				// 仅额外库；剧情库禁止导入
 				const storeId = (body.storeId ?? "external").trim() || "external";
 				const text = (body.text ?? "").trim();
-				if (!text) throw new Error("缺少 text");
+				if (!text) throw new Error(t("缺少 text"));
 				const sc = host.memoryScope();
 				const r = await memoryImportText(host.cwd, sc, storeId, text, body.fileName);
 				if (r.added > 0) {
-					const label = body.fileName?.trim() || "额外库";
+					const label = body.fileName?.trim() || t("额外库");
 					host.notify(
 						"info",
-						`向量记忆：向量化成功 · 额外库 +${r.added} 条（「${label}」· 当前对话）`,
+						t("向量记忆：向量化成功 · 额外库 +{n} 条（「{label}」· 当前对话）", { n: r.added, label }),
 					);
 				} else if (r.chunks > 0) {
-					host.notify("info", "向量记忆：内容已在库中（无新增）");
+					host.notify("info", t("向量记忆：内容已在库中（无新增）"));
 				}
 				sendJson(res, 200, { ok: true, ...r, ...getMemoryStatus(host.cwd, sc) });
 				return true;
@@ -2300,7 +2300,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					storeId?: string;
 				};
 				const text = (body.text ?? "").trim();
-				if (!text) throw new Error("缺少 text");
+				if (!text) throw new Error(t("缺少 text"));
 				const sc = host.memoryScope();
 				const r = await memoryManualAdd(host.cwd, sc, text, {
 					title: body.title,
@@ -2309,10 +2309,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (r.added > 0) {
 					host.notify(
 						"info",
-						`向量记忆：手动向量化成功 · 额外库 +${r.added} 条（当前对话）`,
+						t("向量记忆：手动向量化成功 · 额外库 +{n} 条（当前对话）", { n: r.added }),
 					);
 				} else {
-					host.notify("info", "向量记忆：内容已在库中（无新增）");
+					host.notify("info", t("向量记忆：内容已在库中（无新增）"));
 				}
 				sendJson(res, 200, { ok: true, ...r, ...getMemoryStatus(host.cwd, sc) });
 				return true;
@@ -2327,12 +2327,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "DELETE /api/memory/chunk": {
 				const storeId = (query.get("storeId") ?? "").trim();
 				const id = (query.get("id") ?? "").trim();
-				if (!storeId) throw new Error("缺少 storeId");
-				if (!id) throw new Error("缺少 id");
+				if (!storeId) throw new Error(t("缺少 storeId"));
+				if (!id) throw new Error(t("缺少 id"));
 				const sc = host.memoryScope();
 				const ok = memoryDeleteChunk(host.cwd, sc, storeId, id);
-				if (!ok) throw new Error("条目不存在或已删除");
-				host.notify("info", "向量记忆：已删除 1 条");
+				if (!ok) throw new Error(t("条目不存在或已删除"));
+				host.notify("info", t("向量记忆：已删除 1 条"));
 				sendJson(res, 200, { ok: true, ...getMemoryStatus(host.cwd, sc) });
 				return true;
 			}
@@ -2341,12 +2341,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as { storeId?: string; id?: string };
 				const storeId = (body.storeId ?? "").trim();
 				const id = (body.id ?? "").trim();
-				if (!storeId) throw new Error("缺少 storeId");
-				if (!id) throw new Error("缺少 id");
+				if (!storeId) throw new Error(t("缺少 storeId"));
+				if (!id) throw new Error(t("缺少 id"));
 				const sc = host.memoryScope();
 				const ok = memoryDeleteChunk(host.cwd, sc, storeId, id);
-				if (!ok) throw new Error("条目不存在或已删除");
-				host.notify("info", "向量记忆：已删除 1 条");
+				if (!ok) throw new Error(t("条目不存在或已删除"));
+				host.notify("info", t("向量记忆：已删除 1 条"));
 				sendJson(res, 200, { ok: true, ...getMemoryStatus(host.cwd, sc) });
 				return true;
 			}
@@ -2362,13 +2362,13 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const r = await memoryReembedScope(host.cwd, sc, {
 					storeId: body.storeId?.trim() || undefined,
 				});
-				const modeLabel = r.mode === "cloud" ? `云端(${r.model})` : "本地";
+				const modeLabel = r.mode === "cloud" ? t("云端({model})", { model: r.model }) : t("本地");
 				if (r.totalChunks === 0) {
-					host.notify("info", "向量记忆：当前对话库为空，无需重向量化");
+					host.notify("info", t("向量记忆：当前对话库为空，无需重向量化"));
 				} else {
 					host.notify(
 						"info",
-						`向量记忆：重向量化完成 · ${r.totalUpdated}/${r.totalChunks} 条 → ${modeLabel}（当前对话）`,
+						t("向量记忆：重向量化完成 · {updated}/{total} 条 → {mode}（当前对话）", { updated: r.totalUpdated, total: r.totalChunks, mode: modeLabel }),
 					);
 				}
 				sendJson(res, 200, { ok: true, ...r, ...getMemoryStatus(host.cwd, sc) });
@@ -2377,7 +2377,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "POST /api/memory/clear": {
 				const body = JSON.parse(await readBody(req)) as { storeId?: string };
 				const storeId = (body.storeId ?? "").trim();
-				if (!storeId) throw new Error("缺少 storeId");
+				if (!storeId) throw new Error(t("缺少 storeId"));
 				const sc = host.memoryScope();
 				memoryClearStore(host.cwd, sc, storeId);
 				sendJson(res, 200, { ok: true, ...getMemoryStatus(host.cwd, sc) });
@@ -2385,7 +2385,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "DELETE /api/memory/store": {
 				const storeId = (query.get("id") ?? "").trim();
-				if (!storeId) throw new Error("缺少 id");
+				if (!storeId) throw new Error(t("缺少 id"));
 				const sc = host.memoryScope();
 				memoryRemoveStore(host.cwd, sc, storeId);
 				sendJson(res, 200, { ok: true, ...getMemoryStatus(host.cwd, sc) });
@@ -2408,10 +2408,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const file = query.get("file") ?? "";
 				const base = file.startsWith(SKILLS_PREFIX) ? file.slice(SKILLS_PREFIX.length) : "";
 				if (!base || base.includes("/") || base.includes("\\") || base.includes("..") || !base.endsWith(".md")) {
-					throw new Error("非法路径");
+					throw new Error(t("非法路径"));
 				}
 				const abs = join(host.cwd, DIRS.skills, base);
-				if (!existsSync(abs)) throw new Error("技能文件不存在");
+				if (!existsSync(abs)) throw new Error(t("技能文件不存在"));
 				sendJson(res, 200, { content: readFileSync(abs, "utf8") });
 				return true;
 			}
@@ -2425,25 +2425,25 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				};
 				const name = (body.name ?? "").trim();
 				const content = (body.content ?? "").trim();
-				if (!name) throw new Error("缺少技能名");
-				if (!content) throw new Error("技能内容为空");
+				if (!name) throw new Error(t("缺少技能名"));
+				if (!content) throw new Error(t("技能内容为空"));
 				const r = saveSkill(host.cwd, {
 					name,
 					description: (body.description ?? "").trim(),
 					content,
 					disableModelInvocation: body.disableModelInvocation === true,
 				});
-				sendJson(res, 200, { ok: true, ...r, note: "system prompt 里的技能索引在下次会话重载时更新" });
+				sendJson(res, 200, { ok: true, ...r, note: t("system prompt 里的技能索引在下次会话重载时更新") });
 				return true;
 			}
 			case "DELETE /api/skills": {
 				const file = query.get("file") ?? "";
 				const base = file.startsWith(SKILLS_PREFIX) ? file.slice(SKILLS_PREFIX.length) : "";
 				if (!base || base.includes("/") || base.includes("\\") || base.includes("..") || !base.endsWith(".md")) {
-					throw new Error("非法路径");
+					throw new Error(t("非法路径"));
 				}
 				const abs = join(host.cwd, DIRS.skills, base);
-				if (!existsSync(abs)) throw new Error("技能文件不存在");
+				if (!existsSync(abs)) throw new Error(t("技能文件不存在"));
 				unlinkSync(abs);
 				sendJson(res, 200, { ok: true });
 				return true;
@@ -2476,7 +2476,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					disabled?: boolean;
 					scope?: "global" | "card";
 				};
-				if (body.scope !== undefined && body.scope !== "global" && body.scope !== "card") throw new Error("scope 须为 global 或 card。");
+				if (body.scope !== undefined && body.scope !== "global" && body.scope !== "card") throw new Error(t("scope 须为 global 或 card。"));
 				const r = saveStageSkill(host.cwd, {
 					dir: typeof body.dir === "string" && body.dir.trim() ? body.dir : undefined,
 					name: body.name ?? "",
@@ -2485,12 +2485,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					scope: body.scope,
 					...(typeof body.disabled === "boolean" ? { disabled: body.disabled } : {}),
 				});
-				sendJson(res, 200, { ok: true, dir: r.dir, note: "下一拍装载即生效（引擎每拍现读 skills/）" });
+				sendJson(res, 200, { ok: true, dir: r.dir, note: t("下一拍装载即生效（引擎每拍现读 skills/）") });
 				return true;
 			}
 			case "DELETE /api/stage-skills": {
 				const scope = query.get("scope");
-				if (scope !== null && scope !== "global" && scope !== "card") throw new Error("scope 须为 global 或 card。");
+				if (scope !== null && scope !== "global" && scope !== "card") throw new Error(t("scope 须为 global 或 card。"));
 				deleteStageSkill(host.cwd, query.get("dir") ?? "", scope ?? undefined);
 				sendJson(res, 200, { ok: true });
 				return true;
@@ -2568,7 +2568,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					persistDefault?: boolean;
 				};
 				const id = sanitizeServerId(String(body.id ?? ""));
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const on = body.enabled === true;
 				if (body.persistDefault === true) {
 					setDefaultEnabled(host.cwd, id, on);
@@ -2576,7 +2576,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				try {
 					await host.promptCommand(`/mcpset ${id} ${on ? "on" : "off"}`);
 				} catch (e) {
-					throw new Error(`切换失败：${e instanceof Error ? e.message : String(e)}`);
+					throw new Error(t("切换失败：{message}", { message: e instanceof Error ? e.message : String(e) }));
 				}
 				sendJson(res, 200, {
 					ok: true,
@@ -2591,12 +2591,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as Partial<McpServerConfig> & { id?: string };
 				const cfg = loadMcpConfig(host.cwd);
 				const name = String(body.name ?? body.id ?? "").trim();
-				if (!name && !body.command && !body.url) throw new Error("请填写名称，以及 command 或 url");
+				if (!name && !body.command && !body.url) throw new Error(t("请填写名称，以及 command 或 url"));
 				const id = body.id?.trim()
 					? sanitizeServerId(body.id)
 					: allocateServerId(host.cwd, name || body.command || "server");
-				if (!id) throw new Error("无效的服务器 id");
-				if (cfg.servers.some((s) => s.id === id)) throw new Error(`id「${id}」已在项目配置中`);
+				if (!id) throw new Error(t("无效的服务器 id"));
+				if (cfg.servers.some((s) => s.id === id)) throw new Error(t("id「{id}」已在项目配置中", { id }));
 				// 手写添加默认关（与发现一致）；调用方可显式 enabled:true
 				const server: McpServerConfig = {
 					id,
@@ -2624,7 +2624,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 						// ignore
 					}
 				}
-				host.notify("info", `MCP「${server.name}」已写入项目配置`);
+				host.notify("info", t("MCP「{name}」已写入项目配置", { name: server.name }));
 				sendJson(res, 200, {
 					ok: true,
 					server,
@@ -2635,7 +2635,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "PUT /api/mcp/servers": {
 				const body = JSON.parse(await readBody(req)) as Partial<McpServerConfig> & { id?: string };
 				const id = sanitizeServerId(String(body.id ?? ""));
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const cfg = loadMcpConfig(host.cwd);
 				const idx = cfg.servers.findIndex((s) => s.id === id);
 				// 仅项目手写可改 endpoint；发现项请用 enable 开关
@@ -2655,7 +2655,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 						});
 						return true;
 					}
-					throw new Error(`项目中无手写条目「${id}」（发现项只能开关，或先「添加」做项目覆盖）`);
+					throw new Error(t("项目中无手写条目「{id}」（发现项只能开关，或先「添加」做项目覆盖）", { id }));
 				}
 				const prev = cfg.servers[idx];
 				const server: McpServerConfig = {
@@ -2700,11 +2700,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "DELETE /api/mcp/servers": {
 				const id = sanitizeServerId(query.get("id") ?? "");
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const cfg = loadMcpConfig(host.cwd);
 				const next = cfg.servers.filter((s) => s.id !== id);
 				if (next.length === cfg.servers.length) {
-					throw new Error(`项目中无手写「${id}」（发现项不能删除，关掉即可）`);
+					throw new Error(t("项目中无手写「{id}」（发现项不能删除，关掉即可）", { id }));
 				}
 				cfg.servers = next;
 				if (cfg.defaults) {
@@ -2718,7 +2718,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				} catch {
 					// ignore
 				}
-				host.notify("info", `已删除项目 MCP「${id}」`);
+				host.notify("info", t("已删除项目 MCP「{id}」", { id }));
 				sendJson(res, 200, { ok: true, servers: getMcpHub(host.cwd).statusList() });
 				return true;
 			}
@@ -2728,7 +2728,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				let server: McpServerConfig;
 				if (body.id && !body.command && !body.url) {
 					const hit = discoverMcpCatalog(host.cwd).find((s) => s.id === sanitizeServerId(body.id!));
-					if (!hit) throw new Error(`目录中无「${body.id}」`);
+					if (!hit) throw new Error(t("目录中无「{id}」", { id: body.id }));
 					server = {
 						id: hit.id,
 						name: hit.name,
@@ -2777,11 +2777,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 						? [body]
 						: null;
 				if (!list || list.length === 0) {
-					throw new Error('格式不对：需要 liyuan-panels JSON（{"format":"liyuan-panels","version":1,"panels":[{"name","kind","content"}]}）');
+					throw new Error(t('格式不对：需要 liyuan-panels JSON（{"format":"liyuan-panels","version":1,"panels":[{"name","kind","content"}]}）'));
 				}
 				const result = await host.importPanels(list);
 				if (result.imported > 0) {
-					host.notify("info", `已导入 ${result.imported} 个面板${result.errors.length ? `（${result.errors.length} 个失败）` : ""}`);
+					host.notify("info", t("已导入 {n} 个面板{failed}", { n: result.imported, failed: result.errors.length ? t("（{n} 个失败）", { n: result.errors.length }) : "" }));
 				}
 				sendJson(res, result.imported > 0 ? 200 : 400, { ok: result.imported > 0, ...result });
 				return true;
@@ -2789,9 +2789,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// 用户从面板坞删除：同 agent panel_close（归档，出活跃列表；fs.watch + panelsync）
 			case "DELETE /api/panels": {
 				const name = (query.get("name") ?? "").trim();
-				if (!name) throw new Error("缺少 name");
+				if (!name) throw new Error(t("缺少 name"));
 				await host.closePanel(name);
-				host.notify("info", `已删除面板「${name}」`);
+				host.notify("info", t("已删除面板「{name}」", { name }));
 				sendJson(res, 200, { ok: true, name });
 				return true;
 			}
@@ -2803,11 +2803,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					kind?: unknown;
 				};
 				const name = typeof body.name === "string" ? body.name.trim() : "";
-				if (!name) throw new Error("缺少 name");
-				if (typeof body.content !== "string") throw new Error("缺少 content");
+				if (!name) throw new Error(t("缺少 name"));
+				if (typeof body.content !== "string") throw new Error(t("缺少 content"));
 				const kind = typeof body.kind === "string" && body.kind.trim() ? body.kind.trim() : undefined;
 				const saved = await host.savePanel({ name, content: body.content, kind });
-				host.notify("info", `已保存面板「${saved.name}」`);
+				host.notify("info", t("已保存面板「{name}」", { name: saved.name }));
 				sendJson(res, 200, { ok: true, ...saved });
 				return true;
 			}
@@ -2820,7 +2820,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "POST /api/sessions/rename": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { path?: string; name?: string };
-				if (!body.path || !body.name?.trim()) throw new Error("缺少 path / name");
+				if (!body.path || !body.name?.trim()) throw new Error(t("缺少 path / name"));
 				await host.renameSession(body.path, body.name);
 				sendJson(res, 200, { ok: true });
 				return true;
@@ -2828,10 +2828,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// 子项目（对话层）改名：只动 对话.json 的 name，不触会话，流式中也无冲突
 			case "POST /api/chats/rename": {
 				const body = JSON.parse(await readBody(req)) as { chatId?: string; name?: string };
-				if (!body.chatId || !body.name?.trim()) throw new Error("缺少 chatId / name");
+				if (!body.chatId || !body.name?.trim()) throw new Error(t("缺少 chatId / name"));
 				const space = resolveCardSpace(host.cwd, loadConfig(host.cwd).card);
-				if (!space) throw new Error("当前卡不在 cards/（老布局没有对话层）");
-				if (!chatIdOk(body.chatId)) throw new Error("chatId 不合法");
+				if (!space) throw new Error(t("当前卡不在 cards/（老布局没有对话层）"));
+				if (!chatIdOk(body.chatId)) throw new Error(t("chatId 不合法"));
 				renameChat(space.dir, body.chatId, body.name);
 				sendJson(res, 200, { ok: true });
 				return true;
@@ -2839,10 +2839,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// 导出子项目：整个 对话/<id>/ 打成 zip 下载
 			case "GET /api/chats/export": {
 				const chatId = (query.get("chatId") ?? "").trim();
-				if (!chatId) throw new Error("缺少 chatId");
-				if (!chatIdOk(chatId)) throw new Error("chatId 不合法");
+				if (!chatId) throw new Error(t("缺少 chatId"));
+				if (!chatIdOk(chatId)) throw new Error(t("chatId 不合法"));
 				const space = resolveCardSpace(host.cwd, loadConfig(host.cwd).card);
-				if (!space) throw new Error("当前卡不在 cards/（老布局没有对话层）");
+				if (!space) throw new Error(t("当前卡不在 cards/（老布局没有对话层）"));
 				const r = exportChatZip(space.dir, chatId);
 				writeMaybeGzip(res, 200, r.data, {
 					"content-type": "application/zip",
@@ -2853,9 +2853,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// 导入子项目包：落成新的 对话/<新id>/（不覆盖现有），会话重绑定到当前卡
 			case "POST /api/chats/import": {
 				const space = resolveCardSpace(host.cwd, loadConfig(host.cwd).card);
-				if (!space) throw new Error("当前卡不在 cards/（老布局没有对话层）");
+				if (!space) throw new Error(t("当前卡不在 cards/（老布局没有对话层）"));
 				const body = await readBodyRaw(req, MAX_UPLOAD);
-				if (!body.length) throw new Error("缺少包体（.zip）");
+				if (!body.length) throw new Error(t("缺少包体（.zip）"));
 				const r = importChatZip(space.dir, body, loadConfig(host.cwd).card);
 				sendJson(res, 200, { ok: true, ...r });
 				return true;
@@ -2863,11 +2863,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// 删除整个子项目（含全部对话与世界状态）；当前项目拒删（先切走再删）
 			case "DELETE /api/chats": {
 				const chatId = (query.get("chatId") ?? "").trim();
-				if (!chatId) throw new Error("缺少 chatId");
-				if (!chatIdOk(chatId)) throw new Error("chatId 不合法");
+				if (!chatId) throw new Error(t("缺少 chatId"));
+				if (!chatIdOk(chatId)) throw new Error(t("chatId 不合法"));
 				const space = resolveCardSpace(host.cwd, loadConfig(host.cwd).card);
-				if (!space) throw new Error("当前卡不在 cards/（老布局没有对话层）");
-				if (host.currentChatId() === chatId) throw new Error("当前项目不能删（先切到别的项目再删它）");
+				if (!space) throw new Error(t("当前卡不在 cards/（老布局没有对话层）"));
+				if (host.currentChatId() === chatId) throw new Error(t("当前项目不能删（先切到别的项目再删它）"));
 				deleteChat(space.dir, chatId);
 				sendJson(res, 200, { ok: true });
 				return true;
@@ -2876,25 +2876,25 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				// path 可给多个（面板多选删除）：一次请求、一条回执——逐条删会连甩 N 个气泡。
 				const paths = query.getAll("path").filter((p) => p.trim());
-				if (paths.length === 0) throw new Error("缺少 path");
+				if (paths.length === 0) throw new Error(t("缺少 path"));
 				const failed: string[] = [];
 				for (const p of paths) {
 					try {
 						await host.deleteSession(p);
 					} catch (e) {
-						failed.push(`${basename(p)}（${e instanceof Error ? e.message : String(e)}）`);
+						failed.push(t("{file}（{message}）", { file: basename(p), message: e instanceof Error ? e.message : String(e) }));
 					}
 				}
 				const done = paths.length - failed.length;
-				if (done === 0) throw new Error(`删除失败：${failed.join("；")}`);
-				host.notify("info", done === 1 ? "会话已删除" : `已删除 ${done} 个会话`);
-				if (failed.length > 0) host.notify("warning", `${failed.length} 个未能删除：${failed.join("；")}`);
+				if (done === 0) throw new Error(t("删除失败：{list}", { list: failed.join(t("；")) }));
+				host.notify("info", done === 1 ? t("会话已删除") : t("已删除 {n} 个会话", { n: done }));
+				if (failed.length > 0) host.notify("warning", t("{n} 个未能删除：{list}", { n: failed.length, list: failed.join(t("；")) }));
 				sendJson(res, 200, { ok: true, deleted: done, failed });
 				return true;
 			}
 			case "GET /api/sessions/export": {
 				const path = query.get("path") ?? "";
-				if (!path) throw new Error("缺少 path");
+				if (!path) throw new Error(t("缺少 path"));
 				const content = await host.readSessionFile(path);
 				res.writeHead(200, {
 					"content-type": "application/x-ndjson; charset=utf-8",
@@ -2921,7 +2921,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "PUT /api/cardfront": {
 				const body = JSON.parse(await readBody(req)) as { enabled?: boolean };
-				if (typeof body.enabled !== "boolean") throw new Error("enabled 必须是布尔值");
+				if (typeof body.enabled !== "boolean") throw new Error(t("enabled 必须是布尔值"));
 				const config = loadConfig(host.cwd);
 				writeJsonWithBackup(configPath(host.cwd), setSkinEnabled(config, config.card, body.enabled));
 				sendJson(res, 200, { ok: true, enabled: body.enabled });
@@ -2945,7 +2945,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				let img = abs;
 				if (!/\.png$/i.test(abs)) {
 					img = coverSidecarOf(abs);
-					if (!existsSync(img)) throw new Error("该卡没有立绘（PNG 卡或已设侧挂封面才有）");
+					if (!existsSync(img)) throw new Error(t("该卡没有立绘（PNG 卡或已设侧挂封面才有）"));
 				}
 				/**
 				 * 卡图＝整份卡文件（JSON 内嵌在 PNG 里），单张动辄几 MB，必须真缓存住。
@@ -2993,9 +2993,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					scenario?: string;
 				};
 				const cardName = (body.name ?? "").trim();
-				if (!cardName) throw new Error("缺少卡名");
+				if (!cardName) throw new Error(t("缺少卡名"));
 				const firstMes = (body.firstMes ?? "").trim();
-				if (!firstMes) throw new Error("缺少开场白——新会话的首条消息，卡没有它开不了场");
+				if (!firstMes) throw new Error(t("缺少开场白——新会话的首条消息，卡没有它开不了场"));
 				const made = createCardFile(host.cwd, {
 					name: cardName,
 					firstMes,
@@ -3003,36 +3003,36 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					...(body.personality?.trim() ? { personality: body.personality.trim() } : {}),
 					...(body.scenario?.trim() ? { scenario: body.scenario.trim() } : {}),
 				});
-				if (!made) throw new Error(`同名角色卡已存在：${cardName}`);
-				host.notify("info", `角色卡「${made.name}」已新建——在卡库里打开它就能开演`);
+				if (!made) throw new Error(t("同名角色卡已存在：{name}", { name: cardName }));
+				host.notify("info", t("角色卡「{name}」已新建——在卡库里打开它就能开演", { name: made.name }));
 				sendJson(res, 200, { ok: true, name: made.name, path: made.path });
 				return true;
 			}
 			case "POST /api/cards/import": {
 				const rawName = (query.get("name") ?? "").trim();
-				if (!rawName || !/\.(png|json)$/i.test(rawName)) throw new Error("文件名必须以 .png 或 .json 结尾");
+				if (!rawName || !/\.(png|json)$/i.test(rawName)) throw new Error(t("文件名必须以 .png 或 .json 结尾"));
 				const safe = rawName.replace(/[\\/:*?"<>|]/g, "-");
 				const dir = join(host.cwd, "assets", "cards");
 				mkdirSync(dir, { recursive: true });
 				const dest = join(dir, safe);
 				// 同名不覆盖：暂存里没有（导入后即升格清空），也要查已升格的卡空间
 				if (existsSync(dest) || listCardSpaces(host.cwd).some((s) => basename(s.cardFile) === safe)) {
-					throw new Error(`同名卡已存在：${safe}`);
+					throw new Error(t("同名卡已存在：{name}", { name: safe }));
 				}
 				const data = await readBodyRaw(req, MAX_UPLOAD);
-				if (data.length === 0) throw new Error("文件内容为空");
+				if (data.length === 0) throw new Error(t("文件内容为空"));
 				writeFileSync(dest, data);
 				let card: ReturnType<typeof loadCardFile>;
 				try {
 					card = loadCardFile(dest);
-					if (!card.name.trim()) throw new Error("卡名为空");
+					if (!card.name.trim()) throw new Error(t("卡名为空"));
 				} catch (e) {
 					try {
 						unlinkSync(dest); // 坏卡不留盘
 					} catch {
 						/* ignore */
 					}
-					throw new Error(`不是有效的角色卡：${e instanceof Error ? e.message : String(e)}`);
+					throw new Error(t("不是有效的角色卡：{message}", { message: e instanceof Error ? e.message : String(e) }));
 				}
 				// 落库即建卡空间：暂存 → cards/<卡名>/。升格失败留在暂存，仍是一张可用的旧布局卡。
 				let rel = `assets/cards/${safe}`;
@@ -3040,9 +3040,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					const space = createCardSpace(host.cwd, dest, card.name, { move: true });
 					rel = `${CARDS_ROOT}/${space.folder}/${basename(space.cardFile)}`;
 				} catch (err) {
-					console.error(`[liyuan] 导入卡升格失败（留在暂存）：${err instanceof Error ? err.message : String(err)}`);
+					console.error(`[liyuan] 导入卡升格失败（留在暂存）：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：服务端日志
 				}
-				host.notify("info", `已导入角色卡「${card.name}」`);
+				host.notify("info", t("已导入角色卡「{name}」", { name: card.name }));
 				sendJson(res, 200, {
 					ok: true,
 					path: rel,
@@ -3079,7 +3079,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (isCurrent) {
 					const others = listCardLibrary(host.cwd, config).filter((c) => resolvePath(host.cwd, c.path) !== abs);
 					const fallback = others.find((c) => c.path === DEFAULT_CONFIG.card) ?? others[0];
-					if (!fallback) throw new Error("这是卡库里最后一张卡，删掉就没有可用角色了：请先导入其它卡");
+					if (!fallback) throw new Error(t("这是卡库里最后一张卡，删掉就没有可用角色了：请先导入其它卡"));
 					// 兜底卡若还在导入暂存：同切换路径升格（与 selectCard 同一机制，各自幂等）
 					const fallbackPath =
 						promoteStagedCard(host.cwd, projectSessionDir(host.cwd, host.agentDir()), fallback.path) ?? fallback.path;
@@ -3153,14 +3153,19 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
 				host.notify(
 					"info",
-					`已删除角色卡「${cardName}」${wantLore && deletedLore > 0 ? `，配套世界书 ${deletedLore} 本` : ""}${wantData ? `，相关数据（会话 ${deletedSessions} 个）` : "（数据保留，重新导入可续玩）"}${switchedTo ? `；已切换到「${basename(switchedTo)}」` : ""}`,
+					t("已删除角色卡「{name}」{lore}{data}{switched}", {
+					name: cardName,
+					lore: wantLore && deletedLore > 0 ? t("，配套世界书 {n} 本", { n: deletedLore }) : "",
+					data: wantData ? t("，相关数据（会话 {n} 个）", { n: deletedSessions }) : t("（数据保留，重新导入可续玩）"),
+					switched: switchedTo ? t("；已切换到「{name}」", { name: basename(switchedTo) }) : "",
+				}),
 				);
 				sendJson(res, 200, { ok: true, deletedLore, deletedSessions, switchedTo });
 				return true;
 			}
 			case "POST /api/cards/fav": {
 				const body = JSON.parse(await readBody(req)) as { path?: string; fav?: boolean };
-				if (!body.path) throw new Error("缺少 path");
+				if (!body.path) throw new Error(t("缺少 path"));
 				const favs = new Set(loadFavs(host.cwd));
 				if (body.fav) favs.add(body.path);
 				else favs.delete(body.path);
@@ -3173,7 +3178,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "PUT /api/state": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { patch?: Record<string, unknown> };
-				if (!body.patch || typeof body.patch !== "object") throw new Error("缺少 patch");
+				if (!body.patch || typeof body.patch !== "object") throw new Error(t("缺少 patch"));
 				const r = await host.applyStatePatch(body.patch);
 				sendJson(res, 200, r);
 				return true;
@@ -3200,7 +3205,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "POST /api/personas": {
 				const body = JSON.parse(await readBody(req)) as { name?: string; persona?: string };
-				if (!body.name?.trim()) throw new Error("缺少名字");
+				if (!body.name?.trim()) throw new Error(t("缺少名字"));
 				const store = loadPersonas(host.cwd);
 				const r = createPersona(store, { name: body.name, persona: body.persona });
 				// 第一个 persona 自动成为全局默认
@@ -3211,9 +3216,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "PUT /api/personas": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { id?: string; name?: string; persona?: string };
-				if (!body.id) throw new Error("缺少 id");
+				if (!body.id) throw new Error(t("缺少 id"));
 				const store = loadPersonas(host.cwd);
-				if (!findPersona(store, body.id)) throw new Error("身份不存在");
+				if (!findPersona(store, body.id)) throw new Error(t("身份不存在"));
 				const next = updatePersona(store, body.id, { name: body.name, persona: body.persona });
 				savePersonas(host.cwd, next);
 				// 改的是当前生效身份 → 投影进 config 并重载
@@ -3229,8 +3234,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "DELETE /api/personas": {
 				const id = query.get("id") ?? "";
 				const store = loadPersonas(host.cwd);
-				if (!findPersona(store, id)) throw new Error("身份不存在");
-				if (store.personas.length <= 1) throw new Error("至少保留一个身份");
+				if (!findPersona(store, id)) throw new Error(t("身份不存在"));
+				if (store.personas.length <= 1) throw new Error(t("至少保留一个身份"));
 				savePersonas(host.cwd, deletePersona(host.cwd, store, id));
 				sendJson(res, 200, { ok: true });
 				return true;
@@ -3240,7 +3245,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as { id?: string; lockToCard?: boolean };
 				const store = loadPersonas(host.cwd);
 				const p = findPersona(store, body.id ?? "");
-				if (!p) throw new Error("身份不存在");
+				if (!p) throw new Error(t("身份不存在"));
 				const config = loadConfig(host.cwd);
 				const byCard = { ...store.byCard };
 				if (body.lockToCard === true) byCard[config.card] = p.id;
@@ -3248,38 +3253,38 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				savePersonas(host.cwd, { ...store, current: body.lockToCard ? store.current : p.id, byCard });
 				projectPersonaToConfig(host.cwd, p);
 				await host.softRefreshConfig();
-				host.notify("info", `已切换身份：${p.name}`);
+				host.notify("info", t("已切换身份：{name}", { name: p.name }));
 				sendJson(res, 200, { ok: true });
 				return true;
 			}
 			/** 上传裁剪后的头像（raw PNG/JPEG 字节，ST 式方形头像由前端裁完再传） */
 			case "POST /api/personas/avatar": {
 				const id = (query.get("id") ?? "").trim();
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const store = loadPersonas(host.cwd);
-				if (!findPersona(store, id)) throw new Error("身份不存在");
+				if (!findPersona(store, id)) throw new Error(t("身份不存在"));
 				const data = await readBodyRaw(req, 8 * 1024 * 1024); // 裁后头像上限 8MB
 				const next = savePersonaAvatar(host.cwd, store, id, data);
 				savePersonas(host.cwd, next);
 				const p = findPersona(next, id)!;
-				host.notify("info", `已更新头像：${p.name}`);
+				host.notify("info", t("已更新头像：{name}", { name: p.name }));
 				sendJson(res, 200, { ok: true, avatar: p.avatar });
 				return true;
 			}
 			case "GET /api/personas/avatar": {
 				const id = (query.get("id") ?? "").trim();
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const store = loadPersonas(host.cwd);
 				const p = findPersona(store, id);
 				if (!p?.avatar) {
 					res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
-					res.end(JSON.stringify({ error: "无头像" }));
+					res.end(JSON.stringify({ error: t("无头像") }));
 					return true;
 				}
 				const abs = resolvePath(host.cwd, p.avatar);
 				if (!existsSync(abs)) {
 					res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
-					res.end(JSON.stringify({ error: "头像文件缺失" }));
+					res.end(JSON.stringify({ error: t("头像文件缺失") }));
 					return true;
 				}
 				const buf = readFileSync(abs);
@@ -3312,9 +3317,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "DELETE /api/personas/avatar": {
 				const id = (query.get("id") ?? "").trim();
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const store = loadPersonas(host.cwd);
-				if (!findPersona(store, id)) throw new Error("身份不存在");
+				if (!findPersona(store, id)) throw new Error(t("身份不存在"));
 				const next = clearPersonaAvatar(host.cwd, store, id);
 				savePersonas(host.cwd, next);
 				sendJson(res, 200, { ok: true });
@@ -3336,8 +3341,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { file?: string; mode?: string };
 				const file = validatePresetPath(body.file ?? "");
-				if (body.mode !== "declare" && body.mode !== "process") throw new Error("mode 必须是 declare 或 process");
-				if (!existsSync(resolvePath(host.cwd, file))) throw new Error(`预设文件不存在：${file}`);
+				if (body.mode !== "declare" && body.mode !== "process") throw new Error(t("mode 必须是 declare 或 process"));
+				if (!existsSync(resolvePath(host.cwd, file))) throw new Error(t("预设文件不存在：{file}", { file }));
 				setPresetMode(host.cwd, presetNameFromFile(file), body.mode);
 				const config = loadConfig(host.cwd);
 				if (config.preset === file) await host.softRefreshConfig();
@@ -3348,7 +3353,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { file?: string | null; redeclare?: boolean };
 				// 切换（含“丢弃未保存草稿”）归 selectPresetFile，与 preset_select 工具共用
-				if (!selectPresetFile(host.cwd, body.file ?? null)) throw new Error("预设文件不存在");
+				if (!selectPresetFile(host.cwd, body.file ?? null)) throw new Error(t("预设文件不存在"));
 				// 重新装载按机制分流：声明＝丢弃声明缓存全部重问（30 秒级）；
 				// 处理＝强制重跑处理模型（分钟级，按钮在等、完成有 toast）。
 				// 处理机制的普通装载（首装缺留档）也跑一次——用户正盯着按钮。
@@ -3385,10 +3390,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					doc = loadEffectivePreset(host.cwd).doc;
 				} else {
 					const abs = resolvePath(host.cwd, file);
-					if (!existsSync(abs)) throw new Error(`预设文件不存在：${file}`);
+					if (!existsSync(abs)) throw new Error(t("预设文件不存在：{file}", { file }));
 					doc = readPresetDoc(host.cwd, file);
 				}
-				if (!doc) throw new Error(`预设文件不存在：${file}`);
+				if (!doc) throw new Error(t("预设文件不存在：{file}", { file }));
 				sendJson(res, 200, {
 					file,
 					active: isActive,
@@ -3406,9 +3411,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { file?: string; blocks?: PresetBlockPatch[] };
 				const file = validatePresetPath(body.file ?? "");
-				if (!Array.isArray(body.blocks) || body.blocks.length === 0) throw new Error("缺少 blocks");
+				if (!Array.isArray(body.blocks) || body.blocks.length === 0) throw new Error(t("缺少 blocks"));
 				const abs = resolvePath(host.cwd, file);
-				if (!existsSync(abs)) throw new Error(`预设文件不存在：${file}`);
+				if (!existsSync(abs)) throw new Error(t("预设文件不存在：{file}", { file }));
 				const config = loadConfig(host.cwd);
 				if (config.preset === file) {
 					writePresetDraft(host.cwd, { blocks: body.blocks });
@@ -3425,12 +3430,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { name?: string };
 				const name = (body.name ?? "").trim();
-				if (!name) throw new Error("缺少预设名");
+				if (!name) throw new Error(t("缺少预设名"));
 				// 另存：取当前生效原文（含未保存草稿），整份复制到新文件；名字＝新文件名
 				const current = loadEffectivePreset(host.cwd).doc?.raw ?? {};
 				const file = `${PRESETS_DIR}/${presetSlug(name)}.json`;
 				const abs = resolvePath(host.cwd, file);
-				if (existsSync(abs)) throw new Error(`同名预设文件已存在：${file}`);
+				if (existsSync(abs)) throw new Error(t("同名预设文件已存在：{file}", { file }));
 				mkdirSync(join(host.cwd, PRESETS_DIR), { recursive: true });
 				clearPresetOverride(host.cwd);
 				writeJsonWithBackup(abs, current);
@@ -3444,16 +3449,16 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as { file?: string; name?: string };
 				const file = validatePresetPath(body.file ?? "");
 				const name = (body.name ?? "").trim();
-				if (!name) throw new Error("缺少新名字");
+				if (!name) throw new Error(t("缺少新名字"));
 				const abs = resolvePath(host.cwd, file);
-				if (!existsSync(abs)) throw new Error("预设文件不存在");
+				if (!existsSync(abs)) throw new Error(t("预设文件不存在"));
 				const nextFile = `${PRESETS_DIR}/${presetSlug(name)}.json`;
 				if (nextFile === file) {
 					sendJson(res, 200, { ok: true, file });
 					return true;
 				}
 				const nextAbs = resolvePath(host.cwd, nextFile);
-				if (existsSync(nextAbs)) throw new Error(`同名预设文件已存在：${nextFile}`);
+				if (existsSync(nextAbs)) throw new Error(t("同名预设文件已存在：{file}", { file: nextFile }));
 				mkdirSync(join(host.cwd, PRESETS_DIR), { recursive: true });
 				renameSync(abs, nextAbs);
 				const config = loadConfig(host.cwd);
@@ -3468,7 +3473,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const file = validatePresetPath(query.get("file") ?? "");
 				const abs = resolvePath(host.cwd, file);
-				if (!existsSync(abs)) throw new Error("预设文件不存在");
+				if (!existsSync(abs)) throw new Error(t("预设文件不存在"));
 				unlinkSync(abs);
 				const config = loadConfig(host.cwd) as unknown as Record<string, unknown>;
 				if (config.preset === file) {
@@ -3484,7 +3489,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "POST /api/presets/import": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { name?: string; json?: Record<string, unknown> };
-				if (!body.json || typeof body.json !== "object") throw new Error("缺少预设 JSON");
+				if (!body.json || typeof body.json !== "object") throw new Error(t("缺少预设 JSON"));
 				const name = (body.name ?? "").trim() || "imported-preset";
 				const file = `${PRESETS_DIR}/${presetSlug(name)}.json`;
 				const abs = resolvePath(host.cwd, file);
@@ -3526,7 +3531,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "PUT /api/rules": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { scope?: string; content?: string };
-				if (typeof body.content !== "string") throw new Error("缺少 content");
+				if (typeof body.content !== "string") throw new Error(t("缺少 content"));
 				const config = loadConfig(host.cwd);
 				let abs: string;
 				if (body.scope === "system") {
@@ -3543,7 +3548,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					mkdirSync(cardDir, { recursive: true });
 					abs = cardRulesPath(cardDir);
 				} else {
-					throw new Error("scope 必须是 system、global、agent 或 card");
+					throw new Error(t("scope 必须是 system、global、agent 或 card"));
 				}
 				writeFileSync(abs, body.content, "utf8");
 				await host.softRefreshConfig();
@@ -3570,7 +3575,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					projection,
 					unfilteredProjection,
 					/** 被运行时判死/归属剥离的条目（判定数据可改，见世界书面板） */
-					droppedTitles: materials.protocolDrops.map((d) => `${d.title}（${d.label}）`),
+					droppedTitles: materials.protocolDrops.map((d) => t("{title}（{label}）", { title: d.title, label: d.label })),
 					path: abs,
 					cardName: config.displayName ?? basename(config.card).replace(/.(png|json)$/i, ""),
 				});
@@ -3579,7 +3584,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "PUT /api/card-agents": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { content?: string };
-				if (typeof body.content !== "string") throw new Error("缺少 content");
+				if (typeof body.content !== "string") throw new Error(t("缺少 content"));
 				const config = loadConfig(host.cwd);
 				const cardDir = dirname(resolvePath(host.cwd, config.card));
 				mkdirSync(cardDir, { recursive: true });
@@ -3605,7 +3610,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as { file?: string; overwrite?: boolean };
 				const file = validatePresetPath(body.file ?? "");
 				const abs = resolvePath(host.cwd, file);
-				if (!existsSync(abs)) throw new Error(`预设文件不存在：${file}`);
+				if (!existsSync(abs)) throw new Error(t("预设文件不存在：{file}", { file }));
 				const config = loadConfig(host.cwd);
 				const cardDir = dirname(resolvePath(host.cwd, config.card));
 				const card = loadCardFile(resolvePath(host.cwd, config.card));
@@ -3621,7 +3626,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				mkdirSync(cardDir, { recursive: true });
 				writeFileSync(target, r.markdown, "utf8");
 
-				const reportAbs = join(cardDir, ".liyuan", `转译报告-${presetSlug(presetNameFromFile(file))}.md`);
+				const reportAbs = join(cardDir, ".liyuan", `转译报告-${presetSlug(presetNameFromFile(file))}.md`); // i18n-ignore：文件名协议
 				mkdirSync(dirname(reportAbs), { recursive: true });
 				writeFileSync(reportAbs, translateReport(doc, r, file), "utf8");
 
@@ -3677,7 +3682,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const ensureBook = (p: string) => {
 					const abs = resolvePath(host.cwd, p);
 					if (!existsSync(abs) || loadLorebookFile(abs).length === 0) {
-						throw new Error(`不是有效的世界书文件：${p}`);
+						throw new Error(t("不是有效的世界书文件：{path}", { path: p }));
 					}
 				};
 				let nextPaths: string[];
@@ -3699,7 +3704,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					else cur.delete(p);
 					nextPaths = [...cur];
 				} else {
-					throw new Error("缺少 path 或 paths");
+					throw new Error(t("缺少 path 或 paths"));
 				}
 				const next = setMountedLorebooks(config, nextPaths);
 				writeJsonWithBackup(configPath(host.cwd), next);
@@ -3709,16 +3714,16 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "POST /api/lorebooks/import": {
 				const rawName = (query.get("name") ?? "").trim().replace(/\.json$/i, "");
-				if (!rawName) throw new Error("缺少 name");
+				if (!rawName) throw new Error(t("缺少 name"));
 				const safe = `${rawName.replace(/[\\/:*?"<>|]/g, "-")}.json`;
 				mkdirSync(join(host.cwd, LOREBOOKS_DIR), { recursive: true });
 				const dest = join(host.cwd, LOREBOOKS_DIR, safe);
-				if (existsSync(dest)) throw new Error(`同名世界书已存在：${safe}`);
+				if (existsSync(dest)) throw new Error(t("同名世界书已存在：{name}", { name: safe }));
 				const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
 				const entries = normalizeEntries(body.entries);
-				if (entries.length === 0) throw new Error("不是有效的世界书（entries 为空）");
+				if (entries.length === 0) throw new Error(t("不是有效的世界书（entries 为空）"));
 				writeFileSync(dest, `${JSON.stringify(body, null, "\t")}\n`, "utf8");
-				host.notify("info", `世界书「${rawName}」已导入（${entries.length} 条）`);
+				host.notify("info", t("世界书「{name}」已导入（{n} 条）", { name: rawName, n: entries.length }));
 				sendJson(res, 200, { ok: true, path: `${LOREBOOKS_DIR}/${safe}`, entryCount: entries.length });
 				return true;
 			}
@@ -3729,9 +3734,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "POST /api/lorebooks/declare": {
 				const body = JSON.parse(await readBody(req)) as { path?: string };
 				const p = (body.path ?? "").trim();
-				if (!p) throw new Error("缺少 path");
+				if (!p) throw new Error(t("缺少 path"));
 				const abs = resolvePath(host.cwd, p);
-				if (!existsSync(abs)) throw new Error(`世界书不存在：${p}`);
+				if (!existsSync(abs)) throw new Error(t("世界书不存在：{path}", { path: p }));
 				const before = readDeclaration(abs)?.entries.length ?? 0;
 				const declaration = writeDeclarationFromDetection(abs);
 				const count = declaration?.entries.length ?? 0;
@@ -3741,7 +3746,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					ok: true,
 					declared: count,
 					changed: count !== before,
-					note: count > 0 ? `已判定停用 ${count} 条（书旁 ${p}.判定.json，可改可删）` : "未发现协议条目（如曾判定过，判定文件已删——本书不过滤）",
+					note: count > 0 ? t("已判定停用 {n} 条（书旁 {path}.判定.json，可改可删）", { n: count, path: p }) : t("未发现协议条目（如曾判定过，判定文件已删——本书不过滤）"),
 				});
 				return true;
 			}
@@ -3755,10 +3760,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					first?: { title?: string; keys?: string[]; content?: string; constant?: boolean };
 				};
 				const name = (body.name ?? "").trim();
-				if (!name) throw new Error("缺少书名");
+				if (!name) throw new Error(t("缺少书名"));
 				const f = body.first;
 				const content = (f?.content ?? "").trim();
-				if (!content) throw new Error("请写第一条条目的正文——空书挂不上，也不会出现在书单里");
+				if (!content) throw new Error(t("请写第一条条目的正文——空书挂不上，也不会出现在书单里"));
 				const created = createLorebookWithEntry(
 					host.cwd,
 					loadConfig(host.cwd),
@@ -3771,10 +3776,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					},
 					{ mount: body.mount !== false },
 				);
-				if (!created) throw new Error(`同名世界书已存在：${name}`);
+				if (!created) throw new Error(t("同名世界书已存在：{name}", { name }));
 				await host.softRefreshConfig(); // 挂载变化影响注入，须重装
 				const didMount = created.mounted.includes(created.path);
-				host.notify("info", `世界书「${name}」已新建${didMount ? "并挂载" : "（未挂载）"}`);
+				host.notify("info", t("世界书「{name}」已新建{mounted}", { name, mounted: didMount ? t("并挂载") : t("（未挂载）") }));
 				sendJson(res, 200, { ok: true, path: created.path, mounted: created.mounted, didMount });
 				return true;
 			}
@@ -3783,10 +3788,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const p = (query.get("path") ?? "").replace(/\\/g, "/");
 				const base = p.startsWith(`${LOREBOOKS_DIR}/`) ? p.slice(LOREBOOKS_DIR.length + 1) : "";
 				if (!base || base.includes("/") || base.includes("..") || !base.endsWith(".json")) {
-					throw new Error("只能删除 assets/lorebooks/ 下的世界书（项目外的素材文件不动）");
+					throw new Error(t("只能删除 assets/lorebooks/ 下的世界书（项目外的素材文件不动）"));
 				}
 				const abs = join(host.cwd, LOREBOOKS_DIR, base);
-				if (!existsSync(abs)) throw new Error("文件不存在");
+				if (!existsSync(abs)) throw new Error(t("文件不存在"));
 				unlinkSync(abs);
 				const config = loadConfig(host.cwd);
 				const active = mountedLorebookPaths(config);
@@ -3805,7 +3810,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "GET /api/card/authoring": {
 				const path = currentCardPath(host.cwd, loadConfig(host.cwd));
 				const requested = query.get("card");
-				if (requested && resolvePath(host.cwd, requested) !== path) throw new Error("当前角色卡已切换");
+				if (requested && resolvePath(host.cwd, requested) !== path) throw new Error(t("当前角色卡已切换"));
 				sendJson(res, 200, inspectCardProject(host.cwd, path));
 				return true;
 			}
@@ -3813,7 +3818,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "GET /api/card/authoring/cover": {
 				const path = currentCardPath(host.cwd, loadConfig(host.cwd));
 				const cover = readCardCover(host.cwd, path);
-				if (!cover) { sendJson(res, 404, { error: "没有待换封面" }); return true; }
+				if (!cover) { sendJson(res, 404, { error: t("没有待换封面") }); return true; }
 				res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
 				res.end(cover);
 				return true;
@@ -3821,10 +3826,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// 页面回报 agent 预览：事件列表 + 是否就绪
 			case "POST /api/card/authoring/preview-report": {
 				const body = JSON.parse(await readBody(req)) as Partial<CardPreviewReport>;
-				if (typeof body.id !== "string" || !Array.isArray(body.events)) throw new Error("预览回报格式不对");
+				if (typeof body.id !== "string" || !Array.isArray(body.events)) throw new Error(t("预览回报格式不对"));
 				const events = body.events.filter((e): e is CardPreviewReport["events"][number] =>
 					!!e && typeof e === "object" && typeof (e as { level?: unknown }).level === "string" && typeof (e as { message?: unknown }).message === "string")
-					.slice(0, 200).map((e) => ({ level: e.level, source: typeof e.source === "string" ? e.source : "预览", message: e.message.slice(0, 8000) }));
+					.slice(0, 200).map((e) => ({ level: e.level, source: typeof e.source === "string" ? e.source : t("预览"), message: e.message.slice(0, 8000) }));
 				sendJson(res, 200, { accepted: host.settleCardPreview({ id: body.id, ready: body.ready === true, events }) });
 				return true;
 			}
@@ -3833,7 +3838,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
 				const config = loadConfig(host.cwd);
 				const path = currentCardPath(host.cwd, config);
-				if (typeof body.card !== "string" || resolvePath(host.cwd, body.card) !== path) throw new Error("当前角色卡已切换，请重新打开创作稿");
+				if (typeof body.card !== "string" || resolvePath(host.cwd, body.card) !== path) throw new Error(t("当前角色卡已切换，请重新打开创作稿"));
 				if (route === "POST /api/card/authoring/preview") {
 					sendJson(res, 200, previewCardProject(host.cwd, path, config.userName));
 				} else {
@@ -3900,7 +3905,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				} else if (typeof body.index === "number" && typeof body.text === "string") {
 					updateCardGreeting(abs, body.index, body.text);
 				} else {
-					throw new Error("需要 greetings[] 或 index+text");
+					throw new Error(t("需要 greetings[] 或 index+text"));
 				}
 				// 若当前选中序号越界，钳回
 				const card = loadCardFile(abs);
@@ -3926,7 +3931,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "DELETE /api/card/greetings": {
 				if (refuseWhileStreaming()) return true;
 				const index = Number.parseInt(query.get("index") ?? "", 10);
-				if (!Number.isFinite(index)) throw new Error("缺少 index");
+				if (!Number.isFinite(index)) throw new Error(t("缺少 index"));
 				const config = loadConfig(host.cwd);
 				const abs = resolvePath(host.cwd, config.card);
 				deleteCardGreeting(abs, index);
@@ -3947,7 +3952,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const body = JSON.parse(await readBody(req)) as { index?: number; delta?: number };
 				const index = typeof body.index === "number" ? body.index : Number.NaN;
 				const delta = body.delta === -1 || body.delta === 1 ? body.delta : Number.NaN;
-				if (!Number.isFinite(index) || !Number.isFinite(delta)) throw new Error("需要 index 与 delta（-1 上移 / 1 下移）");
+				if (!Number.isFinite(index) || !Number.isFinite(delta)) throw new Error(t("需要 index 与 delta（-1 上移 / 1 下移）"));
 				const config = loadConfig(host.cwd);
 				const abs = resolvePath(host.cwd, config.card);
 				const to = moveCardGreeting(abs, index, delta);
@@ -3972,15 +3977,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "POST /api/models/select": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { provider?: string; id?: string };
-				if (!body.provider || !body.id) throw new Error("缺少 provider / id");
+				if (!body.provider || !body.id) throw new Error(t("缺少 provider / id"));
 				const current = await host.selectModel(body.provider, body.id);
-				host.notify("info", `模型已切换：${current.name}`);
+				host.notify("info", t("模型已切换：{name}", { name: current.name }));
 				sendJson(res, 200, { current });
 				return true;
 			}
 			case "POST /api/models/thinking": {
 				const body = JSON.parse(await readBody(req)) as { level?: string };
-				if (!body.level) throw new Error("缺少 level");
+				if (!body.level) throw new Error(t("缺少 level"));
 				sendJson(res, 200, { current: host.setThinkingLevel(body.level) });
 				return true;
 			}
@@ -3992,7 +3997,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "POST /api/auth": {
 				const body = JSON.parse(await readBody(req)) as { provider?: string; key?: string };
-				if (!body.provider || !body.key) throw new Error("缺少 provider / key");
+				if (!body.provider || !body.key) throw new Error(t("缺少 provider / key"));
 				await host.setAuthKey(body.provider, body.key.trim());
 				await host.refreshModels();
 				sendJson(res, 200, { ok: true });
@@ -4000,7 +4005,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "DELETE /api/auth": {
 				const provider = query.get("provider");
-				if (!provider) throw new Error("缺少 provider");
+				if (!provider) throw new Error(t("缺少 provider"));
 				await host.removeAuth(provider);
 				await host.refreshModels();
 				sendJson(res, 200, { ok: true });
@@ -4014,9 +4019,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "GET /api/agent-profiles/one": {
 				const id = (query.get("id") ?? "").trim();
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const rec = loadProfile(host.cwd, id);
-				if (!rec) throw new Error(`配置不存在：${id}`);
+				if (!rec) throw new Error(t("配置不存在：{id}", { id }));
 				sendJson(res, 200, {
 					id: rec.id,
 					name: rec.name,
@@ -4039,18 +4044,18 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					try {
 						parsed = JSON.parse(body.text);
 					} catch (e) {
-						throw new Error(`JSON 无法解析：${e instanceof Error ? e.message : String(e)}`);
+						throw new Error(t("JSON 无法解析：{message}", { message: e instanceof Error ? e.message : String(e) }));
 					}
 				}
-				if (!parsed) throw new Error("缺少 config 或 text");
+				if (!parsed) throw new Error(t("缺少 config 或 text"));
 				const config = normalizeAgentConfig(parsed);
 				materializeEnvKeysInConfig(config);
 				const idRaw = (body.id ?? body.name ?? Object.keys(config.providers)[0] ?? "").trim();
-				if (!idRaw) throw new Error("请填写配置名");
+				if (!idRaw) throw new Error(t("请填写配置名"));
 				const name = (body.name ?? idRaw).trim();
 				// 生成器只写入仓库，不启用；同名则覆盖仓库副本
 				const rec = saveProfile(host.cwd, idRaw, name, config);
-				host.notify("info", `配置「${rec.name}」已存入仓库（未启用）`);
+				host.notify("info", t("配置「{name}」已存入仓库（未启用）", { name: rec.name }));
 				sendJson(res, 200, { ok: true, profile: { id: rec.id, name: rec.name, updatedAt: rec.updatedAt }, profiles: listProfiles(host.cwd) });
 				return true;
 			}
@@ -4063,15 +4068,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					text?: string;
 				};
 				const id = (body.id ?? "").trim();
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const prev = loadProfile(host.cwd, id);
-				if (!prev) throw new Error(`配置不存在：${id}`);
+				if (!prev) throw new Error(t("配置不存在：{id}", { id }));
 				let parsed: unknown = body.config ?? prev.config;
 				if (typeof body.text === "string") {
 					try {
 						parsed = JSON.parse(body.text);
 					} catch (e) {
-						throw new Error(`JSON 无法解析：${e instanceof Error ? e.message : String(e)}`);
+						throw new Error(t("JSON 无法解析：{message}", { message: e instanceof Error ? e.message : String(e) }));
 					}
 				}
 				const config = normalizeAgentConfig(parsed);
@@ -4084,7 +4089,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					await persistAgentConfig(host, config);
 					await rebindCurrentModel(host);
 				}
-				host.notify("info", `配置「${rec.name}」已更新`);
+				host.notify("info", t("配置「{name}」已更新", { name: rec.name }));
 				sendJson(res, 200, {
 					ok: true,
 					profile: { id: rec.id, name: rec.name, updatedAt: rec.updatedAt },
@@ -4099,11 +4104,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const isRefresh = route === "POST /api/agent-profiles/refresh";
 				const body = JSON.parse(await readBody(req)) as { id?: string };
 				const id = (body.id ?? "").trim();
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				if (isRefresh) {
 					const active = listProfiles(host.cwd).find((p) => p.active);
 					if (active?.id !== id) {
-						throw new Error("只能刷新「启用中」的配置；其它配置请先点启用");
+						throw new Error(t("只能刷新「启用中」的配置；其它配置请先点启用"));
 					}
 				}
 				const config = enableProfile(host.cwd, host.agentDir(), id);
@@ -4118,7 +4123,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				}
 				// 模型条目 thinkingLevel > defaultThinkingLevel → 会话当前生效
 				await rebindCurrentModel(host, config);
-				host.notify("info", isRefresh ? `已刷新配置「${id}」并重传到运行时` : `已启用配置「${id}」`);
+				host.notify("info", isRefresh ? t("已刷新配置「{id}」并重传到运行时", { id }) : t("已启用配置「{id}」", { id }));
 				sendJson(res, 200, {
 					ok: true,
 					refreshed: isRefresh,
@@ -4130,9 +4135,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 			case "DELETE /api/agent-profiles": {
 				const id = (query.get("id") ?? "").trim();
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				deleteProfile(host.cwd, id);
-				host.notify("info", `已删除配置「${id}」`);
+				host.notify("info", t("已删除配置「{id}」", { id }));
 				sendJson(res, 200, { ok: true, profiles: listProfiles(host.cwd) });
 				return true;
 			}
@@ -4141,7 +4146,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "GET /api/agent-config": {
 				const { path, exists, config, seeded } = (await loadOrSeedAgentConfig(host));
 				await rebindCurrentModel(host);
-				if (seeded) host.notify("info", "已将当前使用中的渠道收编进梨园 Agent 配置");
+				if (seeded) host.notify("info", t("已将当前使用中的渠道收编进梨园 Agent 配置"));
 				sendJson(res, 200, {
 					path,
 					exists: exists || seeded,
@@ -4159,16 +4164,16 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					try {
 						parsed = JSON.parse(body.text);
 					} catch (e) {
-						throw new Error(`JSON 无法解析：${e instanceof Error ? e.message : String(e)}`);
+						throw new Error(t("JSON 无法解析：{message}", { message: e instanceof Error ? e.message : String(e) }));
 					}
 				} else if (body.config !== undefined) {
 					parsed = body.config;
 				} else {
-					throw new Error("缺少 text 或 config");
+					throw new Error(t("缺少 text 或 config"));
 				}
 				const config = await persistAgentConfig(host, normalizeAgentConfig(parsed));
 				await rebindCurrentModel(host);
-				host.notify("info", "当前 Agent 配置已保存");
+				host.notify("info", t("当前 Agent 配置已保存"));
 				sendJson(res, 200, {
 					ok: true,
 					path: loadAgentConfig(host.cwd).path,
@@ -4197,7 +4202,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 						: body.content !== undefined
 							? body.content
 							: null;
-				if (!parsed) throw new Error("缺少 text 或 content");
+				if (!parsed) throw new Error(t("缺少 text 或 content"));
 				const config = await persistAgentConfig(host, normalizeAgentConfig(parsed));
 				sendJson(res, 200, {
 					ok: true,
@@ -4219,10 +4224,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const name = (body.name ?? "").trim();
 				const baseUrl = (body.baseUrl ?? (body.provider?.baseUrl as string | undefined) ?? "").toString().trim();
 				const api = (body.api ?? (body.provider?.api as string | undefined) ?? "").toString().trim();
-				if (!name || !baseUrl || !api) throw new Error("渠道名、Base URL、API 类型均必填（模型清单可后补）");
-				if (!/^[\w.-]+$/.test(name)) throw new Error("渠道名只允许字母数字与 . - _");
+				if (!name || !baseUrl || !api) throw new Error(t("渠道名、Base URL、API 类型均必填（模型清单可后补）"));
+				if (!/^[\w.-]+$/.test(name)) throw new Error(t("渠道名只允许字母数字与 . - _"));
 				const { config } = (await loadOrSeedAgentConfig(host));
-				if (config.providers[name]) throw new Error(`渠道已存在：${name}`);
+				if (config.providers[name]) throw new Error(t("渠道已存在：{name}", { name }));
 				const models = normalizeModels(body.models ?? body.provider?.models ?? []);
 				const fromProvider = body.provider && typeof body.provider === "object" ? { ...body.provider } : {};
 				delete fromProvider.name;
@@ -4239,13 +4244,13 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					if (models[0]) config.defaultModel = models[0].id;
 				}
 				await persistAgentConfig(host, config);
-				host.notify("info", `渠道「${name}」已保存（${models.length} 个模型）`);
+				host.notify("info", t("渠道「{name}」已保存（{n} 个模型）", { name, n: models.length }));
 				sendJson(res, 200, { ok: true, channel: publicProvider(name, entry), config });
 				return true;
 			}
 			case "GET /api/channels": {
 				const { path, config, seeded } = (await loadOrSeedAgentConfig(host));
-				if (seeded) host.notify("info", "已将当前使用中的渠道收编进梨园 Agent 配置");
+				if (seeded) host.notify("info", t("已将当前使用中的渠道收编进梨园 Agent 配置"));
 				sendJson(res, 200, {
 					path,
 					configPath: path,
@@ -4269,7 +4274,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const name = (body.name ?? "").trim();
 				const { config } = (await loadOrSeedAgentConfig(host));
 				const ch = config.providers[name];
-				if (!ch) throw new Error(`渠道不存在：${name}`);
+				if (!ch) throw new Error(t("渠道不存在：{name}", { name }));
 				if (body.patch && typeof body.patch === "object") {
 					for (const [k, v] of Object.entries(body.patch)) {
 						if (k === "name") continue;
@@ -4297,7 +4302,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "DELETE /api/channels": {
 				const name = (query.get("name") ?? "").trim();
 				const { config } = (await loadOrSeedAgentConfig(host));
-				if (!config.providers[name]) throw new Error(`渠道不存在：${name}`);
+				if (!config.providers[name]) throw new Error(t("渠道不存在：{name}", { name }));
 				delete config.providers[name];
 				if (config.defaultProvider === name) {
 					const first = Object.keys(config.providers)[0];
@@ -4305,7 +4310,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					config.defaultModel = first ? normalizeModels(config.providers[first].models)[0]?.id : undefined;
 				}
 				await persistAgentConfig(host, config);
-				host.notify("info", `渠道「${name}」已删除`);
+				host.notify("info", t("渠道「{name}」已删除", { name }));
 				sendJson(res, 200, { ok: true });
 				return true;
 			}
@@ -4316,14 +4321,14 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const name = (body.name ?? "").trim();
 				if (name) {
 					const ch = (await loadOrSeedAgentConfig(host)).config.providers[name];
-					if (!ch?.baseUrl) throw new Error(`渠道不存在或缺 Base URL：${name}`);
+					if (!ch?.baseUrl) throw new Error(t("渠道不存在或缺 Base URL：{name}", { name }));
 					baseUrl = String(ch.baseUrl);
 					if (!apiKey) {
 						const k = typeof ch.apiKey === "string" ? ch.apiKey : "";
 						if (k && k !== "placeholder") apiKey = k; // $ENV 由 probe 解析
 					}
 				}
-				if (!baseUrl) throw new Error("缺少 name 或 baseUrl");
+				if (!baseUrl) throw new Error(t("缺少 name 或 baseUrl"));
 				const result = await probeModelsEndpoint(baseUrl, apiKey);
 				sendJson(res, 200, { ok: result.ok, status: result.status, detail: result.detail });
 				return true;
@@ -4341,23 +4346,23 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const loaded = name ? (await loadOrSeedAgentConfig(host)) : null;
 				const ch = name && loaded ? loaded.config.providers[name] : undefined;
 				if (name) {
-					if (!ch?.baseUrl) throw new Error(`渠道不存在或缺 Base URL：${name}`);
+					if (!ch?.baseUrl) throw new Error(t("渠道不存在或缺 Base URL：{name}", { name }));
 					baseUrl = String(ch.baseUrl);
 					if (!apiKey) {
 						const k = typeof ch.apiKey === "string" ? ch.apiKey : "";
 						if (k && k !== "placeholder") apiKey = k;
 					}
 				}
-				if (!baseUrl) throw new Error("缺少 name 或 baseUrl");
+				if (!baseUrl) throw new Error(t("缺少 name 或 baseUrl"));
 				const result = await probeModelsEndpoint(baseUrl, apiKey);
-				if (!result.ok) throw new Error(`拉取失败：${result.detail}`);
-				if (result.ids.length === 0) throw new Error("渠道返回了空模型清单");
+				if (!result.ok) throw new Error(t("拉取失败：{detail}", { detail: result.detail }));
+				if (result.ids.length === 0) throw new Error(t("渠道返回了空模型清单"));
 				const models = result.ids.map((id) => ({ id })) as AgentModelEntry[];
 				if (body.apply && name && loaded && ch) {
 					ch.models = mergeModelEntries(normalizeModels(ch.models), models);
 					loaded.config.providers[name] = ch;
 					await persistAgentConfig(host, loaded.config);
-					host.notify("info", `「${name}」已合并 ${result.ids.length} 个模型`);
+					host.notify("info", t("「{name}」已合并 {n} 个模型", { name, n: result.ids.length }));
 					sendJson(res, 200, { ok: true, models: result.ids, channel: publicProvider(name, ch) });
 					return true;
 				}
@@ -4398,7 +4403,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					embeddedLoreCount: card.book.length,
 					greetings: [card.firstMes, ...card.alternateGreetings].map((text, index) => ({
 						index,
-						label: index === 0 ? "默认开场白" : `备选 ${index}`,
+						label: index === 0 ? t("默认开场白") : t("备选 {n}", { n: index }),
 						text,
 					})),
 				});
@@ -4418,7 +4423,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					sendJson(res, 200, { greetingIndex: index, applied: true });
 					return true;
 				}
-				host.notify("info", "开场白已选定，对下一个新会话生效");
+				host.notify("info", t("开场白已选定，对下一个新会话生效"));
 				sendJson(res, 200, { greetingIndex: index, applied: false });
 				return true;
 			}
@@ -4426,12 +4431,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { card?: string };
 				const cardPath = (body.card ?? "").trim();
-				if (!cardPath) throw new Error("缺少 card 路径");
+				if (!cardPath) throw new Error(t("缺少 card 路径"));
 				// 验卡 / 写盘 / 清随卡字段 / 身份投影 / 切会话 都在 selectCard 里（与 card_switch 工具共用）
 				const r = await selectCard(host.cwd, host, cardPath);
 				host.notify(
 					"info",
-					`${r.result === "switched" ? `已切换到「${r.name}」的最近会话` : `已为「${r.name}」新建会话`}${r.persona ? `（身份：${r.persona}）` : ""}`,
+					t("{main}{persona}", { main: r.result === "switched" ? t("已切换到「{name}」的最近会话", { name: r.name }) : t("已为「{name}」新建会话", { name: r.name }), persona: r.persona ? t("（身份：{name}）", { name: r.persona }) : "" }),
 				);
 				sendJson(res, 200, {
 					result: r.result,
@@ -4479,7 +4484,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					const one = results[0];
 					host.notify(
 						"info",
-						`已导入配套世界书「${one.name}」（${one.entryCount} 条）${one.mounted ? "并加入挂载" : ""}`,
+						t("已导入配套世界书「{name}」（{n} 条）{mounted}", { name: one.name, n: one.entryCount, mounted: one.mounted ? t("并加入挂载") : "" }),
 					);
 					sendJson(res, 200, {
 						ok: true,
@@ -4493,7 +4498,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					const mountedCount = results.filter((r) => r.mounted).length;
 					host.notify(
 						"info",
-						`已导入 ${results.length} 本配套世界书${mountedCount > 0 ? `（其中 ${mountedCount} 本加入挂载）` : ""}`,
+						t("已导入 {n} 本配套世界书{mounted}", { n: results.length, mounted: mountedCount > 0 ? t("（其中 {n} 本加入挂载）", { n: mountedCount }) : "" }),
 					);
 					sendJson(res, 200, {
 						ok: true,
@@ -4545,7 +4550,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 						lorebookPaths: mounted,
 						viewPath: null,
 						viewSource: "agent" as const,
-						viewName: "agent 补充设定",
+						viewName: t("agent 补充设定"),
 						total: entries.length,
 						entries: mapEntries(entries, "agent"),
 					});
@@ -4554,9 +4559,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
 				if (pathQ) {
 					const abs = resolvePath(host.cwd, pathQ);
-					if (!existsSync(abs)) throw new Error("世界书文件不存在");
+					if (!existsSync(abs)) throw new Error(t("世界书文件不存在"));
 					const raw = loadLorebookFile(abs);
-					if (raw.length === 0) throw new Error("不是有效的世界书文件");
+					if (raw.length === 0) throw new Error(t("不是有效的世界书文件"));
 					const entries = applyDisabledLore(raw, config.disabledLore);
 					const name =
 						(() => {
@@ -4614,7 +4619,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 						break;
 					}
 				}
-				if (!found) throw new Error("条目不存在（世界书可能已更换）");
+				if (!found) throw new Error(t("条目不存在（世界书可能已更换）"));
 				sendJson(res, 200, {
 					content: found.content,
 					comment: found.comment,
@@ -4649,8 +4654,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				};
 				const comment = (body.comment ?? body.name ?? "").trim();
 				const content = (body.content ?? body.info ?? "").trim();
-				if (!comment) throw new Error("标题不能为空");
-				if (!content) throw new Error("正文不能为空");
+				if (!comment) throw new Error(t("标题不能为空"));
+				if (!content) throw new Error(t("正文不能为空"));
 				const config = loadConfig(host.cwd);
 				const card = loadCardFile(resolvePath(host.cwd, config.card));
 				const target = (body.path ?? "").replace(/\\/g, "/").trim();
@@ -4658,12 +4663,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				let targetLabel: string;
 				if (!target || target === "agent") {
 					abs = overlayPathFor(host.cwd, card.name, config.card);
-					targetLabel = "补充设定";
+					targetLabel = t("补充设定");
 				} else {
 					// 与 DELETE 同源：只认书单里的路径
 					const known = listLorebookFiles(host.cwd, config);
 					const hit = known.find((b) => b.path === target);
-					if (!hit) throw new Error("不是已知的世界书文件");
+					if (!hit) throw new Error(t("不是已知的世界书文件"));
 					abs = resolvePath(host.cwd, target);
 					targetLabel = hit.name;
 				}
@@ -4686,7 +4691,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					return true;
 				}
 				await host.softRefreshConfig();
-				host.notify("info", `已向「${targetLabel}」新增条目：${entry.comment}`);
+				host.notify("info", t("已向「{target}」新增条目：{title}", { target: targetLabel, title: entry.comment }));
 				sendJson(res, 200, {
 					ok: true,
 					duplicate: false,
@@ -4713,7 +4718,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					content?: string;
 				};
 				const fp = (body.fingerprint ?? "").trim();
-				if (!fp) throw new Error("缺少 fingerprint");
+				if (!fp) throw new Error(t("缺少 fingerprint"));
 				const config = loadConfig(host.cwd);
 
 				const patch: LoreEntryPatch = {};
@@ -4728,15 +4733,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (typeof body.selective === "boolean") patch.selective = body.selective;
 				if (typeof body.comment === "string") patch.comment = body.comment;
 				if (typeof body.content === "string") patch.content = body.content;
-				if (Object.keys(patch).length === 0) throw new Error("没有可更新的字段");
+				if (Object.keys(patch).length === 0) throw new Error(t("没有可更新的字段"));
 
 				// 寻址（书单全部 + 补充设定）与 disabledLore 指纹迁移都在 patchLoreEntryAnywhere 里
 				const result = patchLoreEntryAnywhere(host.cwd, config, fp, patch);
-				if (!result) throw new Error("未找到可写条目（世界书可能已更换，或条目不在挂载书/补充设定中）");
+				if (!result) throw new Error(t("未找到可写条目（世界书可能已更换，或条目不在挂载书/补充设定中）"));
 
 				// constant / order / content 影响注入，重装会话
 				await host.softRefreshConfig();
-				host.notify("info", "世界书条目已保存");
+				host.notify("info", t("世界书条目已保存"));
 				sendJson(res, 200, {
 					ok: true,
 					fingerprint: result.newFingerprint,
@@ -4754,14 +4759,14 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "DELETE /api/lorebook/entry": {
 				if (refuseWhileStreaming()) return true;
 				const fp = (query.get("fp") ?? query.get("fingerprint") ?? "").trim();
-				if (!fp) throw new Error("缺少条目 fingerprint");
+				if (!fp) throw new Error(t("缺少条目 fingerprint"));
 				const pathQ = (query.get("path") ?? "").replace(/\\/g, "/").trim();
 				const config = loadConfig(host.cwd);
 				// 寻址（含 path=agent 只删补充设定）与停用清单清理都在 deleteLoreEntryAnywhere 里
 				const r = deleteLoreEntryAnywhere(host.cwd, config, fp, pathQ || undefined);
-				if (!r) throw new Error("未找到该条目（世界书可能已更换，或条目不在可写文件中）");
+				if (!r) throw new Error(t("未找到该条目（世界书可能已更换，或条目不在可写文件中）"));
 				await host.softRefreshConfig();
-				host.notify("info", `已删除条目「${r.entry.comment || r.entry.keys[0] || fp}」`);
+				host.notify("info", t("已删除条目「{title}」", { title: r.entry.comment || r.entry.keys[0] || fp }));
 				sendJson(res, 200, { ok: true, comment: r.entry.comment, path: r.path });
 				return true;
 			}
@@ -4791,7 +4796,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					...(body.fingerprint ? [body.fingerprint] : []),
 					...(Array.isArray(body.fingerprints) ? body.fingerprints.filter((f): f is string => typeof f === "string") : []),
 				];
-				if (fps.length === 0) throw new Error("缺少 fingerprint(s)");
+				if (fps.length === 0) throw new Error(t("缺少 fingerprint(s)"));
 				const config = loadConfig(host.cwd);
 				const disabled = new Set(config.disabledLore ?? []);
 				// 启用方向：光摘 disabledLore 恢复不了源文件里本就 disabled 的条目（导入即关闭是常态），
@@ -4829,15 +4834,15 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const p = (query.get("path") ?? "").replace(/\\/g, "/");
 				if (p) {
 					const abs = resolvePath(host.cwd, p);
-					if (!existsSync(abs)) throw new Error("世界书文件不存在");
+					if (!existsSync(abs)) throw new Error(t("世界书文件不存在"));
 					const entries = loadLorebookFile(abs);
-					if (entries.length === 0) throw new Error("不是有效的世界书文件");
+					if (entries.length === 0) throw new Error(t("不是有效的世界书文件"));
 					const name = p.split("/").pop()?.replace(/\.json$/i, "") ?? "lorebook";
 					sendJson(res, 200, { name, json: exportStLorebook(name, entries) });
 					return true;
 				}
 				const { entries, cardName } = loadMergedLoreWithSource(host.cwd, loadConfig(host.cwd));
-				const name = `${cardName}-梨园世界书`;
+				const name = t("{card}-梨园世界书", { card: cardName });
 				sendJson(res, 200, { name, json: exportStLorebook(name, entries) });
 				return true;
 			}
@@ -4876,11 +4881,11 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			/** 单块全文：优先草稿，否则磁盘 */
 			case "GET /api/preset/block": {
 				const id = (query.get("id") ?? "").trim();
-				if (!id) throw new Error("缺少 id");
+				if (!id) throw new Error(t("缺少 id"));
 				const { doc, path } = loadEffectivePreset(host.cwd);
-				if (!doc) throw new Error(path ? `预设文件不存在：${path}` : "当前未配置预设文件");
+				if (!doc) throw new Error(path ? t("预设文件不存在：{file}", { file: path }) : t("当前未配置预设文件"));
 				const block = presetDocBlock(doc, id);
-				if (!block) throw new Error(`找不到提示词块：${id}`);
+				if (!block) throw new Error(t("找不到提示词块：{id}", { id }));
 				sendJson(res, 200, block);
 				return true;
 			}
@@ -4896,9 +4901,9 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					blocks?: PresetBlockPatch[];
 				};
 				const config = loadConfig(host.cwd);
-				if (!config.preset) throw new Error("当前未配置预设文件");
+				if (!config.preset) throw new Error(t("当前未配置预设文件"));
 				const base = loadEffectivePreset(host.cwd).doc ?? loadDiskPreset(host.cwd)?.doc;
-				if (!base) throw new Error(`预设文件不存在：${config.preset}`);
+				if (!base) throw new Error(t("预设文件不存在：{file}", { file: config.preset }));
 				const next = patchPresetRaw(base, body);
 				const ovr = presetOverridePath(host.cwd);
 				mkdirSync(join(host.cwd, ".liyuan"), { recursive: true });
@@ -4916,10 +4921,10 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					blocks?: PresetBlockPatch[];
 				};
 				const config = loadConfig(host.cwd);
-				if (!config.preset) throw new Error("当前未配置预设文件");
+				if (!config.preset) throw new Error(t("当前未配置预设文件"));
 				const filePath = resolvePath(host.cwd, config.preset);
 				const base = loadEffectivePreset(host.cwd).doc ?? loadDiskPreset(host.cwd)?.doc;
-				if (!base) throw new Error(`预设文件不存在：${config.preset}`);
+				if (!base) throw new Error(t("预设文件不存在：{file}", { file: config.preset }));
 				const next = body.blocks || body.samplers ? patchPresetRaw(base, body) : base.raw;
 				writeJsonWithBackup(filePath, next);
 				clearPresetOverride(host.cwd);
@@ -4970,7 +4975,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				const name = `liyuan-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`;
 				const outPath = join(dir, name);
 				const r = buildBackupZip(host.cwd, host.agentDir(), outPath);
-				host.notify("info", `已在本机备份 ${r.count} 个文件（${formatBytes(r.bytes)}）`);
+				host.notify("info", t("已在本机备份 {n} 个文件（{size}）", { n: r.count, size: formatBytes(r.bytes) }));
 				sendJson(res, 200, { ok: true, filename: name, files: r.count, bytes: r.bytes });
 				return true;
 			}
@@ -4998,7 +5003,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "POST /api/backup/import": {
 				if (refuseWhileStreaming()) return true;
 				const data = await readBodyRaw(req, MAX_BACKUP_UPLOAD);
-				if (data.length === 0) throw new Error("备份文件为空");
+				if (data.length === 0) throw new Error(t("备份文件为空"));
 				// 暂存 zip 放在 restore/ 的兄弟目录——stageRestore 会先清空 restore/，写进去会被自己删掉
 				const dir = join(host.cwd, BACKUP_ROOT);
 				mkdirSync(dir, { recursive: true });
@@ -5009,7 +5014,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				// 先回包再退：前端收到 ok 后展示「重启中」
 				sendJson(res, 200, {
 					ok: true,
-					note: `恢复点已就绪（${manifest.fileCount} 个文件），正在重启应用以完成导入…`,
+					note: t("恢复点已就绪（{n} 个文件），正在重启应用以完成导入…", { n: manifest.fileCount }),
 				});
 				host.updateRestart();
 				return true;
@@ -5019,7 +5024,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			case "POST /api/import": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { content?: string; tag?: string };
-				if (!body.content?.trim()) throw new Error("聊天记录内容为空");
+				if (!body.content?.trim()) throw new Error(t("聊天记录内容为空"));
 				const dir = join(host.cwd, DIRS.cache, "imports");
 				mkdirSync(dir, { recursive: true });
 				const rel = join(DIRS.cache, "imports", `import-${Date.now()}.jsonl`);
@@ -5032,7 +5037,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			}
 
 			default:
-				sendJson(res, 404, { error: `未知接口：${route}` });
+				sendJson(res, 404, { error: t("未知接口：{route}", { route }) });
 				return true;
 		}
 	} catch (err) {

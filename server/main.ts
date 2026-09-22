@@ -147,6 +147,7 @@ import {
 import { chapterTitle, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, storyDirectory, type Checkpoint } from "../src/stage/story-history.ts";
 import { sameCardPath } from "../src/paths.ts";
 import { readSessionCardInfo } from "../src/session-scan.ts";
+import { t } from "../src/i18n/index.ts";
 import { cardDirOfChatDir, cardFileIn, chatDataPath, chatDirOfSessionDir, createChat, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
 import { chatSessionsOf, chatsOfCard, ensureStorySessionDir, newChatSessionDir, storySessionTarget } from "../src/story-guide.ts";
 import { syncCardMemory } from "../src/card-memory.ts";
@@ -189,12 +190,12 @@ const newSessionFlag = process.argv.includes("--new");
 
 // 数据目录/配置文件：.rp-* → .liyuan-*，rp.config.json → liyuan.config.json
 for (const line of migrateLegacyLayout(cwd)) {
-	console.log(`[liyuan] 迁移 ${line}`);
+	console.log(`[liyuan] 迁移 ${line}`); // i18n-ignore：终端日志
 }
 
 // 待恢复备份（导入备份后重启触发）：在装载任何会话/素材之前精确铺回数据
 for (const line of applyPendingBackupRestore(cwd, agentHome)) {
-	console.log(`[liyuan] 恢复 ${line}`);
+	console.log(`[liyuan] 恢复 ${line}`); // i18n-ignore：终端日志
 }
 
 // 卡＝工作空间一次性迁移（刀4 尾巴）：旧扁平布局 → cards/ 两层布局。
@@ -206,12 +207,12 @@ if (!alreadyMigrated(cwd)) {
 		try {
 			const snap = join(cwd, BACKUP_ROOT, `pre-cards-migration-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`);
 			const { count } = buildBackupZip(cwd, agentHome, snap);
-			console.log(`[liyuan] 迁移前快照：${count} 项 → ${basename(snap)}`);
+			console.log(`[liyuan] 迁移前快照：${count} 项 → ${basename(snap)}`); // i18n-ignore：终端日志
 		} catch (err) {
-			console.error(`[liyuan] 迁移前快照失败，跳过迁移：${err instanceof Error ? err.message : String(err)}`);
+			console.error(`[liyuan] 迁移前快照失败，跳过迁移：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 		}
 		if (!alreadyMigrated(cwd)) {
-			for (const line of applyCardMigration(cwd, plan)) console.log(`[liyuan] 卡迁移 ${line}`);
+			for (const line of applyCardMigration(cwd, plan)) console.log(`[liyuan] 卡迁移 ${line}`); // i18n-ignore：终端日志
 		}
 	}
 }
@@ -225,9 +226,9 @@ if (!alreadyMigrated(cwd)) {
 	if (cur) {
 		try {
 			const promoted = promoteStagedCard(cwd, projectSessionDir(cwd, agentHome), cur);
-			if (promoted) console.log(`[liyuan] 卡迁移 当前卡升格：${cur} → ${promoted}`);
+			if (promoted) console.log(`[liyuan] 卡迁移 当前卡升格：${cur} → ${promoted}`); // i18n-ignore：终端日志
 		} catch (err) {
-			console.error(`[liyuan] 当前卡升格失败：${err instanceof Error ? err.message : String(err)}`);
+			console.error(`[liyuan] 当前卡升格失败：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 		}
 	}
 }
@@ -239,11 +240,11 @@ if (!alreadyMigrated(cwd)) {
 		const strays = planOrphanSessions(cwd, projectSessionDir(cwd, agentHome));
 		if (strays.length > 0) {
 			for (const line of applyCardMigration(cwd, { cards: [], sessions: strays, skipped: [] })) {
-				console.log(`[liyuan] 卡迁移 ${line}`);
+				console.log(`[liyuan] 卡迁移 ${line}`); // i18n-ignore：终端日志
 			}
 		}
 	} catch (err) {
-		console.error(`[liyuan] 收散会话失败：${err instanceof Error ? err.message : String(err)}`);
+		console.error(`[liyuan] 收散会话失败：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 	}
 }
 
@@ -267,14 +268,14 @@ try {
 
 // ---------- 显示名（角色/用户）：直接读配置与卡（领域层，合法） ----------
 
-const names: WireNames = { charName: "角色", userName: "用户" };
+const names: WireNames = { charName: "角色", userName: "用户" }; // i18n-ignore：模块顶层不翻，refreshNamesFromConfig 启动即覆盖
 /** 当前卡标识（liyuan.config.json 的 card 路径原文，会话过滤用） */
 let cardPath = "";
 
 /** 从项目配置刷新显示名与当前卡（启动时与每次配置写入/会话重载后调用） */
 const refreshNamesFromConfig = () => {
-	names.charName = "角色";
-	names.userName = "用户";
+	names.charName = t("角色");
+	names.userName = t("用户");
 	cardPath = "";
 	try {
 		const config = JSON.parse(readFileSync(resolveConfigPath(cwd), "utf8")) as {
@@ -291,7 +292,7 @@ const refreshNamesFromConfig = () => {
 		// 显示名覆盖（仅显示层；{{char}} 宏与提示词仍用卡名）
 		if (config.displayName) names.charName = config.displayName;
 	} catch (err) {
-		console.error(`[liyuan] 读取角色显示名失败（用占位名继续）：${err instanceof Error ? err.message : String(err)}`);
+		console.error(`[liyuan] 读取角色显示名失败（用占位名继续）：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 	}
 };
 refreshNamesFromConfig();
@@ -459,10 +460,10 @@ const runUpdateCheck = async (manual: boolean): Promise<void> => {
 
 /** 下载并暂存（进度限流 500ms 一帧）；完成后 ready，失败回 available 带 error */
 const startUpdateDownload = async (mirror?: string): Promise<void> => {
-	if (IS_DOCKER) throw new Error("Docker 部署请到宿主机执行 git pull && docker compose up -d --build");
-	if (IS_DESKTOP) throw new Error("桌面版请到 GitHub Releases 下载新版安装包");
-	if (updateBusy) throw new Error("已在下载中");
-	if (!updateCheck?.hasUpdate || !updateCheck.asset) throw new Error("没有可下载的更新");
+	if (IS_DOCKER) throw new Error(t("Docker 部署请到宿主机执行 git pull && docker compose up -d --build"));
+	if (IS_DESKTOP) throw new Error(t("桌面版请到 GitHub Releases 下载新版安装包"));
+	if (updateBusy) throw new Error(t("已在下载中"));
+	if (!updateCheck?.hasUpdate || !updateCheck.asset) throw new Error(t("没有可下载的更新"));
 	updateBusy = true;
 	const base = updateState;
 	updateState = { ...base, phase: "downloading", received: 0, total: updateCheck.asset.size, error: undefined };
@@ -493,7 +494,7 @@ const startUpdateDownload = async (mirror?: string): Promise<void> => {
 		const msg = err instanceof Error ? err.message : String(err);
 		updateState = { ...base, phase: "available", error: msg };
 		pushUpdate();
-		throw new Error(`下载更新失败：${msg}`);
+		throw new Error(t("下载更新失败：{msg}", { msg }));
 	} finally {
 		updateBusy = false;
 	}
@@ -818,7 +819,7 @@ const branchMessages = (): unknown[] => {
 			out.push({ role: "custom", customType: e.customType, content: e.content, display: e.display, details: e.details });
 		} else if (e.type === "custom" && e.customType === "rp-draft-revision") {
 			const revision = e.data as { requestId?: string; version?: number } | undefined;
-			if (revision?.requestId) out.push({ role: "custom", customType: "rp-draft-revision", content: `上一拍已修订 · v${revision.version}`, display: true });
+			if (revision?.requestId) out.push({ role: "custom", customType: "rp-draft-revision", content: t("上一拍已修订 · v{v}", { v: revision.version }), display: true });
 		} else if (e.type === "custom" && e.customType === STORY_CHECKPOINT_TYPE) {
 			// agent 模式：检查点在讨论区显示为「本轮改动」卡片（真相在 历史/检查点.jsonl，这只是树上的留痕）
 			const cp = e.data as Omit<Checkpoint, "files"> | undefined;
@@ -925,7 +926,7 @@ const hostSwitchGreeting = async (rawArg: string): Promise<void> => {
 		/* default */
 	}
 	if (!cfg.card) {
-		broadcast({ type: "notify", level: "error", text: "未配置角色卡" });
+		broadcast({ type: "notify", level: "error", text: t("未配置角色卡") });
 		return;
 	}
 	let card;
@@ -936,7 +937,7 @@ const hostSwitchGreeting = async (rawArg: string): Promise<void> => {
 		broadcast({
 			type: "notify",
 			level: "error",
-			text: `角色卡装载失败：${err instanceof Error ? err.message : String(err)}`,
+			text: t("角色卡装载失败：{msg}", { msg: err instanceof Error ? err.message : String(err) }),
 		});
 		return;
 	}
@@ -947,7 +948,7 @@ const hostSwitchGreeting = async (rawArg: string): Promise<void> => {
 	}));
 	const nonempty = fullPool.filter((x) => x.t.trim());
 	if (nonempty.length === 0) {
-		broadcast({ type: "notify", level: "error", text: "本卡没有开场白" });
+		broadcast({ type: "notify", level: "error", text: t("本卡没有开场白") });
 		return;
 	}
 	const raw = rawArg.trim().toLowerCase();
@@ -959,7 +960,7 @@ const hostSwitchGreeting = async (rawArg: string): Promise<void> => {
 	else {
 		const n = Number.parseInt(raw, 10);
 		if (!Number.isFinite(n)) {
-			broadcast({ type: "notify", level: "error", text: "用法：/greeting [序号|next|prev]" });
+			broadcast({ type: "notify", level: "error", text: t("用法：/greeting [序号|next|prev]") });
 			return;
 		}
 		// 数字按「全量下标」理解（与配置 / 卡面板一致）
@@ -979,7 +980,7 @@ const hostSwitchGreeting = async (rawArg: string): Promise<void> => {
 		broadcast({
 			type: "notify",
 			level: "error",
-			text: `写入配置失败：${err instanceof Error ? err.message : String(err)}`,
+			text: t("写入配置失败：{msg}", { msg: err instanceof Error ? err.message : String(err) }),
 		});
 		return;
 	}
@@ -997,7 +998,7 @@ const hostSwitchGreeting = async (rawArg: string): Promise<void> => {
 		broadcast({
 			type: "notify",
 			level: "info",
-			text: `已选定开场白 ${displayOrdinal}/${displayTotal}，当前会话已开聊，下次新会话生效。`,
+			text: t("已选定开场白 {i}/{n}，当前会话已开聊，下次新会话生效。", { i: displayOrdinal, n: displayTotal }),
 		});
 		return;
 	}
@@ -1024,7 +1025,7 @@ const hostSwitchGreeting = async (rawArg: string): Promise<void> => {
 		details: { rpGreeting: { index: pos, total: displayTotal, fullIndex: idx } },
 	});
 	resyncAll();
-	broadcast({ type: "notify", level: "info", text: `已切换开场白 ${displayOrdinal}/${displayTotal}` });
+	broadcast({ type: "notify", level: "info", text: t("已切换开场白 {i}/{n}", { i: displayOrdinal, n: displayTotal }) });
 };
 
 /**
@@ -1038,7 +1039,7 @@ const hostSwitchGreeting = async (rawArg: string): Promise<void> => {
 const regenerateSwipe = async (): Promise<void> => {
 	const userId = lastStoryUserId();
 	if (!userId) {
-		broadcast({ type: "notify", level: "error", text: "没有可重新生成的剧情轮（需要先有一条用户输入）" });
+		broadcast({ type: "notify", level: "error", text: t("没有可重新生成的剧情轮（需要先有一条用户输入）") });
 		return;
 	}
 	const sm = session.sessionManager;
@@ -1068,7 +1069,7 @@ const handleSwipe = async (dir: "prev" | "next" | "new"): Promise<void> => {
 	}
 	const userId = lastStoryUserId();
 	if (!userId) {
-		broadcast({ type: "notify", level: "error", text: "没有可切换的回复变体" });
+		broadcast({ type: "notify", level: "error", text: t("没有可切换的回复变体") });
 		return;
 	}
 	const entries = swipeEntriesFromSession();
@@ -1077,14 +1078,14 @@ const handleSwipe = async (dir: "prev" | "next" | "new"): Promise<void> => {
 	if (variants.length === 0) {
 		// 尚无回复：next/new 等价生成
 		if (dir === "next") await regenerateSwipe();
-		else broadcast({ type: "notify", level: "info", text: "还没有角色回复可切换" });
+		else broadcast({ type: "notify", level: "info", text: t("还没有角色回复可切换") });
 		return;
 	}
 	const meta = swipeMetaForUser(entries, userId, leafId);
 	const idx = meta?.index ?? 0;
 	if (dir === "prev") {
 		if (idx <= 0) {
-			broadcast({ type: "notify", level: "info", text: "已经是第一条变体" });
+			broadcast({ type: "notify", level: "info", text: t("已经是第一条变体") });
 			return;
 		}
 		const target = variants[idx - 1].leafId;
@@ -1191,7 +1192,7 @@ const uiContext = {
 	},
 	getAllThemes: () => [],
 	getTheme: () => undefined,
-	setTheme: () => ({ success: false, error: "Web 模式不支持主题切换" }),
+	setTheme: () => ({ success: false, error: "Web 模式不支持主题切换" }), // i18n-ignore：pi TUI 接口桩，界面不显示
 	getToolsExpanded: () => false,
 	setToolsExpanded: noop,
 };
@@ -1212,22 +1213,22 @@ const sideEntryOf = (): { model: StageModelLike; thinking?: string; label?: stri
 	const warn = (why: string): undefined => {
 		if (warnedSideEntry !== tag + why) {
 			warnedSideEntry = tag + why;
-			console.error(`[stage-side] 旁路条目 ${tag} ${why}，本次回落跟随剧情模型`);
+			console.error(`[stage-side] 旁路条目 ${tag} ${why}，本次回落跟随剧情模型`); // i18n-ignore：终端日志
 		}
 		return undefined;
 	};
 	try {
 		const agent = loadAgentConfig(cwd).config;
 		const entry = findModelEntry(agent.providers?.[sel.provider]?.models, sel.entry);
-		if (!entry) return warn("不在连接配置里");
+		if (!entry) return warn("不在连接配置里"); // i18n-ignore：终端日志
 		const m = session.modelRuntime.getModel(sel.provider, entry.id);
-		if (!m) return warn(`模型 ${entry.id} 不在可用清单`);
-		if (!session.modelRuntime.hasConfiguredAuth(m.provider)) return warn("缺少 API key");
+		if (!m) return warn(`模型 ${entry.id} 不在可用清单`); // i18n-ignore：终端日志
+		if (!session.modelRuntime.hasConfiguredAuth(m.provider)) return warn("缺少 API key"); // i18n-ignore：终端日志
 		if (warnedSideEntry) warnedSideEntry = "";
 		const thinking = thinkingLevelOfEntry(agent, sel.provider, sel.entry);
 		return { model: m as never, ...(thinking ? { thinking } : {}), label: sel.entry };
 	} catch (err) {
-		return warn(`解析失败（${err instanceof Error ? err.message : String(err)}）`);
+		return warn(`解析失败（${err instanceof Error ? err.message : String(err)}）`); // i18n-ignore：终端日志
 	}
 };
 
@@ -1242,7 +1243,7 @@ const sideTextOnce = async (
 	userText: string,
 	opts?: { maxTokens?: number; reasoning?: string; signal?: AbortSignal },
 ): Promise<string | { error: string }> => {
-	if (!model) return { error: "无可用模型" };
+	if (!model) return { error: t("无可用模型") };
 	try {
 		const s = session.modelRuntime.streamSimple(
 			model as never,
@@ -1254,13 +1255,13 @@ const sideTextOnce = async (
 			if (e.type === "done") final = e.message ?? null;
 			else if (e.type === "error") return { error: e.error?.errorMessage || `stopReason=${e.error?.stopReason ?? "?"}` };
 		}
-		if (!final) return { error: "流未产出最终消息" };
+		if (!final) return { error: t("流未产出最终消息") };
 		const text = final.content
 			.filter((c) => c.type === "text")
 			.map((c) => c.text ?? "")
 			.join("")
 			.trim();
-		return text || { error: "最终消息无文本" };
+		return text || { error: t("最终消息无文本") };
 	} catch (err) {
 		return { error: err instanceof Error ? err.message : String(err) };
 	}
@@ -1304,19 +1305,21 @@ const syncCardMemoryOnce = async (cardDir: string) => {
 			},
 		);
 		if (r.failed.length > 0 || r.merged === "failed") {
-			console.error(`[card-memory] 同步未完成：复盘失败 ${r.failed.length} 局、合并 ${r.merged}`);
+			console.error(`[card-memory] 同步未完成：复盘失败 ${r.failed.length} 局、合并 ${r.merged}`); // i18n-ignore：终端日志
 		} else if (r.recapped.length + r.forgotten.length > 0) {
-			console.log(`[card-memory] 同步完成：复盘 ${r.recapped.length} 局、遗忘 ${r.forgotten.length} 局`);
+			console.log(`[card-memory] 同步完成：复盘 ${r.recapped.length} 局、遗忘 ${r.forgotten.length} 局`); // i18n-ignore：终端日志
 			// 活动条只在拍内可见（拍外来的会被下一拍的 resetActs 清掉），完成时另给一条
 			// notify（与「已钉档」同一通道）——只在真动了记忆时出声，无变化保持安静。
 			broadcast({
 				type: "notify",
 				level: "info",
-				text: `记忆已更新：复盘 ${r.recapped.length} 局${r.forgotten.length ? `、遗忘 ${r.forgotten.length} 局` : ""}`,
+				text: r.forgotten.length
+					? t("记忆已更新：复盘 {recapped} 局、遗忘 {forgotten} 局", { recapped: r.recapped.length, forgotten: r.forgotten.length })
+					: t("记忆已更新：复盘 {recapped} 局", { recapped: r.recapped.length }),
 			});
 		}
 	} catch (err) {
-		console.error(`[card-memory] 同步异常：${err instanceof Error ? err.message : String(err)}`);
+		console.error(`[card-memory] 同步异常：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 	}
 };
 
@@ -1340,7 +1343,7 @@ const syncMemoryForSession = () => {
 		}
 		runCardMemorySync(cardDir);
 	} catch (err) {
-		console.error(`[card-memory] 触发同步异常：${err instanceof Error ? err.message : String(err)}`);
+		console.error(`[card-memory] 触发同步异常：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 	}
 };
 
@@ -1368,7 +1371,7 @@ const bindSession = async () => {
 			reload: () => session.reload(),
 		} as never,
 		onError: (err: { extensionPath: string; event: string; error: string }) => {
-			broadcast({ type: "error", text: `扩展错误（${err.event}）：${err.error}` });
+			broadcast({ type: "error", text: t("扩展错误（{event}）：{error}", { event: err.event, error: err.error }) });
 		},
 	});
 
@@ -1422,14 +1425,14 @@ const bindSession = async () => {
 								broadcast({
 									type: "notify",
 									level: "warning",
-									text: `向量记忆：入库失败 · ${mem.error}`,
+									text: t("向量记忆：入库失败 · {error}", { error: mem.error }),
 								});
 							} else if (mem.stored) {
-								const how = mem.merged ? "合并入已有条目" : "新开条目";
+								const how = mem.merged ? t("合并入已有条目") : t("新开条目");
 								broadcast({
 									type: "notify",
 									level: "info",
-									text: `向量记忆：剧情库${how}（第 ${mem.counter} 轮 · 当前对话）`,
+									text: t("向量记忆：剧情库{how}（第 {n} 轮 · 当前对话）", { how, n: mem.counter }),
 								});
 							}
 						} catch (e) {
@@ -1483,7 +1486,7 @@ const bindSession = async () => {
 				resyncAll();
 				break;
 			case "auto_retry_start":
-				broadcast({ type: "notify", level: "warning", text: `模型请求失败，自动重试 ${event.attempt}/${event.maxAttempts}…` });
+				broadcast({ type: "notify", level: "warning", text: t("模型请求失败，自动重试 {attempt}/{max}…", { attempt: event.attempt, max: event.maxAttempts }) });
 				break;
 			default:
 				break;
@@ -1545,19 +1548,19 @@ const restHost: RestHost = {
 	}),
 	async selectModel(provider, id) {
 		const m = session.modelRuntime.getModel(provider, id);
-		if (!m) throw new Error(`模型不存在：${provider}/${id}`);
+		if (!m) throw new Error(t("模型不存在：{model}", { model: `${provider}/${id}` }));
 		await session.setModel(m);
 		const current = currentModelInfo();
-		if (!current) throw new Error("模型切换后状态异常");
+		if (!current) throw new Error(t("模型切换后状态异常"));
 		return current;
 	},
 	setThinkingLevel(level) {
 		// 各模型档位名不同（off/low/high/xhigh/max…），由用户按模型文档自填英文，不做固定白名单
 		const lv = level.trim();
-		if (!lv) throw new Error("思考档位不能为空");
+		if (!lv) throw new Error(t("思考档位不能为空"));
 		session.setThinkingLevel(lv as never);
 		const current = currentModelInfo();
-		if (!current) throw new Error("会话未就绪");
+		if (!current) throw new Error(t("会话未就绪"));
 		return current;
 	},
 	authProviders() {
@@ -1752,12 +1755,12 @@ const restHost: RestHost = {
 	// 用户手改面板源码：同 import 写路径，但要求面板已存在且未归档
 	async savePanel(input) {
 		const name = String(input?.name ?? "").trim();
-		if (!name) throw new Error("面板名不能为空");
+		if (!name) throw new Error(t("面板名不能为空"));
 		const file = panelsFileOf();
 		const panels = loadPanels(file);
 		const prev = panels[name];
-		if (!prev) throw new Error(`没有名为「${name}」的面板`);
-		if (prev.archived) throw new Error(`面板「${name}」已归档，请先由 agent 同名写入重开`);
+		if (!prev) throw new Error(t("没有名为「{name}」的面板", { name }));
+		if (prev.archived) throw new Error(t("面板「{name}」已归档，请先由 agent 同名写入重开", { name }));
 		const kind = typeof input.kind === "string" && input.kind.trim() ? input.kind.trim() : prev.kind;
 		const r = writePanel(panels, { name, kind, content: String(input.content ?? "") });
 		if (!r.ok) throw new Error(r.error);
@@ -1792,20 +1795,20 @@ const restHost: RestHost = {
 	},
 	storyDiff(checkpointId) {
 		const chatDir = agentChatDir();
-		if (!chatDir) throw new Error("当前不是 agent 子项目");
+		if (!chatDir) throw new Error(t("当前不是 agent 子项目"));
 		return { files: new StoryHistory(chatDir).diff(checkpointId) };
 	},
 	async editStoryFile(input) {
 		const chatDir = agentChatDir();
-		if (!chatDir) throw new Error("当前不是 agent 子项目");
-		if (stage.isStreaming) throw new Error("模型正在写，稍后再改");
-		if (!STORY_FILE_NAME_RE.test(input.name) || input.name.startsWith(".")) throw new Error("文件名须是稿子目录下的 .md 文件");
+		if (!chatDir) throw new Error(t("当前不是 agent 子项目"));
+		if (stage.isStreaming) throw new Error(t("模型正在写，稍后再改"));
+		if (!STORY_FILE_NAME_RE.test(input.name) || input.name.startsWith(".")) throw new Error(t("文件名须是稿子目录下的 .md 文件"));
 		const dir = storyDirectory(chatDir);
 		mkdirSync(dir, { recursive: true });
 		const abs = join(dir, input.name);
 		if (input.text === null) { if (existsSync(abs)) rmSync(abs); }
 		else writeFileSync(abs, input.text, "utf8");
-		const cp = new StoryHistory(chatDir).commit({ author: "user", message: input.text === null ? `删除 ${input.name}` : `手改 ${input.name}` });
+		const cp = new StoryHistory(chatDir).commit({ author: "user", message: input.text === null ? t("删除 {name}", { name: input.name }) : t("手改 {name}", { name: input.name }) });
 		if (cp) {
 			const { files: _files, ...lite } = cp;
 			session.sessionManager.appendCustomEntry(STORY_CHECKPOINT_TYPE, lite);
@@ -1838,13 +1841,13 @@ const restHost: RestHost = {
 		const file = worldlineFileOf();
 		const meta = softDeleteSave(loadWorldlineMeta(file), saveId);
 		saveWorldlineMeta(file, meta);
-		broadcast({ type: "notify", level: "info", text: "已删除存档节点（软删除，会话树原文保留）" });
+		broadcast({ type: "notify", level: "info", text: t("已删除存档节点（软删除，会话树原文保留）") });
 	},
 	renameWorldline(worldlineId, name) {
 		const file = worldlineFileOf();
 		const meta = renameWorldlineMeta(loadWorldlineMeta(file), worldlineId, name);
 		saveWorldlineMeta(file, meta);
-		broadcast({ type: "notify", level: "info", text: `世界线已改名「${name.trim()}」` });
+		broadcast({ type: "notify", level: "info", text: t("世界线已改名「{name}」", { name: name.trim() }) });
 	},
 	// ---- 会话管理（PLAN-PANELS §2.1）：面板的重命名/删除/导出/全文搜索 ----
 	sessions: () => sessionInfos(),
@@ -1856,7 +1859,7 @@ const restHost: RestHost = {
 	async renameSession(path, name) {
 		await assertListedSession(path);
 		const clean = name.replace(/[\r\n]+/g, " ").trim();
-		if (!clean) throw new Error("名字不能为空");
+		if (!clean) throw new Error(t("名字不能为空"));
 		if (session.sessionFile === path) {
 			session.sessionManager.appendSessionInfo(clean);
 			return;
@@ -1888,7 +1891,7 @@ const restHost: RestHost = {
 	},
 	async deleteSession(path) {
 		await assertListedSession(path);
-		if (session.sessionFile === path) throw new Error("不能删除当前打开的会话（先切到其他会话再删）");
+		if (session.sessionFile === path) throw new Error(t("不能删除当前打开的会话（先切到其他会话再删）"));
 		unlinkSync(path);
 		cardCache.delete(path);
 		previewCache.delete(path);
@@ -1984,7 +1987,7 @@ const restHost: RestHost = {
 		session.sessionManager.appendMessage({
 			role: "custom",
 			customType: "rp-audio",
-			content: cap ? `〔配音〕${cap}` : "〔配音〕",
+			content: cap ? `〔配音〕${cap}` : "〔配音〕", // i18n-ignore：短标记进模型上下文，送模文案不翻
 			display: true,
 			details: { rpAudio: { src: saved.src, ...(cap ? { caption: cap } : {}) } },
 			timestamp: Date.now(),
@@ -2007,7 +2010,7 @@ const restHost: RestHost = {
 	updateRestart: () => {
 		// 启动脚本循环重拉（LIYUAN_SUPERVISED=1 时 exit 87 = 请求重启）；
 		// 直跑 node 的开发场景没有监护，退了就是退了（下次手动启动时应用）。
-		console.log("[liyuan] 收到重启应用更新请求，退出进程…");
+		console.log("[liyuan] 收到重启应用更新请求，退出进程…"); // i18n-ignore：终端日志
 		setTimeout(() => process.exit(87), 300);
 	},
 	/** 向量记忆：绑定当前角色卡 + 当前对话会话 */
@@ -2039,22 +2042,28 @@ const syncPresetNow = (reprocess = false): Promise<PresetSyncResult | undefined>
 				{ reprocess },
 			);
 			if (lore.state === "written") {
-				broadcast({ type: "notify", level: "info", text: `卡档案已同步世界书常驻条目：${lore.entries} 条` });
+				broadcast({ type: "notify", level: "info", text: t("卡档案已同步世界书常驻条目：{n} 条", { n: lore.entries }) });
 			}
 			if (r.mode === "process") {
 				if (r.processError) {
 					broadcast({
 						type: "notify",
 						level: "error",
-						text: `预设「${r.preset}」处理失败（产物暂缺，原因已落档 assets/presets/.liyuan/）：${r.processError}`,
+						text: t("预设「{preset}」处理失败（产物暂缺，原因已落档 assets/presets/.liyuan/）：{error}", { preset: r.preset, error: r.processError }),
 					});
 				} else if (r.needProcess) {
-					broadcast({ type: "notify", level: "info", text: `预设「${r.preset}」尚未处理——到预设库点「重新装载」生成产物（要几分钟）` });
+					broadcast({ type: "notify", level: "info", text: t("预设「{preset}」尚未处理——到预设库点「重新装载」生成产物（要几分钟）", { preset: r.preset }) });
 				} else if (r.state === "written" && r.preset) {
 					broadcast({
 						type: "notify",
 						level: "info",
-						text: `预设「${r.preset}」已处理：身份 ${r.identityChars ?? 0} 字、写作 ${r.writingChars ?? 0} 字${r.processed ? "（本次模型处理）" : "（沿用留档）"}${r.stale ? "；选项已改，要点「重新装载」才更新" : ""}`,
+						text: t("预设「{preset}」已处理：身份 {identity} 字、写作 {writing} 字{how}{stale}", {
+							preset: r.preset,
+							identity: r.identityChars ?? 0,
+							writing: r.writingChars ?? 0,
+							how: r.processed ? t("（本次模型处理）") : t("（沿用留档）"),
+							stale: r.stale ? t("；选项已改，要点「重新装载」才更新") : "",
+						}),
 					});
 				}
 			} else {
@@ -2062,24 +2071,29 @@ const syncPresetNow = (reprocess = false): Promise<PresetSyncResult | undefined>
 					broadcast({
 						type: "notify",
 						level: "error",
-						text: `预设「${r.preset}」声明失败（${r.pending} 段先按保守方式全部保留）：${r.declareError}`,
+						text: t("预设「{preset}」声明失败（{pending} 段先按保守方式全部保留）：{error}", { preset: r.preset, pending: r.pending, error: r.declareError }),
 					});
 				}
 				if (r.state === "written" && r.preset) {
 					broadcast({
 						type: "notify",
 						level: "info",
-						text: `预设「${r.preset}」已转译：活动条目 ${r.active} 条、停用 ${r.disabled} 条${r.declared ? `（本次声明 ${r.declared} 段）` : ""}`,
+						text: t("预设「{preset}」已转译：活动条目 {active} 条、停用 {disabled} 条{declared}", {
+							preset: r.preset,
+							active: r.active,
+							disabled: r.disabled,
+							declared: r.declared ? t("（本次声明 {n} 段）", { n: r.declared }) : "",
+						}),
 					});
 				}
 			}
 			// 卸载剥净才提示（process 机制缺留档的剥净有自己的 needProcess 提示，别误报「已卸载」）
 			if (r.state === "stripped" && r.mode !== "process") {
-				broadcast({ type: "notify", level: "info", text: "预设已卸载：卡文件里的（预设）条目已移除" });
+				broadcast({ type: "notify", level: "info", text: t("预设已卸载：卡文件里的（预设）条目已移除") });
 			}
 			return r;
 		} catch (err) {
-			broadcast({ type: "notify", level: "error", text: `预设同步失败：${err instanceof Error ? err.message : String(err)}` });
+			broadcast({ type: "notify", level: "error", text: t("预设同步失败：{msg}", { msg: err instanceof Error ? err.message : String(err) }) });
 			return undefined;
 		}
 	});
@@ -2116,10 +2130,10 @@ try {
 				}
 			}
 		}
-		console.log("[liyuan] 已从 liyuan.agent.json 同步 models.json 与思考档");
+		console.log("[liyuan] 已从 liyuan.agent.json 同步 models.json 与思考档"); // i18n-ignore：终端日志
 	}
 } catch (err) {
-	console.error(`[liyuan] 启动同步 agent 配置失败：${err instanceof Error ? err.message : String(err)}`);
+	console.error(`[liyuan] 启动同步 agent 配置失败：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 }
 
 // ---------- HTTP：REST /api/* + 托管 web/dist（存在时）+ 健康检查 ----------
@@ -2191,7 +2205,7 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 		req.on("data", (c: Buffer) => {
 			size += c.length;
 			if (size > 65536) {
-				reject(new Error("body 过大"));
+				reject(new Error(t("body 过大")));
 				req.destroy();
 				return;
 			}
@@ -2221,7 +2235,7 @@ async function handleAccessApi(req: IncomingMessage, res: ServerResponse, url: s
 		}
 		if (req.method === "POST" && url === "/api/access/login") {
 			if (!accessData) {
-				json(400, { error: "未设置访问密码" });
+				json(400, { error: t("未设置访问密码") });
 				return;
 			}
 			if (accessFails >= 5) await new Promise((r) => setTimeout(r, 1500)); // 暴力尝试限速
@@ -2231,7 +2245,7 @@ async function handleAccessApi(req: IncomingMessage, res: ServerResponse, url: s
 				json(200, { ok: true }, issueToken(cwd, accessData));
 			} else {
 				accessFails++;
-				json(401, { error: "密码不正确" });
+				json(401, { error: t("密码不正确") });
 			}
 			return;
 		}
@@ -2239,7 +2253,7 @@ async function handleAccessApi(req: IncomingMessage, res: ServerResponse, url: s
 			const body = await readJsonBody(req);
 			// 已有密码时，任何变更（改/关）都必须先验旧密码
 			if (accessData && (typeof body.oldPassword !== "string" || !verifyPassword(accessData, body.oldPassword))) {
-				json(403, { error: "当前密码不正确" });
+				json(403, { error: t("当前密码不正确") });
 				return;
 			}
 			const next = typeof body.newPassword === "string" ? body.newPassword : "";
@@ -2250,7 +2264,7 @@ async function handleAccessApi(req: IncomingMessage, res: ServerResponse, url: s
 				return;
 			}
 			if (next.length < 4) {
-				json(400, { error: "密码至少 4 位" });
+				json(400, { error: t("密码至少 4 位") });
 				return;
 			}
 			const r = setPassword(cwd, next);
@@ -2279,7 +2293,7 @@ const httpServer = createServer((req, res) => {
 		}
 		if (accessGuarded(urlPath) && !requestAuthed(req)) {
 			res.writeHead(401, { "content-type": "application/json" });
-			res.end(JSON.stringify({ error: "需要登录" }));
+			res.end(JSON.stringify({ error: t("需要登录") }));
 			return;
 		}
 		if (await handleApiRequest(req, res, restHost)) return;
@@ -2349,7 +2363,7 @@ const httpServer = createServer((req, res) => {
 		}
 		if (!existsSync(distDir)) {
 			res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-			res.end("梨园 server 运行中。前端尚未构建：开发用 `npm --prefix web run dev`，或 `npm --prefix web run build` 后刷新本页。WS 端点：/ws");
+			res.end(t("梨园 server 运行中。前端尚未构建：开发用 `npm --prefix web run dev`，或 `npm --prefix web run build` 后刷新本页。WS 端点：/ws"));
 			return;
 		}
 		// 静态文件（含 SPA 回退），normalize 防目录穿越
@@ -2414,7 +2428,7 @@ stage = new StageEngine({
 	getModel: () => session.model as never,
 	getAuth: async (m) => {
 		const result = await session.modelRuntime.getAuth(m as never);
-		if (!result) throw new Error(`模型 ${m.provider}/${m.id} 没有可用鉴权`);
+		if (!result) throw new Error(t("模型 {model} 没有可用鉴权", { model: `${m.provider}/${m.id}` }));
 		return result.auth;
 	},
 	// 旁路条目（场记/压缩用）：sideEntryOf 是唯一主人，定义与语义见 bindSession 前
@@ -2493,7 +2507,7 @@ stage = new StageEngine({
 			ancestorsOf,
 		});
 		sm.appendCustomEntry(RP_SAVE_TYPE, data);
-		broadcast({ type: "notify", level: "info", text: `已存档「${data.name}」（${data.worldlineName}）` });
+		broadcast({ type: "notify", level: "info", text: t("已存档「{name}」（{worldline}）", { name: data.name, worldline: data.worldlineName }) });
 		return { id: data.id, name: data.name, worldlineName: data.worldlineName };
 	},
 	// MCP 外设（8/06 重接）：009e22e 换引擎时 MCP 只留在扩展路径（pi.registerTool）+
@@ -2532,7 +2546,7 @@ stage = new StageEngine({
 	archiveCompacted: async (sessionId, text) => {
 		const r = await memoryArchiveCompacted(cwd, memoryScopeFor(sessionId), text);
 		if (r.archived) {
-			broadcast({ type: "notify", level: "info", text: `向量记忆：早期剧情已归档（${r.chunks} 段，可 memory_search 召回）` });
+			broadcast({ type: "notify", level: "info", text: t("向量记忆：早期剧情已归档（{n} 段，可 memory_search 召回）", { n: r.chunks }) });
 		}
 	},
 	// lorebook_toggle 工具（M-D2）：写 config.disabledLore 并软刷新素材。
@@ -2670,8 +2684,8 @@ stage = new StageEngine({
 					for (const f of info.checkpoint!.added) {
 						try {
 							const mem = await onNarrativeTurnEnd(cwd, memoryScopeFor(), f.text, { nodeId: agentNodeId, branchIds: agentBranchIds });
-							if (mem.error) broadcast({ type: "notify", level: "warning", text: `向量记忆：${f.name} 入库失败 · ${mem.error}` });
-							else if (mem.stored) broadcast({ type: "notify", level: "info", text: `向量记忆：${f.name} 已入剧情库` });
+							if (mem.error) broadcast({ type: "notify", level: "warning", text: t("向量记忆：{file} 入库失败 · {error}", { file: f.name, error: mem.error }) });
+							else if (mem.stored) broadcast({ type: "notify", level: "info", text: t("向量记忆：{file} 已入剧情库", { file: f.name }) });
 						} catch (e) {
 							console.warn("[memory] story file ingest failed", e);
 						}
@@ -2711,10 +2725,10 @@ stage = new StageEngine({
 						{ nodeId: memNodeId, branchIds: memBranchIds },
 					);
 					if (mem.error) {
-						broadcast({ type: "notify", level: "warning", text: `向量记忆：入库失败 · ${mem.error}` });
+						broadcast({ type: "notify", level: "warning", text: t("向量记忆：入库失败 · {error}", { error: mem.error }) });
 					} else if (mem.stored) {
-						const how = mem.merged ? "合并入已有条目" : "新开条目";
-						broadcast({ type: "notify", level: "info", text: `向量记忆：剧情库${how}（第 ${mem.counter} 轮 · 当前对话）` });
+						const how = mem.merged ? t("合并入已有条目") : t("新开条目");
+						broadcast({ type: "notify", level: "info", text: t("向量记忆：剧情库{how}（第 {n} 轮 · 当前对话）", { how, n: mem.counter }) });
 					}
 				} catch (e) {
 					console.warn("[memory] auto ingest failed", e);
@@ -2740,18 +2754,18 @@ const hostCompact = async (): Promise<void> => {
 		broadcast({
 			type: "notify",
 			level: "info",
-			text: `前情已压缩：${r.turns} 拍 ${r.chars} 字 → 摘要 ${r.summary.length} 字`,
+			text: t("前情已压缩：{turns} 拍 {chars} 字 → 摘要 {summary} 字", { turns: r.turns, chars: r.chars, summary: r.summary.length }),
 		});
 		resyncAll();
 	} else if (r.kind === "failed") {
-		broadcast({ type: "notify", level: "error", text: `压缩失败：${r.error}` });
+		broadcast({ type: "notify", level: "error", text: t("压缩失败：{error}", { error: r.error }) });
 	} else if (r.kind === "stale") {
-		broadcast({ type: "notify", level: "warning", text: "压缩已丢弃（期间切换了分支）" });
+		broadcast({ type: "notify", level: "warning", text: t("压缩已丢弃（期间切换了分支）") });
 	} else {
 		broadcast({
 			type: "notify",
 			level: "info",
-			text: r.reason === "busy" ? "正在演出中，稍后再压缩" : "早期剧情还不够长，暂不需要压缩",
+			text: r.reason === "busy" ? t("正在演出中，稍后再压缩") : t("早期剧情还不够长，暂不需要压缩"),
 		});
 	}
 };
@@ -2762,7 +2776,7 @@ const handlePrompt = async (text: string) => {
 	// ST 式变体：无参 /reroll 与 /swipe 由宿主处理（需重开一拍，扩展命令上下文无此能力）
 	if (/^\/reroll\s*$/i.test(trimmed)) {
 		if (storyStreaming()) {
-			broadcast({ type: "notify", level: "warning", text: "请等当前回复完成（或先停止），再重新生成" });
+			broadcast({ type: "notify", level: "warning", text: t("请等当前回复完成（或先停止），再{what}", { what: t("重新生成") }) });
 			return;
 		}
 		await regenerateSwipe();
@@ -2773,12 +2787,12 @@ const handlePrompt = async (text: string) => {
 	const rerollArgMatch = /^\/reroll\s+(.+)/i.exec(trimmed);
 	if (rerollArgMatch) {
 		if (storyStreaming()) {
-			broadcast({ type: "notify", level: "warning", text: "请等当前回复完成（或先停止），再重新生成" });
+			broadcast({ type: "notify", level: "warning", text: t("请等当前回复完成（或先停止），再{what}", { what: t("重新生成") }) });
 			return;
 		}
 		const userId = lastStoryUserId();
 		if (!userId) {
-			broadcast({ type: "notify", level: "error", text: "没有可重新生成的剧情轮（需要先有一条用户输入）" });
+			broadcast({ type: "notify", level: "error", text: t("没有可重新生成的剧情轮（需要先有一条用户输入）") });
 			return;
 		}
 		const sm = session.sessionManager;
@@ -2807,7 +2821,7 @@ const handlePrompt = async (text: string) => {
 	const greetingMatch = /^\/greeting(?:\s+(.*))?$/i.exec(trimmed);
 	if (greetingMatch) {
 		if (storyStreaming()) {
-			broadcast({ type: "notify", level: "warning", text: "请等当前回复完成（或先停止），再切换开场白" });
+			broadcast({ type: "notify", level: "warning", text: t("请等当前回复完成（或先停止），再{what}", { what: t("切换开场白") }) });
 			return;
 		}
 		await hostSwitchGreeting(greetingMatch[1] ?? "");
@@ -2816,7 +2830,7 @@ const handlePrompt = async (text: string) => {
 	const swipeMatch = /^\/swipe(?:\s+(prev|next|new))?\s*$/i.exec(trimmed);
 	if (swipeMatch) {
 		if (storyStreaming()) {
-			broadcast({ type: "notify", level: "warning", text: "请等当前回复完成（或先停止），再切换变体" });
+			broadcast({ type: "notify", level: "warning", text: t("请等当前回复完成（或先停止），再{what}", { what: t("切换回复变体") }) });
 			return;
 		}
 		const dir = (swipeMatch[1]?.toLowerCase() ?? "next") as "prev" | "next" | "new";
@@ -2829,7 +2843,7 @@ const handlePrompt = async (text: string) => {
 	const compactMatch = /^\/compact(?:\s+(.*))?$/i.exec(trimmed);
 	if (compactMatch) {
 		if (storyStreaming()) {
-			broadcast({ type: "notify", level: "warning", text: "请等当前回复完成（或先停止），再压缩上下文" });
+			broadcast({ type: "notify", level: "warning", text: t("请等当前回复完成（或先停止），再{what}", { what: t("压缩上下文") }) });
 			return;
 		}
 		await hostCompact();
@@ -2866,7 +2880,7 @@ const handlePrompt = async (text: string) => {
 /** 流式中禁止的操作统一挡下 */
 const refuseWhileStreaming = (ws: WebSocket, what: string): boolean => {
 	if (!storyStreaming()) return false;
-	ws.send(JSON.stringify({ type: "notify", level: "warning", text: `请等当前回复完成（或先停止），再${what}` } satisfies ServerFrame));
+	ws.send(JSON.stringify({ type: "notify", level: "warning", text: t("请等当前回复完成（或先停止），再{what}", { what }) } satisfies ServerFrame));
 	return true;
 };
 
@@ -3133,7 +3147,7 @@ const assertListedSession = async (path: string) => {
 		? (await Promise.all([...new Set(chatEntries.map((e) => dirname(e.path)))].map((p) => SessionManager.listAll(p)))).flat()
 		: await SessionManager.list(cwd);
 	const found = all.find((s) => isSameSessionPath(s.path, path));
-	if (!found) throw new Error("不是本项目的会话文件");
+	if (!found) throw new Error(t("不是本项目的会话文件"));
 	return found;
 };
 
@@ -3168,12 +3182,12 @@ wss.on("connection", (ws, req) => {
 					switch (frame.type) {
 						case "draft_history": {
 							const draft = stage.getWorkspaces().find((d) => d.id === frame.id);
-							if (!draft) throw new Error("当前分支没有这份稿件。");
+							if (!draft) throw new Error(t("当前分支没有这份稿件。"));
 							ws.send(JSON.stringify({ type: "draft_history", id: draft.id, revisions: draft.revisions } satisfies ServerFrame));
 							break;
 						}
 						case "draft_restore": {
-							if (stage.getWorkspace()?.id !== frame.id) throw new Error("只能恢复当前拍的稿件版本。");
+							if (stage.getWorkspace()?.id !== frame.id) throw new Error(t("只能恢复当前拍的稿件版本。"));
 						const restored = stage.restoreDraft(frame.id, frame.version, frame.expectedVersion);
 						if (restored.entryId) {
 							resyncAll();
@@ -3182,8 +3196,8 @@ wss.on("connection", (ws, req) => {
 							break;
 						}
 					case "conversation_mode": {
-						if (!isConversationMode(frame.mode)) throw new Error("未知会话模式。");
-						if (storyStreaming()) throw new Error("请等当前回复完成（或先停止），再切换模式。");
+						if (!isConversationMode(frame.mode)) throw new Error(t("未知会话模式。"));
+						if (storyStreaming()) throw new Error(t("请等当前回复完成（或先停止），再{what}", { what: t("切换模式。") }));
 						stage.setMode(frame.mode);
 						break;
 					}
@@ -3198,40 +3212,40 @@ wss.on("connection", (ws, req) => {
 						if (session.isStreaming && !stage.isStreaming) broadcast({ type: "agent", state: "end" });
 						stage.abort(); // 引擎自会以 aborted 谢幕（半拍正文保留）
 						void session.abort().catch((err) => {
-							console.error(`[liyuan] abort 失败：${err instanceof Error ? err.message : String(err)}`);
+							console.error(`[liyuan] abort 失败：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 						});
 						break;
 					}
 					case "reroll": {
-						if (refuseWhileStreaming(ws, "重新生成")) return;
+						if (refuseWhileStreaming(ws, t("重新生成"))) return;
 						const t = String(frame.text ?? "").trim();
 						// 无参 = ST sibling 变体；有参 = 改用户文案后整轮重来（扩展 /reroll）
 						await handlePrompt(t ? `/reroll ${t}` : "/reroll");
 						break;
 					}
 					case "swipe": {
-						if (refuseWhileStreaming(ws, "切换回复变体")) return;
+						if (refuseWhileStreaming(ws, t("切换回复变体"))) return;
 						const dir = frame.dir === "prev" || frame.dir === "next" || frame.dir === "new" ? frame.dir : "next";
 						await handleSwipe(dir);
 						break;
 					}
 					case "compact":
-						if (refuseWhileStreaming(ws, "压缩上下文")) return;
+						if (refuseWhileStreaming(ws, t("压缩上下文"))) return;
 						await hostCompact();
 						break;
 					case "sessions":
 						ws.send(JSON.stringify(await listSessions()));
 						break;
 					case "open": {
-						if (refuseWhileStreaming(ws, "切换会话")) return;
+						if (refuseWhileStreaming(ws, t("切换会话"))) return;
 						const path = String(frame.path ?? "");
 						if (!path || path === session.sessionFile) return;
 						await runtime.switchSession(path);
-						broadcast({ type: "notify", level: "info", text: "已切换会话" });
+						broadcast({ type: "notify", level: "info", text: t("已切换会话") });
 						break;
 					}
 					case "new":
-						if (refuseWhileStreaming(ws, "新建会话")) return;
+						if (refuseWhileStreaming(ws, t("新建会话"))) return;
 						// 幂等短路（8/29）：当前已是干净的新会话（分支上没有任何剧情 user 消息）时，
 						// 再建一个**语义等价**——同一张卡、同样的开局——却要付一次 hello 帧的全量界面
 						// 重建（messages 整体替换 + 卡皮肤重挂 + 会话列表清空重拉），还在会话列表里
@@ -3239,7 +3253,7 @@ wss.on("connection", (ws, req) => {
 						// 幂等短路只对老布局成立（同 sessionDir 下再建一个语义等价的空会话是浪费）；
 						// cards/ 卡上「新开对话」永远是新子项目，没有等价一说，不短路。
 						if (!lastStoryUserId() && !resolveCardSpace(cwd, cardPath)) {
-							ws.send(JSON.stringify({ type: "notify", level: "info", text: "当前已是新会话" } satisfies ServerFrame));
+							ws.send(JSON.stringify({ type: "notify", level: "info", text: t("当前已是新会话") } satisfies ServerFrame));
 							return;
 						}
 						// 两层布局：完全新开对话＝新建一个子项目——给 runtime 换一个
@@ -3252,7 +3266,7 @@ wss.on("connection", (ws, req) => {
 						const newMode = frame.mode === "agent" ? "agent" : undefined;
 						const freshDir = newChatSessionDir(cwd, cardPath, newName, newMode);
 						if (newMode && !freshDir) {
-							ws.send(JSON.stringify({ type: "notify", level: "error", text: "agent 模式只在 cards/ 的子项目里可用" } satisfies ServerFrame));
+							ws.send(JSON.stringify({ type: "notify", level: "error", text: t("agent 模式只在 cards/ 的子项目里可用") } satisfies ServerFrame));
 							return;
 						}
 						if (freshDir) {
@@ -3265,8 +3279,8 @@ wss.on("connection", (ws, req) => {
 								if (chatDir && typeof mes === "string" && mes.trim()) {
 									const dir = storyDirectory(chatDir);
 									mkdirSync(dir, { recursive: true });
-									writeFileSync(join(dir, "000-开场.md"), applyMacros(mes, { charName: card.name, userName: loadConfig(cwd).userName }), "utf8");
-									new StoryHistory(chatDir).commit({ author: "user", message: "开场白落成第一个文件" });
+									writeFileSync(join(dir, "000-开场.md"), applyMacros(mes, { charName: card.name, userName: loadConfig(cwd).userName }), "utf8"); // i18n-ignore：稿子文件名是协议
+									new StoryHistory(chatDir).commit({ author: "user", message: t("开场白落成第一个文件") });
 								}
 							}
 							const previousSessionFile = session.sessionFile;
@@ -3285,22 +3299,22 @@ wss.on("connection", (ws, req) => {
 						} else {
 							await runtime.newSession();
 						}
-						broadcast({ type: "notify", level: "info", text: "已新建会话" });
+						broadcast({ type: "notify", level: "info", text: t("已新建会话") });
 						break;
 					case "story_restore": {
 						// docs/PLAN-AGENT-CODING.md §4.3：files＝只重写 正文/（讨论不动）；both＝再把讨论截到那轮输入之前。
-						if (refuseWhileStreaming(ws, "恢复")) return;
+						if (refuseWhileStreaming(ws, t("恢复"))) return;
 						const chatDir = agentChatDir();
-						if (!chatDir) throw new Error("当前不是 agent 子项目");
+						if (!chatDir) throw new Error(t("当前不是 agent 子项目"));
 						const history = new StoryHistory(chatDir);
 						const target = history.get(String(frame.checkpointId ?? ""));
-						if (!target) throw new Error("没有这个检查点");
+						if (!target) throw new Error(t("没有这个检查点"));
 						const both = frame.scope === "both" && !!target.turnId;
 						if (both) {
 							// 目标＝那轮 user 条目的父节点：那次输入还没发出的状态。底层仍是 pi 的叶子移动，但不提供树导航入口。
 							const branch = session.sessionManager.getBranch() as Array<{ id?: string; parentId?: string | null }>;
 							const at = branch.findIndex((e) => e.id === target.turnId);
-							if (at < 0) throw new Error("那轮输入不在当前会话里，只能恢复文件");
+							if (at < 0) throw new Error(t("那轮输入不在当前会话里，只能恢复文件"));
 							const parent = branch[at]!.parentId ?? null;
 							if (parent !== session.sessionManager.getLeafId()) {
 								if (parent === null) session.sessionManager.resetLeaf(); // 那轮是首条输入：回到空树
@@ -3321,18 +3335,18 @@ wss.on("connection", (ws, req) => {
 							for (const f of listStoryFiles(storyDirectory(chatDir))) rmSync(join(storyDirectory(chatDir), f.name));
 						}
 						// both 且文件本来就一样：仍落一条空改动的检查点——树上要有它，pi 重载时叶子才停在截断处（叶子＝文件里最后一条）
-						if (!cp && both) cp = history.commit({ author: "user", message: `回到「${target.message}」之前`, restoredFrom: target.id, force: true });
+						if (!cp && both) cp = history.commit({ author: "user", message: t("回到「{message}」之前", { message: target.message }), restoredFrom: target.id, force: true });
 						if (cp) {
 							const { files: _files, ...lite } = cp;
 							session.sessionManager.appendCustomEntry(STORY_CHECKPOINT_TYPE, lite);
 							session.sessionManager.flush();
 						}
 						resyncAll();
-						broadcast({ type: "notify", level: "info", text: both ? "已恢复文件并回到那次输入之前。" : "已恢复文件；讨论不变。" });
+						broadcast({ type: "notify", level: "info", text: both ? t("已恢复文件并回到那次输入之前。") : t("已恢复文件；讨论不变。") });
 						break;
 					}
 					case "chat_new_session": {
-						if (refuseWhileStreaming(ws, "新建会话")) return;
+						if (refuseWhileStreaming(ws, t("新建会话"))) return;
 						// 「第二个窗口继续聊」＝在指定子项目里再开一个会话。当前子项目：
 						// runtime.newSession() 复用 sessionDir；别的子项目：换 runtime 落进
 						// 它的会话目录（换 runtime 是 pi 唯一切 sessionDir 的通道）。
@@ -3340,7 +3354,7 @@ wss.on("connection", (ws, req) => {
 						const target = chatsOfCard(cwd, cardPath)?.find((c) => c.id === chatId);
 						if (!target) {
 							ws.send(
-								JSON.stringify({ type: "notify", level: "error", text: "子项目不存在（或当前卡不在 cards/）" } satisfies ServerFrame),
+								JSON.stringify({ type: "notify", level: "error", text: t("子项目不存在（或当前卡不在 cards/）") } satisfies ServerFrame),
 							);
 							return;
 						}
@@ -3362,7 +3376,7 @@ wss.on("connection", (ws, req) => {
 							await bindSession();
 							resyncAll();
 						}
-						broadcast({ type: "notify", level: "info", text: "已新建会话" });
+						broadcast({ type: "notify", level: "info", text: t("已新建会话") });
 						break;
 					}
 					case "ping":
@@ -3403,12 +3417,12 @@ httpServer.listen(PORT, HOST, () => {
 			}
 		}
 	}
-	console.log(`[liyuan] ${names.charName} 已就位（会话 ${session.sessionId.slice(0, 8)}…）`);
-	console.log(`[liyuan] agent 目录 ${agentHome}`);
+	console.log(`[liyuan] ${names.charName} 已就位（会话 ${session.sessionId.slice(0, 8)}…）`); // i18n-ignore：终端日志
+	console.log(`[liyuan] agent 目录 ${agentHome}`); // i18n-ignore：终端日志
 	for (const line of takeAgentMergeLog()) {
-		console.log(`[liyuan] 迁移 ${line}`);
+		console.log(`[liyuan] 迁移 ${line}`); // i18n-ignore：终端日志
 	}
-	console.log(`[liyuan] ${urls.join("  |  ")}（手机连同一 Wi-Fi 访问后者；勿暴露公网）`);
+	console.log(`[liyuan] ${urls.join("  |  ")}（手机连同一 Wi-Fi 访问后者；勿暴露公网）`); // i18n-ignore：终端日志
 	// 启动时对一次账：装载中的预设与挂载书的镜像（升级前的状态也算）落进卡文件，再刷一次装配
 	void restHost.softRefreshConfig().catch(() => {});
 });

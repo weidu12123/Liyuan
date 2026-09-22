@@ -310,6 +310,8 @@ export interface RestHost {
 	worldlineView(): import("../src/worldline.ts").WorldlineView;
 	/** agent 模式的稿子：当前分支章目录＋正文（非 agent 子项目为空目录） */
 	storyView(): { chapters: Array<WireStoryChapter & { text: string }> };
+	/** 用户按章直接编辑：全文替换成新版本（来源 user），落树后全端对齐 */
+	editChapter(input: { chapterId: string; version: number; text: string }): Promise<{ chapterId: string; version: number; index: number; chars: number }>;
 	/** 软删除存档节点 */
 	deleteWorldlineSave(saveId: string): void;
 	/** 重命名世界线（自动名可改） */
@@ -2108,6 +2110,14 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 			// ---- agent 模式：稿子正文（hello 只带目录，正文走这里，有 gzip） ----
 			case "GET /api/story": {
 				sendJson(res, 200, host.storyView());
+				return true;
+			}
+			case "POST /api/story/edit": {
+				if (refuseWhileStreaming()) return true;
+				const body = JSON.parse(await readBody(req)) as { chapterId?: string; version?: number; text?: string };
+				const chapterId = (body.chapterId ?? "").trim();
+				if (!chapterId || !Number.isInteger(body.version) || typeof body.text !== "string") throw new Error("需要 chapterId、version 与 text");
+				sendJson(res, 200, { ok: true, ...(await host.editChapter({ chapterId, version: body.version!, text: body.text })) });
 				return true;
 			}
 

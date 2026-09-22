@@ -326,3 +326,36 @@ export function runStoryTool(deps: StoryToolDeps, name: string, args: Record<str
 		return fail(error instanceof Error ? error.message : String(error));
 	}
 }
+
+/**
+ * 用户按章直接编辑（刀 3）：与 story_edit 同一条落点——写新版本文件、追加修订条目、来源标 user；
+ * 同样只认当前分支上的章、版本必须匹配、不许清空。全文替换（用户在编辑框里改的就是整章）。
+ */
+export function replaceChapterText(deps: StoryToolDeps, chapterId: string, version: number, text: string): { chapterId: string; version: number; index: number; chars: number } {
+	const chapter = projectChapters(deps.getBranch()).find((c) => c.chapterId === chapterId);
+	if (!chapter) throw new Error("当前分支没有该章。");
+	if (version !== chapter.version) throw new Error(`该章已是 v${chapter.version}，请刷新后再改。`);
+	if (!text.trim()) throw new Error("修订不能清空整章。");
+	if (text === deps.store.read(chapter)) return { chapterId, version: chapter.version, index: chapter.index, chars: chapter.chars };
+	const next = chapter.version + 1;
+	const file = deps.store.write(chapterId, next, text);
+	deps.appendEntry(CHAPTER_REVISION_TYPE, { chapterId, file, version: next, ...(chapter.title ? { title: chapter.title } : {}), chars: text.length, source: "user" });
+	return { chapterId, version: next, index: chapter.index, chars: text.length };
+}
+
+/**
+ * 「回退到第 N 章」的树坐标：写入该章的那一轮的**最后一条条目**（收尾 assistant 之后还有场记落的
+ * rp-state / 摘要，都属于这一轮；停在 assistant 上会把这章的账本一起退掉，讨论回放也不能留下没有回执的
+ * 工具调用）。同一轮写了多章时，回退到其中任一章＝保留整轮。
+ */
+export function chapterRewindTarget(branch: BranchEntryLike[], chapterId: string): string | undefined {
+	const at = branch.findIndex((e) => e.type === "custom" && e.customType === CHAPTER_ENTRY_TYPE && (e.data as ChapterEntryData | undefined)?.chapterId === chapterId);
+	if (at < 0) return undefined;
+	let target = branch[at]!.id;
+	for (let i = at + 1; i < branch.length; i++) {
+		const e = branch[i]!;
+		if (e.type === "message" && e.message?.role === "user") break;
+		if (e.id) target = e.id;
+	}
+	return target;
+}

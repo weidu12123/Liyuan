@@ -270,6 +270,8 @@ export default function App() {
 	const [storyTab, setStoryTab] = useState<"story" | "chat">("chat");
 	/** 讨论区章卡片点击 → 稿子视图滚到该章 */
 	const [storyFocus, setStoryFocus] = useState<{ chapterId: string; tick: number } | null>(null);
+	/** story_append 正文的流式预览（服务端 story_preview 帧，替换语义） */
+	const [storyPreview, setStoryPreview] = useState<{ text: string; title?: string } | null>(null);
 	const [toolNote, setToolNote] = useState<string | null>(null);
 	/** 本轮过程步骤（实时清单渲染用；与 turnActsRef 同内容） */
 	const [liveActs, setLiveActs] = useState<WireActivity[]>([]);
@@ -764,6 +766,7 @@ export default function App() {
 					streamModeRef.current = frame.turnMode ?? modeRef.current;
 					setStreamMode(streamModeRef.current);
 					setStoryOutline(modeRef.current === "agent" ? frame.story?.chapters ?? [] : null);
+					setStoryPreview(null);
 					setCharName(frame.charName);
 					setUserName(frame.userName);
 					// wire timeline → 本地 segments：持久化的时间线在刷新后仍按时序渲染
@@ -877,6 +880,9 @@ export default function App() {
 					} else {
 						setMessages((ms) => [...ms, frame.message]);
 					}
+					break;
+				case "story_preview":
+					setStoryPreview(frame.text ? { text: frame.text, ...(frame.title ? { title: frame.title } : {}) } : null);
 					break;
 				case "delta":
 					if (abortingRef.current) break;
@@ -2114,7 +2120,24 @@ export default function App() {
 					{/* agent 模式：稿子在中间（桌面 60%），讨论在右（40%）；手机上两者是页签（story-pane 覆盖式） */}
 					{agentSplit && (
 						<aside className={`story-pane ${storyTab === "story" ? "story-pane-active" : ""}`} aria-label="稿子">
-							<StoryPane chapters={storyChapters} focus={storyFocus} onBack={() => setStoryTab("chat")} />
+							<StoryPane
+								chapters={storyChapters}
+								preview={storyPreview}
+								focus={storyFocus}
+								busy={busy}
+								onBack={() => setStoryTab("chat")}
+								onEdit={async (c, text) => {
+									try {
+										await apiPost("/api/story/edit", { chapterId: c.chapterId, version: c.version, text });
+									} catch (e) {
+										pushToast("error", `保存失败：${e instanceof Error ? e.message : String(e)}`);
+										throw e;
+									}
+								}}
+								onRewind={(c) => {
+									if (window.confirm(`回退到第 ${c.index} 章之后？之后的章会退出当前分支（文件与会话树都还在）。`)) ws.send({ type: "story_rewind", chapterId: c.chapterId });
+								}}
+							/>
 						</aside>
 					)}
 					<main className={`center ${welcome && sessions !== null && !homeHasHistory ? "center-home-empty" : ""} ${welcome && homeHasHistory ? "center-home-filled" : ""} ${studioOpen ? "center-studio-split" : ""} ${agentSplit ? "center-agent-split" : ""}`}>

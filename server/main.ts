@@ -141,7 +141,7 @@ import {
 	type WireStats,
 	type WireStoryChapter,
 } from "./wire.ts";
-import { CHAPTER_ENTRY_TYPE, CHAPTER_REVISION_TYPE, chapterFileName, projectChapters, StoryStore, storyDirectory } from "../src/stage/story.ts";
+import { CHAPTER_ENTRY_TYPE, CHAPTER_REVISION_TYPE, chapterFileName, chapterRewindTarget, projectChapters, replaceChapterText, StoryStore, storyDirectory } from "../src/stage/story.ts";
 import { sameCardPath } from "../src/paths.ts";
 import { readSessionCardInfo } from "../src/session-scan.ts";
 import { cardDirOfChatDir, cardFileIn, chatDataPath, chatDirOfSessionDir, createChat, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
@@ -1774,6 +1774,18 @@ const restHost: RestHost = {
 		const store = new StoryStore(storyDirectory(chatDir));
 		return { chapters: outline.chapters.map((c) => { let text = ""; try { text = store.read({ file: chapterFileName(c.chapterId, c.version) }); } catch { /* 文件缺失：正文空，目录仍在 */ } return { ...c, text }; }) };
 	},
+	async editChapter(input) {
+		const sm = session.sessionManager;
+		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
+		if (!chatDir || stage.mode !== "agent") throw new Error("当前不是 agent 子项目");
+		const r = replaceChapterText({
+			store: new StoryStore(storyDirectory(chatDir)),
+			getBranch: () => sm.getBranch() as BranchEntryLike[],
+			appendEntry: (customType, data) => { sm.appendCustomEntry(customType, data); sm.flush(); },
+		}, input.chapterId, input.version, input.text);
+		resyncAll();
+		return r;
+	},
 	// ---- 世界线视图 / 软删除 / 线名 ----
 	worldlineView() {
 		const sm = session.sessionManager;
@@ -2600,6 +2612,7 @@ stage = new StageEngine({
 		onReplyRevised: () => resyncAll(),
 		onStreamClear: () => broadcast({ type: "stream", state: "clear" }),
 		onNotify: (level, text) => broadcast({ type: "notify", level, text }),
+		onStoryPreview: (text, title) => broadcast({ type: "story_preview", text, ...(title ? { title } : {}) }),
 		onActivity: (detail) => broadcast({ type: "activity", activity: { kind: "note", name: "stage", detail } }),
 		onTurnEnd: (info) => {
 			broadcast({ type: "agent", state: "end" });
@@ -3232,6 +3245,19 @@ wss.on("connection", (ws, req) => {
 						}
 						broadcast({ type: "notify", level: "info", text: "已新建会话" });
 						break;
+					case "story_rewind": {
+						if (refuseWhileStreaming(ws, "回退")) return;
+						if (stage.mode !== "agent") throw new Error("当前不是 agent 子项目");
+						const target = chapterRewindTarget(session.sessionManager.getBranch() as BranchEntryLike[], String(frame.chapterId ?? ""));
+						if (!target) throw new Error("当前分支没有该章");
+						if (target !== session.sessionManager.getLeafId()) {
+							const result = await session.navigateTree(target, { summarize: false });
+							if (result.cancelled) return;
+						}
+						resyncAll();
+						broadcast({ type: "notify", level: "info", text: "已回退到该章之后。被回退的章仍在会话树里（可再导航回去）；从这里继续写＝分叉。" });
+						break;
+					}
 					case "chat_new_session": {
 						if (refuseWhileStreaming(ws, "新建会话")) return;
 						// 「第二个窗口继续聊」＝在指定子项目里再开一个会话。当前子项目：

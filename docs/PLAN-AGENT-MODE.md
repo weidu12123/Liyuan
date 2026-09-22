@@ -196,7 +196,7 @@ agent 轮的送模内容只有这四样，**在此声明为闭合集合**，实�
 - 2026-09-21：设计成文，**未动代码**。用户定「先发小版本修 1.6.x 缺陷，暂时不推进」。
 - 2026-09-22：1.6.1 已发布，用户定「下一个版本按照计划文档来制作 agent 模式」。**刀 1 后端已落地**：`src/stage/story.ts`（章条目/投影/文件仓/五工具）、`src/stage/agent.ts`（`assets/AGENT.md` 底座＋项目状态块）、引擎的 agent 分支（`engine.ts` `agentTurn`：清单/上下文/派发/`#afterChapters` 旁路链）、沙箱路径规则（`harnessManagedPath`）、按章压缩（`planChapterCompaction`）、`collectChatEvidence` 认章、`对话.json` 的 `mode`、`hello`/`new` 帧三值与 `mode:"agent"`、agent 子项目不注开场白、`/rewind` 按讨论轮。单测 `test/story.test.ts`；隔离实例实弹跑通「讨论→写两章→改第一章→回退→分叉写第三章」（章文件/条目/逐章记账/写时复制的分支隔离全部对上）。
   - 实施时的两处取舍（可被推翻）：① 按章压缩不用「每 N 章」——上下文里本来只有稿子尾部，取 keep 1 章、每章判一次、字数地板不变，`compactEveryNTurns<=0` 仍是关闭；② `ask` 在 agent 模式换成一句话的短描述（`AGENT_ASK_TOOL`），不带扮演那段触发规则。
-  - 未做（按第十节归刀 3）：用户按章直接编辑、导出、流式落中间栏、章级回退/分叉的 UI（目前用 `/rewind N` 与会话树）。
+- 2026-09-22：**刀 3 已落地**（导出扮演子项目为 agent 子项目仍是可选后续，未做）：用户按章直接编辑（稿子视图「编辑」→ 全文替换 → `POST /api/story/edit` → `replaceChapterText`，与 `story_edit` 同一条修订落点、来源 `user`）；「回退到此章之后」（`story_rewind` 帧 → `chapterRewindTarget` 算出写入该章那一轮的末条 → `navigateTree`，之后的章随分支退掉、文件仍在）；`story_append` 正文流式预览（引擎从 pi `toolcall_*` 增量事件取 `content` 参数 → `story_preview` 帧 → 稿子末尾「写入中」章；⚠ 实测 sonnet 经中转把工具 JSON 整块送达，只出一帧全量预览，在章落盘前约 6 秒可见——逐字生长取决于 provider 是否流工具参数）。浏览器实测三样都过；回退后连用户在其后做的修订也一起退掉（正确：修订是分支上的条目）。
 - 2026-09-22：**刀 2 前端已落地**：新建项目弹窗选「扮演 / agent」（`new` 帧带 `mode`）；agent 子项目桌面端 6:4 反向分栏——`StoryPane`（章目录＋连续阅读＋版本角标）在中间、讨论在右，只有一个输入框；顶栏「扮演｜工作」开关让位给 `agent` 标记（手机上兼作稿子页签入口）；讨论区章卡片（`chapter` 通道，写入/修订留痕，点击定位到章）；手机稿子/讨论双页签；会话列表项目行带 `agent` 角标。数据通道＝`hello.story`（章目录，轻）＋`GET /api/story`（正文，gzip），前端按「chapterId:version」指纹变化才拉。隔离实例浏览器实测：建 agent 项目→写第 1 章→story_edit→卡片/版本角标/手机页签全部对上；扮演项目不受影响。
 - 前置：1.6.1（桌面包漏发 `AUTHORING.md` 的修复已在 `4ff23ad`）。
 - 开工条件：用户点名；开工第一步是重答第四节三问并核对本文引用的行号。

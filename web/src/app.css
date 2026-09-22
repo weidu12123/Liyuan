@@ -8333,6 +8333,78 @@ label.drawer-btn {
 	text-indent: 2em;
 	overflow-wrap: anywhere;
 }
+/* 章尾操作：编辑 / 回退——淡到不打扰阅读，悬停才亮 */
+.story-chapter-acts {
+	display: flex;
+	gap: 8px;
+	margin-top: 4px;
+	opacity: 0.35;
+	transition: opacity 0.15s ease;
+}
+.story-chapter:hover .story-chapter-acts,
+.story-chapter:focus-within .story-chapter-acts {
+	opacity: 1;
+}
+.story-act {
+	padding: 2px 10px;
+	border: 1px solid var(--hairline);
+	border-radius: 999px;
+	background: var(--surface);
+	color: var(--text-soft);
+	font-size: 12px;
+	cursor: pointer;
+}
+.story-act:not(:disabled):hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.story-act:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+/* 按章直接编辑 */
+.story-editor {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.story-editor-text {
+	width: 100%;
+	min-height: 320px;
+	box-sizing: border-box;
+	padding: 12px 14px;
+	border: 1px solid var(--accent);
+	border-radius: 10px;
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 15px;
+	line-height: 1.8;
+	resize: vertical;
+}
+.story-editor-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.story-editor-meta {
+	margin-right: auto;
+	color: var(--text-soft);
+	font-size: 12px;
+}
+/* 写入中的章（流式预览） */
+.story-chapter-preview {
+	opacity: 0.85;
+}
+.story-chapter-preview .story-chapter-ver {
+	background: var(--accent);
+	color: var(--surface, #fff);
+}
+@media (max-width: 999px) {
+	.story-chapter-acts {
+		opacity: 1;
+	}
+}
 /* 顶栏副标题里的形态标记（agent 子项目没有扮演｜工作开关）；手机上兼作稿子页签入口 */
 .tb-sub-mode-agent {
 	padding: 1px 9px;

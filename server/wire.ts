@@ -284,6 +284,8 @@ export type ServerFrame =
 	| { type: "conversation_mode"; mode: ConversationMode; turnMode?: ConversationMode }
 	/** draft=true：该 text 增量是 draft_write 参数的转发（替换语义——重交原地更新，不叠加）；reset=true：本次调用的首个分片 */
 	| { type: "delta"; kind: "text" | "thinking"; delta: string; draft?: boolean; reset?: boolean }
+	/** agent 模式：story_append 正文的流式预览（替换语义，全量；空串＝撤下） */
+	| { type: "story_preview"; text: string; title?: string }
 	/** 稿件分段重同步（修复/重交后）：前端把屏上全部稿段原位替换为 segments（按空行切段） */
 	| { type: "draft_resync"; segments: string[] }
 	| { type: "draft_workspace"; workspace: DraftView; streaming: boolean }
@@ -334,6 +336,8 @@ export type ClientFrame =
 	/** 剧情决策应答：value=选项原文或自由输入；stop=停止本回合（笔还给用户） */
 	| { type: "choice_reply"; id: string; value?: string; stop?: boolean }
 	| { type: "new"; name?: string; mode?: "agent" }
+	/** agent 模式：回退到写入该章的那一轮之后（之后的章随分支退掉，文件仍在；再写＝分叉） */
+	| { type: "story_rewind"; chapterId: string }
 	/** 两层布局：在指定子项目里再开一个会话（「第二个窗口继续聊」） */
 	| { type: "chat_new_session"; chatId: string }
 	| { type: "ping" }; // 保活，服务端丢弃

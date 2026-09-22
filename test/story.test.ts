@@ -13,7 +13,7 @@ import { stateFromBranch, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../sr
 import { planCompaction } from "../src/stage/compact.ts";
 import { prependToLastUser } from "../src/stage/engine.ts";
 import {
-	CHAPTER_ENTRY_TYPE, CHAPTER_REVISION_TYPE, formatStoryTail, hasChapters, projectChapters, runStoryTool, StoryStore, storyDirectory, storyTail,
+	CHAPTER_ENTRY_TYPE, CHAPTER_REVISION_TYPE, chapterRewindTarget, formatStoryTail, hasChapters, projectChapters, replaceChapterText, runStoryTool, StoryStore, storyDirectory, storyTail,
 	storyTools, type StoryToolDeps,
 } from "../src/stage/story.ts";
 import { buildScribeTurnPrompt } from "../src/scribe.ts";
@@ -211,6 +211,38 @@ test("story：agent 讨论不进 story 流，数据条目仍在；压缩按章�
 		assert.match(agent.userText, /【本轮对话】\n章原文$/);
 		const rp = buildScribeTurnPrompt({ state: defaultState(), userText: "你好", assistantText: "回复", charName: "她", userName: "我" });
 		assert.match(rp.userText, /【本轮对话】\n我：你好\n\n她：回复$/);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("story：用户按章直接编辑＝同一条修订落点（来源 user）；回退坐标＝写入该章那一轮的最后一条", () => {
+	const dir = tmp();
+	try {
+		const { branch, deps, user } = makeTree(storyDirectory(dir));
+		user("写第一章");
+		runStoryTool(deps, "story_append", { content: "第一章。" });
+		branch.push({ id: "a1", type: "message", message: { role: "assistant", content: "已写入", details: { liyuanMode: "agent" } } });
+		branch.push({ id: "s1", type: "custom", customType: "rp-state", data: { location: "一" } });
+		user("写第二章");
+		runStoryTool(deps, "story_append", { content: "第二章。" });
+		branch.push({ id: "a2", type: "message", message: { role: "assistant", content: "已写入", details: { liyuanMode: "agent" } } });
+		branch.push({ id: "s2", type: "custom", customType: "rp-state", data: { location: "二" } });
+		const [c1, c2] = projectChapters(branch);
+		assert.equal(chapterRewindTarget(branch, c1!.chapterId), "s1", "停在这一轮的末条（场记之后），不是 assistant 上");
+		assert.equal(chapterRewindTarget(branch, c2!.chapterId), "s2");
+		assert.equal(chapterRewindTarget(branch, "nope"), undefined);
+
+		assert.throws(() => replaceChapterText(deps, c1!.chapterId, 2, "x"), /v1/);
+		assert.throws(() => replaceChapterText(deps, c1!.chapterId, 1, "  "), /清空/);
+		assert.deepEqual(replaceChapterText(deps, c1!.chapterId, 1, "第一章。"), { chapterId: c1!.chapterId, version: 1, index: 1, chars: 4 }, "原文不变不落新版本");
+		const r = replaceChapterText(deps, c1!.chapterId, 1, "第一章（用户改）。");
+		assert.equal(r.version, 2);
+		const rev = branch.at(-1)!;
+		assert.equal(rev.customType, CHAPTER_REVISION_TYPE);
+		assert.equal((rev.data as { source?: string }).source, "user");
+		assert.equal(deps.store.read(projectChapters(branch)[0]!), "第一章（用户改）。");
+		assert.ok(existsSync(join(storyDirectory(dir), c1!.file)), "v1 文件仍在");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

@@ -200,6 +200,11 @@ export interface StageEvents {
 	/** Refresh the original reply after its revision receipt is durable. */
 	onReplyRevised?: (entryId: string) => void;
 	onTurnEnd?: (info: StageTurnEndInfo) => void;
+	/**
+	 * agent 模式：story_append 的正文随工具参数增量流式落到稿子视图（替换语义：每次给全量；
+	 * 空串＝本章已落盘或调用结束，预览撤下）。工具参数在 pi 里按块增量到达，与 draft_write 预览同源。
+	 */
+	onStoryPreview?: (content: string, title?: string) => void;
 	/** 面向用户的告警（宏降级等）；每种只发一次 */
 	onNotify?: (level: "info" | "warning" | "error", text: string) => void;
 	/** 过程条短句（验收/修订进度；kind:"note" 形态，无需工具名） */
@@ -1069,6 +1074,7 @@ export class StageEngine {
 		const mediaNames = this.#deps.media ? mediaStageToolNames(mediaOpts) : new Set<string>();
 		const publish = () => ev.onWorkspace?.(structuredClone(ws));
 		let lastCheckpoint = 0;
+		let lastPreviewAt = 0;
 		const checkpoint = (force = false) => {
 			if (authoringTurn) return;
 			if (force || Date.now() - lastCheckpoint > 250) {
@@ -1112,6 +1118,7 @@ export class StageEngine {
 		const finish = async (): Promise<StageTurnEndInfo> => {
 			if (authoringTurn) {
 				const info = finishAuthoring();
+				if (agentTurn) rawEv.onStoryPreview?.("");
 				// 章写入＝定稿边界（§5.5）：场记→钉档→压缩，同一条旁路链换挂点；纯讨论一轮什么都不触发。
 				if (agentTurn && appended.length) await this.#afterChapters({ model, auth: { apiKey, headers }, materials, sm, ev, appended, aborted: info.aborted, story: story!.store });
 				return info;
@@ -1297,6 +1304,14 @@ export class StageEngine {
 			update: (event) => {
 				if (authoringTurn) {
 					if ((event.type === "text_delta" || event.type === "thinking_delta") && event.delta) ev.onDelta?.(event.type === "text_delta" ? "text" : "thinking", event.delta);
+					// agent：story_append 的 content 参数边到边上屏（稿子视图末尾的「写入中」章），落盘后撤下
+					if (agentTurn && event.type.startsWith("toolcall_") && event.partial && event.contentIndex !== undefined) {
+						const call = event.partial.content[event.contentIndex];
+						if (call?.name === "story_append" && typeof call.arguments?.content === "string" && Date.now() - lastPreviewAt > 120) {
+							lastPreviewAt = Date.now();
+							rawEv.onStoryPreview?.(call.arguments.content, typeof call.arguments.title === "string" ? call.arguments.title : undefined);
+						}
+					}
 					return;
 				}
 				if (ws.revision) return; // A completed edit cannot grow another narrative or mutate its saved timeline.
@@ -1435,6 +1450,7 @@ export class StageEngine {
 				if (authoringTurn) {
 					if (agentTurn && storyNames.has(name)) {
 						const r = runStoryTool(story!, name, input);
+						if (name === "story_append") rawEv.onStoryPreview?.("");
 						if (r.appended) appended.push(r.appended);
 						if (r.activity) ev.onActivity?.(r.activity);
 						return { content: [{ type: "text", text: r.text }], ...(r.details ? { details: r.details as Record<string, unknown> } : {}), ...(r.isError ? { isError: true } : {}) };

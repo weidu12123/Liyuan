@@ -148,3 +148,27 @@ export function toolStartDetail(toolName: string, args: unknown, maxJsonFallback
 		return "";
 	}
 }
+
+/** 过程条里可展开成 diff 的文件改动（agent/工作模式的原生 edit / write）：直接给原文，不给摘要——像 coding agent 的回显 */
+export interface ActivityFileChange {
+	path: string;
+	/** edit：逐处 old/new */
+	edits?: Array<{ old: string; new: string }>;
+	/** write：整文件内容 */
+	content?: string;
+}
+
+export function fileChangeOf(toolName: string, args: unknown): ActivityFileChange | undefined {
+	if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+	const a = args as Record<string, unknown>;
+	const path = typeof a.path === "string" ? a.path : "";
+	if (!path) return undefined;
+	if (toolName === "edit" && Array.isArray(a.edits)) {
+		const edits = a.edits
+			.filter((e): e is { oldText: string; newText: string } => !!e && typeof (e as { oldText?: unknown }).oldText === "string" && typeof (e as { newText?: unknown }).newText === "string")
+			.map((e) => ({ old: e.oldText, new: e.newText }));
+		return edits.length ? { path, edits } : undefined;
+	}
+	if (toolName === "write" && typeof a.content === "string") return { path, content: a.content };
+	return undefined;
+}

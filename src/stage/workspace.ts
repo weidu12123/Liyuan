@@ -76,7 +76,7 @@ export type TurnSegment =
 	| { kind: "thinking"; text: string }
 	/** draft=true 标记「这段是工作区稿件」，重交/改稿时原地替换而非叠加 */
 	| { kind: "text"; text: string; draft?: boolean }
-	| { kind: "tool"; activities: Array<{ kind: string; name: string; detail?: string; isError?: boolean }> };
+	| { kind: "tool"; activities: Array<{ kind: string; name: string; detail?: string; isError?: boolean; change?: unknown }> };
 
 export function createWorkspace(identity: Partial<Pick<TurnWorkspace, "id" | "sessionId" | "parentId" | "userId">> = {}): TurnWorkspace {
 	return {

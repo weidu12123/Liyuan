@@ -1545,8 +1545,8 @@ export default function App() {
 							ws.send({ type: "open", path });
 							dismissWelcome();
 						}}
-						onNew={(name, mode) => {
-							ws.send({ type: "new", ...(name ? { name } : {}), ...(mode ? { mode } : {}) });
+						onNew={(name, mode, greeting) => {
+							ws.send({ type: "new", ...(name ? { name } : {}), ...(mode ? { mode } : {}), ...(greeting !== undefined ? { greeting } : {}) });
 							dismissWelcome();
 						}}
 						onNewInChat={(chatId) => {
@@ -1920,10 +1920,10 @@ export default function App() {
 				<NewProjectBox
 					initial={nextProjectName(chats)}
 					busy={busy}
-					onDone={(name, mode) => {
+					onDone={(name, mode, greeting) => {
 						setNamingProject(false);
 						if (name) {
-							ws.send({ type: "new", name, ...(mode ? { mode } : {}) });
+							ws.send({ type: "new", name, ...(mode ? { mode } : {}), ...(greeting !== undefined ? { greeting } : {}) });
 							dismissWelcome();
 						}
 					}}

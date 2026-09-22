@@ -21,6 +21,7 @@ import { describeChange, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, st
 import { agentHistory, buildDiscussionSummaryPrompt, DISCUSSION_SUMMARY_TYPE, planDiscussionCompaction } from "./discussion.ts";
 import { readFileSync } from "node:fs";
 import { createSandboxGate, sandboxGrantsFromBranch, SANDBOX_GRANT_TYPE } from "../sandbox.ts";
+import { fileChangeOf } from "../activity-format.ts";
 import type { CardDeps } from "../tools/card.ts";
 import type { GateInput } from "../tools/gate.ts";
 import { extractDraftRules } from "../draft.ts";
@@ -1083,7 +1084,10 @@ export class StageEngine {
 				if (m.role === "assistant" && Array.isArray(m.content)) for (const c of m.content) {
 					if (c.type === "text" && c.text) timeline.push({ kind: "text", text: c.text });
 					else if (c.type === "thinking" && c.thinking) timeline.push({ kind: "thinking", text: c.thinking });
-					else if (c.type === "toolCall") timeline.push({ kind: "tool", activities: [{ kind: "tool_start", name: c.name, detail: JSON.stringify(c.arguments).slice(0, 1200) }] });
+					else if (c.type === "toolCall") {
+						const change = fileChangeOf(c.name ?? "", c.arguments);
+						timeline.push({ kind: "tool", activities: [{ kind: "tool_start", name: c.name, detail: JSON.stringify(c.arguments).slice(0, 1200), ...(change ? { change } : {}) }] });
+					}
 				}
 				else if (m.role === "toolResult") timeline.push({ kind: "tool", activities: [{ kind: "tool_end", name: String(m.toolName), detail: contextText(m.content).slice(0, 1200), isError: m.isError === true }] });
 			}

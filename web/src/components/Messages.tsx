@@ -13,6 +13,7 @@ import { isFullInterface } from "../htmlEmbed.ts";
 import { splitRichContentParts, alreadyDisplayHtml, type SkinMacros } from "../richContentParts.ts";
 import { splitMarkdownParts, splitRpInline } from "../markdown.ts";
 import type { WireActivity, WireChoice, WireMsg } from "../wire.ts";
+import { lineDiff } from "../diff.ts";
 import { estimateTokens, formatTokenCount, type TurnSegment } from "../timeline.ts";
 import { HtmlFrame } from "./HtmlFrame.tsx";
 
@@ -397,10 +398,13 @@ function ActivityItem({ a }: { a: WireActivity }) {
 		const label = toolLabel(a.name);
 		const detail = (a.detail ?? "").trim();
 		const human = detail && !looksLikeRawArgs(detail) ? detail : "";
+		const change = a.change;
+		const file = change?.path.split(/[\\/]/).pop() ?? "";
 		return (
 			<li className="ta-call">
 				<span className="ta-label">{label}</span>
-				{human ? <span className="ta-detail">{human}</span> : <span className="ta-detail ta-detail-muted">进行中…</span>}
+				{change ? <span className="ta-detail">{file}</span> : human ? <span className="ta-detail">{human}</span> : <span className="ta-detail ta-detail-muted">进行中…</span>}
+				{change && <FileChangeView change={change} />}
 			</li>
 		);
 	}
@@ -411,6 +415,26 @@ function ActivityItem({ a }: { a: WireActivity }) {
 			<span className="ta-label">{a.isError ? "未办成" : "已办完"}</span>
 			{human ? <span className="ta-detail">{human}</span> : null}
 		</li>
+	);
+}
+
+/** 原生 edit / write 的回显：像 coding agent 改代码那样按行红绿铺开；write 只列内容行（都是新增） */
+function FileChangeView({ change }: { change: NonNullable<WireActivity["change"]> }) {
+	const blocks = change.edits
+		? change.edits.map((e) => lineDiff(e.old, e.new))
+		: [(change.content ?? "").split("\n").map((text) => ({ op: "+" as const, text }))];
+	const isWrite = !change.edits;
+	return (
+		<details className="ta-change" open={!isWrite}>
+			<summary>{isWrite ? `写入整文件 · ${(change.content ?? "").length} 字` : `${change.edits!.length} 处替换`}</summary>
+			{blocks.map((lines, i) => (
+				<pre key={i} className="ta-change-pre">
+					{lines.map((l, j) => (
+						<span key={j} className={`ta-change-line ${l.op === "+" ? "add" : l.op === "-" ? "del" : "ctx"}`}>{l.op} {l.text}{"\n"}</span>
+					))}
+				</pre>
+			))}
+		</details>
 	);
 }
 

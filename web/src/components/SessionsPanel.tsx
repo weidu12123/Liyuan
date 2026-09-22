@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiDelete, apiGet, apiPost, apiPostFile, type SessionSearchHit } from "../api.ts";
+import { apiDelete, apiGet, apiPost, apiPostFile, type CardResponse, type SessionSearchHit } from "../api.ts";
 import type { WireChatInfo, WireSessionInfo, WireStats } from "../wire.ts";
 import {
 	IconDownload,
@@ -66,7 +66,7 @@ export interface SessionsPanelProps {
 	stats: WireStats | null;
 	onOpen: (path: string) => void;
 	/** 新建：两层布局经弹窗起名后带 name（新建项目）与形态（缺省扮演 / agent）；老布局无参直接建会话 */
-	onNew: (name?: string, mode?: "agent") => void;
+	onNew: (name?: string, mode?: "agent", greeting?: number) => void;
 	/** 在指定子项目里再开一个会话（项目行右边的「＋」） */
 	onNewInChat?: (chatId: string) => void;
 	onCompact: () => void;
@@ -105,15 +105,24 @@ function RenameBox({ initial, onDone }: { initial: string; onDone: (name: string
 }
 
 /** 新建项目弹窗（顶栏「新建项目」也用它，App.tsx 引用）：起名 ＋ 选形态（扮演 / agent，建项目时定，之后不切换） */
-export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy: boolean; onDone: (name: string | null, mode?: "agent") => void }) {
+export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy: boolean; onDone: (name: string | null, mode?: "agent", greeting?: number) => void }) {
 	const [value, setValue] = useState(initial);
 	const [mode, setMode] = useState<"roleplay" | "agent">("roleplay");
+	// agent 形态：卡的开场白可选一条落成稿子第一个文件（素材进稿子是用户的动作）；-1＝不落
+	const [greetings, setGreetings] = useState<CardResponse["greetings"] | null>(null);
+	const [greeting, setGreeting] = useState(-1);
 	const ref = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		ref.current?.select();
 		ref.current?.focus();
 	}, []);
-	const done = (name: string | null) => onDone(name, mode === "agent" ? "agent" : undefined);
+	useEffect(() => {
+		if (mode !== "agent" || greetings) return;
+		let live = true;
+		void apiGet<CardResponse>("/api/card").then((r) => { if (live) setGreetings((r.greetings ?? []).filter((g) => (g.text ?? "").trim())); }).catch(() => { if (live) setGreetings([]); });
+		return () => { live = false; };
+	}, [mode, greetings]);
+	const done = (name: string | null) => onDone(name, mode === "agent" ? "agent" : undefined, mode === "agent" && greeting >= 0 ? greeting : undefined);
 	return (
 		<div
 			className="spv2-modal-mask"
@@ -141,6 +150,17 @@ export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy
 						</button>
 					))}
 				</div>
+				{mode === "agent" && greetings && greetings.length > 0 && (
+					<div className="spv2-modal-greetings" role="radiogroup" aria-label="开场白">
+						<div className="spv2-modal-greetings-title">开场白落成稿子的第一个文件（000-开场.md）</div>
+						{[{ index: -1, label: "不落，空稿子开始", text: "" }, ...greetings].map((g) => (
+							<button key={g.index} type="button" role="radio" aria-checked={greeting === g.index} className={`spv2-modal-greeting ${greeting === g.index ? "on" : ""}`} onClick={() => setGreeting(g.index)}>
+								<span className="spv2-modal-greeting-label">{g.label}</span>
+								{g.text && <span className="spv2-modal-greeting-hint">{g.text.replace(/\s+/g, " ").slice(0, 60)}</span>}
+							</button>
+						))}
+					</div>
+				)}
 				<div className="spv2-modal-row">
 					<button type="button" className="drawer-btn" onClick={() => onDone(null)}>
 						取消
@@ -736,9 +756,9 @@ export function SessionsPanel({
 				<NewProjectBox
 					initial={nextProjectName(chats)}
 					busy={busy}
-					onDone={(name, mode) => {
+					onDone={(name, mode, greeting) => {
 						setNaming(false);
-						if (name) onNew(name, mode);
+						if (name) onNew(name, mode, greeting);
 					}}
 				/>
 			)}

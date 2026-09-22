@@ -41,6 +41,7 @@ import {
 } from "../src/access.ts";
 import { findModelEntry, loadAgentConfig, normalizeAgentConfig, syncAgentConfigToRuntime } from "../src/agent-config.ts";
 import { loadCardFile, readCardRawJson, updateCardFields } from "../src/card.ts";
+import { applyMacros } from "../src/card-macros.ts";
 import { findInitVar, findSchemaDefaults, seedMvuIfNeeded } from "../src/mvu.ts";
 import { authorScriptManifest, extractAuthorScripts } from "../src/authorScripts.ts";
 import { buildGreeting } from "../src/greeting.ts";
@@ -157,7 +158,7 @@ import {
 } from "../src/lorebook.ts";
 import { syncStoryPanelsFromDisk, syncStoryStateFromDisk } from "../src/story-sync.ts";
 import { applyPendingBackupRestore, BACKUP_ROOT, buildBackupZip, projectSessionDir } from "../src/backup.ts";
-import { toolStartDetail } from "../src/activity-format.ts";
+import { fileChangeOf, toolStartDetail } from "../src/activity-format.ts";
 import {
 	checkLatestRelease,
 	downloadAndStage,
@@ -1457,7 +1458,8 @@ const bindSession = async () => {
 			case "tool_execution_start": {
 				// RP 人话摘要（非 JSON）；模型台侧旁白另由 stream→note 捕获
 				const detail = toolStartDetail(event.toolName, event.args);
-				broadcast({ type: "activity", activity: { kind: "tool_start", name: event.toolName, detail } });
+				const change = fileChangeOf(event.toolName, event.args);
+				broadcast({ type: "activity", activity: { kind: "tool_start", name: event.toolName, detail, ...(change ? { change } : {}) } });
 				break;
 			}
 			case "tool_execution_end":
@@ -3242,6 +3244,19 @@ wss.on("connection", (ws, req) => {
 							return;
 						}
 						if (freshDir) {
+							// agent 子项目：用户选的开场白落成稿子第一个文件（docs/PLAN-AGENT-CODING.md §十三）——素材进稿子是用户的动作，不是注入
+							if (newMode && Number.isInteger(frame.greeting) && frame.greeting! >= 0) {
+								const chatDir = chatDirOfSessionDir(freshDir);
+								const card = loadCardFile(isAbsolute(cardPath) ? cardPath : join(cwd, cardPath));
+								const pool = [card.firstMes, ...card.alternateGreetings];
+								const mes = pool[frame.greeting!];
+								if (chatDir && typeof mes === "string" && mes.trim()) {
+									const dir = storyDirectory(chatDir);
+									mkdirSync(dir, { recursive: true });
+									writeFileSync(join(dir, "000-开场.md"), applyMacros(mes, { charName: card.name, userName: loadConfig(cwd).userName }), "utf8");
+									new StoryHistory(chatDir).commit({ author: "user", message: "开场白落成第一个文件" });
+								}
+							}
 							const previousSessionFile = session.sessionFile;
 							// 按 pi 的 teardownCurrent 同款收尾旧会话（session_shutdown → 扩展收尾 → dispose），
 							// 不能只丢引用：roleplay.ts 在 shutdown 事件里落盘收尾。

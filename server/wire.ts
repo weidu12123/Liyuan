@@ -20,6 +20,7 @@ import type { CardProjectPreview } from "../src/card-authoring-types.ts";
 import { isBackstageText } from "../src/stance.ts";
 import { messageMode, type ConversationMode } from "../src/conversation-mode.ts";
 import { STORY_CHECKPOINT_TYPE } from "../src/stage/story-history.ts";
+import type { ActivityFileChange } from "../src/activity-format.ts";
 export type { ConversationMode };
 import { applyDraftOps, type DraftMsgLike } from "../src/draft.ts";
 import type { RpPanel } from "../src/panels.ts";
@@ -218,6 +219,8 @@ export interface WireActivity {
 	detail?: string;
 	/** tool_end 专用：是否出错 */
 	isError?: boolean;
+	/** tool_start 专用：原生 edit / write 的原文改动（前端展开成行级 diff） */
+	change?: ActivityFileChange;
 }
 
 /**
@@ -342,7 +345,8 @@ export type ClientFrame =
 	| { type: "open"; path: string }
 	/** 剧情决策应答：value=选项原文或自由输入；stop=停止本回合（笔还给用户） */
 	| { type: "choice_reply"; id: string; value?: string; stop?: boolean }
-	| { type: "new"; name?: string; mode?: "agent" }
+	/** greeting：agent 子项目把第 N 条开场白（0=first_mes）落成稿子第一个文件 */
+	| { type: "new"; name?: string; mode?: "agent"; greeting?: number }
 	/** agent 模式：回退到写入该章的那一轮之后（之后的章随分支退掉，文件仍在；再写＝分叉） */
 	/** agent 模式：恢复到检查点。files＝只恢复文件；both＝文件和对话一起（截到那轮输入之前） */
 	| { type: "story_restore"; checkpointId: string; scope: "files" | "both" }

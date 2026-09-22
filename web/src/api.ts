@@ -362,6 +362,7 @@ export interface RpConfigView {
 	displayName?: string;
 	userPersona: string;
 	language: string;
+	uiLanguage?: "zh" | "en";
 	scanDepth: number;
 	maxLoreInjections: number;
 	greeting: boolean;

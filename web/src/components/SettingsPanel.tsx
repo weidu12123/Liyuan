@@ -7,6 +7,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, apiGet, apiPut, createBackup, downloadBackup, importBackup, type RpConfigView } from "../api.ts";
 import { ConfirmButton, PanelStatus, SliderField, Toggle, useAction, usePanelData } from "./kit.tsx";
+import { LocaleSwitch } from "./LocaleSwitch.tsx";
+import { t } from "../i18n/index.ts";
 
 type MemoryStoreStats = {
 	id: string;
@@ -762,6 +764,11 @@ export function SettingsPanel({
 	return (
 		<div className="panel-body panel-body-sticky">
 			<PanelStatus loading={loading} error={error} hasData={!!data} />
+			<section className="sp-section">
+				<h4>{t("界面语言")}</h4>
+				<LocaleSwitch onError={(msg) => toast("error", msg)} />
+				<div className="field-hint">{t("只换界面文案；模型用什么语言写正文由角色与提示词决定。")}</div>
+			</section>
 			<AccessSection toast={toast} />
 			<BackupSection toast={toast} />
 			<MemorySection toast={toast} />

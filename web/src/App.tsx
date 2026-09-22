@@ -44,6 +44,7 @@ import { registerLiyuanToast, registerTavernChatBridge } from "./tavernShim.ts";
 import { syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
 import { setAtHome, shouldShowHomeOnBoot, touchVisit } from "./visit.ts";
 import { getTheme, setTheme } from "./theme.ts";
+import { syncLocaleFromConfig, t, useLocale } from "./i18n/index.ts";
 import {
 	IconApi,
 	IconAttach,
@@ -245,6 +246,7 @@ function loadPanelPrefs(): { left: PanelId | null; right: PanelId | null; lastSe
 }
 
 export default function App() {
+	useLocale(); // 顶层订阅界面语言：切换时整棵树重渲染
 	const [conn, setConn] = useState<ConnState>("connecting");
 	const [charName, setCharName] = useState("梨园");
 	const [userName, setUserName] = useState("");
@@ -766,6 +768,7 @@ export default function App() {
 		(frame: ServerFrame) => {
 			switch (frame.type) {
 				case "hello": {
+					syncLocaleFromConfig(frame.uiLanguage);
 					modeRef.current = frame.conversationMode ?? "roleplay";
 					setConversationMode(modeRef.current);
 					streamModeRef.current = frame.turnMode ?? modeRef.current;

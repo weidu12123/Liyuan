@@ -127,8 +127,10 @@ export interface RpConfig {
 	displayName?: string;
 	/** {{user}} 的人设描述（可选） */
 	userPersona: string;
-	/** 回复语言 */
+	/** 回复语言（给模型的；与界面语言无关） */
 	language: string;
+	/** 界面语言（外壳文案；一个实例一种，服务端送到界面的话也按它出）。缺省按浏览器语言显示、不落盘 */
+	uiLanguage?: "zh" | "en";
 	/** 关键词扫描回溯的消息条数 */
 	scanDepth: number;
 	/** 每轮关键词自动注入的条目上限 */

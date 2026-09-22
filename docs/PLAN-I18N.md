@@ -57,6 +57,32 @@ t("{n} 章", { n })                 // 英文目录里写 "{n} chapter|{n} chapt
 - 过程条摘要（`activity-format.ts`）：生成时按当时 locale；**已经写进 `rpTimeline` 的历史不重译**（已知限制，写进本文）。
 - 运行时生成、会落盘的名字（新子项目缺省名「新对话」、预设「主提示词」等）：按当时 locale 生成一次，落盘后就是数据。
 
+### 2.5 术语表（英文目录统一用法）
+
+| 中文 | English | 中文 | English |
+|---|---|---|---|
+| 梨园 | Liyuan | 角色卡 / 卡 | character card / card |
+| 世界书 / 条目 | lorebook / entry | 预设 | preset |
+| 会话 | session | 子项目 / 项目 | project |
+| 对话 | chat | 扮演（模式） | roleplay (mode) |
+| 工作（模式） | work (mode) | agent 模式 | agent mode |
+| 稿子 / 正文 | manuscript / story text | 稿纸 | draft |
+| 开场白 | greeting | 状态栏 | status bar |
+| 前情提要 | recap | 账本 / 世界状态 | ledger / world state |
+| 登场名录 | roster | 世界线 | worldline |
+| 场记 | scribe | 旁路模型 | side model |
+| 楼层 | floor | 拍 / 轮 | beat / turn |
+| 悬浮球 | orb | 面板 | panel |
+| 过程条 | process strip | 检查点 | checkpoint |
+| 记忆（向量） | memory | 剧情库 / 额外库 | story store / extra store |
+| 人设 / 用户人设 | persona / user persona | 名录 | roster |
+| 技能 / 技能包 | skill / skill pack | 连接（模型） | connection |
+| 重 roll | reroll | 回退 | rewind |
+| 压缩 | compaction | 沙箱 | sandbox |
+| 卡空间 / 卡文件夹 | card space / card folder | 工坊 | studio |
+
+语气：按钮用动词原形（Save / Delete / Import），提示句完整句、不用感叹号，不出现「you」的说教腔。
+
 ## 三、完整性检查（铁律三：不靠人记）
 
 `scripts/i18n-check.mjs`：TypeScript AST 扫描 `web/src`、`server`、`src/activity-format.ts` 等外壳文件，列出**不在 `t(...)` 第一参数位置**的中文字符串字面量 / JSX 文本；内容面文件在允许名单里（第一节列的那几份）。作为 `test/i18n-check.test.ts` 进 `npm test`——扫出零条才绿。`en.ts` 里的键必须都在源码里出现（反向检查，防死条目）。

@@ -875,6 +875,7 @@ const helloFrame = (): ServerFrame => {
 	const { scripts, ...cardfrontLite } = cardfront;
 	return {
 		type: "hello",
+		uiLanguage: loadConfig(cwd).uiLanguage,
 		sessionId: session.sessionId,
 		charName: names.charName,
 		userName: names.userName,
@@ -2215,7 +2216,7 @@ async function handleAccessApi(req: IncomingMessage, res: ServerResponse, url: s
 	};
 	try {
 		if (req.method === "GET" && url === "/api/access/status") {
-			json(200, { required: !!accessData, ok: requestAuthed(req) });
+			json(200, { required: !!accessData, ok: requestAuthed(req), uiLanguage: loadConfig(cwd).uiLanguage ?? null });
 			return;
 		}
 		if (req.method === "POST" && url === "/api/access/login") {

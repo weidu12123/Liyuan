@@ -7314,6 +7314,15 @@ label.drawer-btn {
 .login-gate-blank {
 	background: var(--bg);
 }
+.login-locale {
+	position: absolute;
+	top: calc(12px + env(safe-area-inset-top, 0px));
+	right: 12px;
+}
+.login-locale .seg-row,
+.locale-switch.seg-row {
+	margin: 0;
+}
 .login-card {
 	display: flex;
 	flex-direction: column;

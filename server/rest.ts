@@ -60,6 +60,7 @@ import {
 	type CardFrontSnapshot,
 } from "../src/cardfront.ts";
 import { RP_COMMANDS } from "../src/commands.ts";
+import { setUiLocale } from "../src/i18n/index.ts";
 import {
 	getMemoryStatus,
 	memoryClearStore,
@@ -447,6 +448,8 @@ export function loadConfig(cwd: string): RpConfig {
 	const p = configPath(cwd);
 	if (!existsSync(p)) return { ...DEFAULT_CONFIG };
 	const raw = { ...DEFAULT_CONFIG, ...(JSON.parse(readFileSync(p, "utf8")) as Partial<RpConfig>) };
+	// 界面语言跟配置走：每次读盘对齐一次，PUT /api/config 之后下一条送到界面的话就换语言
+	setUiLocale(raw.uiLanguage);
 	// 规范化：旧 lorebook 单本 → lorebooks 数组
 	return setMountedLorebooks(raw, mountedLorebookPaths(raw));
 }
@@ -487,6 +490,7 @@ const CONFIG_EDITABLE = new Set([
 	"userPersona",
 	"displayName",
 	"language",
+	"uiLanguage",
 	"scanDepth",
 	"maxLoreInjections",
 	"greeting",
@@ -517,6 +521,7 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 	// 必填字段兜底
 	if (typeof next.userName !== "string" || !next.userName) next.userName = DEFAULT_CONFIG.userName;
 	if (typeof next.language !== "string" || !next.language) next.language = DEFAULT_CONFIG.language;
+	if (next.uiLanguage !== "zh" && next.uiLanguage !== "en") delete next.uiLanguage;
 	next.scanDepth = clampInt(next.scanDepth, 1, 50, DEFAULT_CONFIG.scanDepth);
 	next.maxLoreInjections = clampInt(next.maxLoreInjections, 0, 20, DEFAULT_CONFIG.maxLoreInjections);
 	// 固定楼层压缩周期：0=关闭主动压缩；上限防手滑（500 轮≈永不触发）

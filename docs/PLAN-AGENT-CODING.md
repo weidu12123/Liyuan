@@ -99,7 +99,8 @@ agent 模式清单＝扮演的数据工具中**与树无关的**（世界书 / �
 
 一版 §5.4 声明的四条通道（system / 项目状态块 / 讨论历史 / 本轮回执）保持闭合，不加第五条。变的是：
 
-1. **system**：~~`assets/AGENT.md` 重写~~ → **2026-09-23 改正**：agent 模式的 system 与扮演同一套槽位，只换一格——`SYSTEM.md`（环境底座）→ 全局追加（扮演读 `APPEND_SYSTEM.md`，agent 读 `AGENT_APPEND_SYSTEM.md`，二选一）→ 卡 `APPEND_SYSTEM.md` → 卡 `AGENTS.md` → 三行事实。`assets/AGENT.md` 退场，其内容并入随包种子 `assets/AGENT_APPEND_SYSTEM.md`（缺失才播种、用户可改、空缺退随包）。**项目状态块**：前情提要、世界状态、登场名录不动；**稿子尾部换成稿子目录**——文件名、字数、最后一次改动时间，一行一个。正文不带；读不读归模型，与 Claude Code 不预读文件同形。`agentStoryTailChars` 删除。
+1. **system**：~~`assets/AGENT.md` 重写~~ → **2026-09-23 改正**：agent 模式的 system 与扮演同一套槽位，只换一格——`SYSTEM.md`（环境底座）→ 全局追加（扮演读 `APPEND_SYSTEM.md`，agent 读 `AGENT_APPEND_SYSTEM.md`，二选一）→ 卡 `APPEND_SYSTEM.md` → 卡 `AGENTS.md` → 三行事实。`assets/AGENT.md` 退场，其内容并入随包种子 `assets/AGENT_APPEND_SYSTEM.md`（缺失才播种、用户可改、空缺退随包）。
+2. **项目状态块**：前情提要、世界状态、登场名录不动；**稿子尾部换成稿子目录**——文件名、字数、最后一次改动时间，一行一个。正文不带；读不读归模型，与 Claude Code 不预读文件同形。`agentStoryTailChars` 删除。
 3. **讨论历史**：`authoringHistory` 认 pi 的 `compaction` 条目（现在不认——从 `getBranch()` 全量回放）。分支上有 `compaction` 时从它的 `firstKeptEntryId` 起回放，摘要作一条 user 消息置前。这样 pi 自带的阈值压缩（`packages/coding-agent/src/core/compaction`，按模型上下文窗口比例）在 agent 轮真正生效。梨园不写第二套讨论压缩。
 4. **本轮回执**：不变。
 

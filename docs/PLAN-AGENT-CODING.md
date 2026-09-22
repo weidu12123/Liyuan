@@ -147,3 +147,12 @@ agent 模式清单＝扮演的数据工具中**与树无关的**（世界书 / �
 3. 状态块完全不带正文；实弹若发现模型不读就写，再加回「尾部字数」数据参数。
 4. 前情压缩「保留最近 N 个文件」复用 `compactEveryNTurns`。
 5. 「文件和对话一起恢复」截到那条 user 之前、输入框预填原话；被截掉的讨论不提供回去的入口。
+
+## 十二、状态
+
+- 2026-09-22：三刀落地，未 push——`d83d465` 快照仓、`4341385` 轮与上下文、`8b3afd4` 前端。单测 `test/story-history.test.ts`、`test/agent-mode.test.ts`；全量 817/819（2 个实卡测试在 HEAD 也红）。隔离实例（sonnet 经 cpa-my）跑通：纯讨论零检查点 → 原生 `write` 写一章（场记只对新增文件跑）→ 一轮里 `edit` 改一章 + `write` 加一章（`modified`+`added`）→ 「文件和对话一起」恢复到写第一章那轮之前（稿子空、讨论只剩第一轮）；真浏览器桌面与手机页签、历史 diff、只恢复文件、手改保存都过。
+- 与本文的两处偏离，实施时定：
+  1. **讨论层压缩不是 pi 的**（§六.3 原计划「认 pi 的 compaction」）：pi 的阈值压缩只数 message 条目，看不见梨园落成 `liyuan-process` 的过程记录，估算永远不到阈值，且 `session_before_compact` 早已对台上轮 cancel。改为压缩权跟装配权走：`src/stage/discussion.ts` 用 pi 同一把尺（字符/4）估算 `agentHistory`，超过 `contextWindow − 16384` 就按整轮从末尾保留 ≥ 20000 token，其余交旁路模型摘要，落 `liyuan-discussion-summary`（`firstKeptEntryId` 语义同 pi）。摘要提示词是这个新机制自己的一段，不进主上下文。
+  2. **「文件和对话一起恢复」之后追加一条检查点树条目**（§4.3）：pi 重载时叶子＝文件里最后一条，光挪叶子重启就回到末尾；恢复本身落成检查点（文件无变化也 `force` 落一条空改动），条目挂在截断处，叶子随之持久。
+- 会话树上多了一种留痕条目 `liyuan-story-checkpoint`（`{id, ts, author, message, turnId?, changed}`，不含清单）：讨论区卡片与两式恢复的对应关系用它，真相仍在 `历史/检查点.jsonl`。
+- 未做：正文流式预览（§五：原生 `write` 参数的增量若 provider 流工具参数可做，形状是「工作树里正在写的文件」）；扮演子项目导出成 agent 子项目。

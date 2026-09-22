@@ -8197,6 +8197,288 @@ label.drawer-btn {
 	}
 }
 
+/* ── agent 模式（docs/PLAN-AGENT-MODE.md §5.6）：稿子在中间（60%），讨论在右（40%）；手机上是两个页签 ── */
+.story-pane {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	overflow: hidden;
+	background: var(--bg);
+}
+.story-pane-inner {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+}
+.story-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	height: 38px;
+	padding: 0 20px;
+	box-sizing: border-box;
+	border-bottom: 1px solid var(--hairline);
+	background: var(--surface);
+	flex: 0 0 auto;
+}
+.story-back,
+.story-tab-btn {
+	display: none;
+	align-items: center;
+	height: 24px;
+	padding: 0 10px;
+	border: 1px solid var(--hairline-strong);
+	border-radius: 999px;
+	background: var(--surface);
+	color: var(--text);
+	font-size: 12px;
+	cursor: pointer;
+}
+.story-title {
+	font-weight: 600;
+	font-size: 13px;
+}
+.story-meta {
+	margin-left: auto;
+	color: var(--text-soft);
+	font-size: 12px;
+}
+.story-outline {
+	display: flex;
+	gap: 6px;
+	overflow-x: auto;
+	padding: 8px 20px;
+	border-bottom: 1px solid var(--hairline);
+	flex: 0 0 auto;
+	scrollbar-width: thin;
+}
+.story-outline-item {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 180px;
+	padding: 3px 10px;
+	border: 1px solid var(--hairline);
+	border-radius: 999px;
+	background: var(--surface);
+	color: var(--text-soft);
+	font-size: 12px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.story-outline-item:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.story-outline-index {
+	font-variant-numeric: tabular-nums;
+	opacity: 0.7;
+}
+.story-outline-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.story-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 28px 32px 96px;
+}
+.story-empty {
+	max-width: 720px;
+	margin: 20vh auto 0;
+	text-align: center;
+	color: var(--text-soft);
+	font-size: 14px;
+}
+.story-chapter {
+	max-width: 720px;
+	margin: 0 auto 48px;
+	font-size: 16px;
+	line-height: 1.95;
+	color: var(--text);
+}
+.story-chapter-head {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	margin: 0 0 18px;
+	font-size: 18px;
+	font-weight: 600;
+	line-height: 1.4;
+}
+.story-chapter-no {
+	color: var(--text-soft);
+	font-weight: 500;
+	font-size: 14px;
+}
+.story-chapter-ver {
+	padding: 0 6px;
+	border-radius: 999px;
+	background: var(--accent-wash);
+	color: var(--accent);
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 18px;
+}
+.story-chapter-chars {
+	margin-left: auto;
+	color: var(--text-soft);
+	font-size: 12px;
+	font-weight: 400;
+}
+.story-chapter p {
+	margin: 0 0 1em;
+	text-indent: 2em;
+	overflow-wrap: anywhere;
+}
+/* 顶栏副标题里的形态标记（agent 子项目没有扮演｜工作开关）；手机上兼作稿子页签入口 */
+.tb-sub-mode-agent {
+	padding: 1px 9px;
+	font-size: 12px;
+	color: var(--accent);
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	cursor: default;
+	font-family: inherit;
+}
+.tb-sub-mode-agent-story {
+	display: none;
+	margin-left: 3px;
+	font-weight: 500;
+}
+@media (max-width: 999px) {
+	.tb-sub-mode-agent {
+		cursor: pointer;
+	}
+	.tb-sub-mode-agent-story {
+		display: inline;
+	}
+}
+/* 讨论区的章卡片：写入/修订留痕，点击定位到稿子 */
+.chapter-card {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	margin: 6px 0;
+	padding: 8px 12px;
+	border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--hairline));
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+	color: var(--text);
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+.chapter-card:disabled {
+	cursor: default;
+}
+.chapter-card:not(:disabled):hover {
+	border-color: var(--accent);
+}
+.chapter-card-kind {
+	flex: none;
+	padding: 0 7px;
+	border-radius: 999px;
+	background: var(--accent);
+	color: var(--surface, #fff);
+	font-size: 11px;
+	line-height: 18px;
+}
+.chapter-card-edit .chapter-card-kind {
+	background: var(--text-soft);
+}
+.chapter-card-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* 新建项目弹窗：形态选择 */
+.spv2-modal-modes {
+	display: flex;
+	gap: 8px;
+	margin: 10px 0 14px;
+}
+.spv2-modal-mode {
+	flex: 1 1 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	padding: 8px 10px;
+	border: 1px solid var(--hairline-strong);
+	border-radius: 10px;
+	background: var(--surface);
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+.spv2-modal-mode.on {
+	border-color: var(--accent);
+	background: var(--accent-wash);
+}
+.spv2-modal-mode-label {
+	font-size: 13px;
+	font-weight: 600;
+}
+.spv2-modal-mode-hint {
+	font-size: 11.5px;
+	line-height: 1.4;
+	color: var(--text-soft);
+}
+.spv2-chat-mode {
+	flex: none;
+	margin-left: 6px;
+	padding: 0 6px;
+	border-radius: 999px;
+	background: var(--accent-wash);
+	color: var(--accent);
+	font-size: 10.5px;
+	font-weight: 600;
+	line-height: 16px;
+}
+@media (min-width: 1000px) {
+	.story-pane {
+		flex: 0 0 60%;
+		width: 60%;
+		max-width: 60%;
+		border-right: 1px solid var(--hairline);
+	}
+	.center.center-agent-split {
+		flex: 0 0 40% !important;
+		width: 40% !important;
+		max-width: 40% !important;
+		min-width: 0 !important;
+	}
+	.center.center-agent-split .stage-wrap .stage-col-left .list {
+		padding: 16px 16px 24px;
+	}
+	.center.center-agent-split .composer {
+		padding: 8px 12px 12px;
+	}
+}
+@media (max-width: 999px) {
+	.story-pane {
+		display: none;
+	}
+	.story-pane.story-pane-active {
+		display: flex;
+		position: fixed;
+		inset: 0;
+		width: 100vw;
+		height: 100dvh;
+		z-index: 500;
+	}
+	.story-back,
+	.story-tab-btn {
+		display: inline-flex;
+	}
+	.story-body {
+		padding: 20px 16px 96px;
+	}
+}
+
 /* ── 关于面板（AboutPanel） ── */
 .about-panel-body {
 	padding: 16px;

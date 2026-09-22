@@ -19,6 +19,7 @@ import type { AuthorScript } from "../src/authorScripts.ts";
 import type { CardProjectPreview } from "../src/card-authoring-types.ts";
 import { isBackstageText } from "../src/stance.ts";
 import { messageMode, type ConversationMode } from "../src/conversation-mode.ts";
+export type { ConversationMode };
 import { applyDraftOps, type DraftMsgLike } from "../src/draft.ts";
 import type { RpPanel } from "../src/panels.ts";
 import type { WorldState } from "../src/types.ts";
@@ -43,7 +44,29 @@ export type WireChannel =
 	| "video"
 	| "choice"
 	/** 对话流内嵌 HTML（show_html 工具 / 正文 ```html 块） */
-	| "html";
+	| "html"
+	/** agent 模式：稿子写入/修订的内联卡片（点击定位到稿子视图） */
+	| "chapter";
+
+/** agent 模式的章（当前分支投影；hello 带目录，正文经 GET /api/story） */
+export interface WireStoryChapter {
+	index: number;
+	chapterId: string;
+	title?: string;
+	chars: number;
+	version: number;
+	/** rp-chapter 条目 id */
+	entryId?: string;
+}
+/** 讨论区里的章卡片 */
+export interface WireChapterRef {
+	kind: "append" | "edit";
+	chapterId: string;
+	version: number;
+	index: number;
+	title?: string;
+	chars: number;
+}
 
 /** ST 式回复变体：挂在 narrative 上；左右箭头切换，agent 只见当前选中 */
 export interface WireSwipe {
@@ -103,6 +126,8 @@ export interface WireMsg {
 	 * 挂在 greeting 消息上，避免只靠 /api/card 轮询导致「正文已是第 4 条、角标还是 2」。
 	 */
 	greetingPick?: { index: number; total: number };
+	/** chapter 通道专用：写入/修订了哪一章 */
+	chapter?: WireChapterRef;
 }
 
 /**
@@ -154,6 +179,8 @@ export interface WireChatInfo {
 	modified: number;
 	/** 会话文件数 */
 	sessionCount: number;
+	/** 子项目形态：agent＝正文住章文件（缺省＝扮演） */
+	mode?: "agent";
 }
 
 /** 会话统计（getSessionStats 裁剪投影） */
@@ -222,6 +249,8 @@ export type ServerFrame =
 			type: "hello";
 			conversationMode?: ConversationMode;
 			turnMode?: ConversationMode;
+			/** agent 子项目：当前分支的章目录（正文经 GET /api/story 取，hello 不扛正文） */
+			story?: { chapters: WireStoryChapter[] };
 			sessionId: string;
 			charName: string;
 			userName: string;
@@ -550,6 +579,11 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 		}
 		if (msg.customType === "rp-import") {
 			return text ? { channel: "import", text: prepareDisplayText(text, skin) } : null;
+		}
+		// agent 模式：章写入/修订的内联卡片（main.ts branchMessages 由 rp-chapter 条目投影而来）
+		if (msg.customType === "rp-chapter" || msg.customType === "rp-chapter-revision") {
+			const ref = (msg.details as { rpChapter?: WireChapterRef } | undefined)?.rpChapter;
+			return ref ? { channel: "chapter", text, chapter: ref } : null;
 		}
 		// 用户气泡「配音」写入的可展示音频（details.rpAudio；正文尽量不进 LLM 注意力，见 convert 侧仍可能带短标记）
 		if (msg.customType === "rp-audio") {

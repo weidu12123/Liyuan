@@ -649,6 +649,8 @@ export interface BubbleProps {
 	edit?: BubbleEditState;
 	/** 一档卡皮肤（显示层；缺省 null=与旧行为一致） */
 	skin?: SkinProp | null;
+	/** agent 模式：章卡片点击 → 稿子视图定位到该章 */
+	onChapter?: (chapterId: string) => void;
 }
 
 export function Bubble({
@@ -668,9 +670,20 @@ export function Bubble({
 	swipe,
 	edit,
 	skin,
+	onChapter,
 }: BubbleProps) {
 	if (msg.channel === "info") {
 		return <div className="info-line">{msg.text}</div>;
+	}
+	if (msg.channel === "chapter") {
+		// agent 模式：章写入/修订留痕成一张内联卡片（不用弹窗），点击定位到稿子里的那一章
+		const c = msg.chapter;
+		return (
+			<button type="button" className={`chapter-card ${c?.kind === "edit" ? "chapter-card-edit" : ""}`} onClick={() => c && onChapter?.(c.chapterId)} disabled={!onChapter}>
+				<span className="chapter-card-kind">{c?.kind === "edit" ? "修订" : "写入"}</span>
+				<span className="chapter-card-text">{msg.text}</span>
+			</button>
+		);
 	}
 	if (msg.channel === "choice") {
 		// 留痕的决策选择卡（重放）：置灰只读，标注结果（D10：岔路口是剧情资产）
@@ -714,7 +727,7 @@ export function Bubble({
 	}
 	if (msg.channel === "authoring") {
 		return <div className="msg msg-authoring">
-			<div className="msg-head"><span className="msg-name">工作</span>{msg.unfinished && <span className="chip chip-unfinished">已停止</span>}</div>
+			<div className="msg-head"><span className="msg-name">{msg.mode === "agent" ? "agent" : "工作"}</span>{msg.unfinished && <span className="chip chip-unfinished">已停止</span>}</div>
 			{msg.segments?.length || msg.timeline?.length ? <TurnTimeline segments={msg.segments ?? msg.timeline!} plain /> : <>{msg.thinking && <ThinkingBlock text={msg.thinking} />}<Paragraphs text={msg.text} /></>}
 		</div>;
 	}

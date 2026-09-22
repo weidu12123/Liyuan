@@ -139,7 +139,9 @@ import {
 	type ServerFrame,
 	type WireNames,
 	type WireStats,
+	type WireStoryChapter,
 } from "./wire.ts";
+import { CHAPTER_ENTRY_TYPE, CHAPTER_REVISION_TYPE, chapterFileName, projectChapters, StoryStore, storyDirectory } from "../src/stage/story.ts";
 import { sameCardPath } from "../src/paths.ts";
 import { readSessionCardInfo } from "../src/session-scan.ts";
 import { cardDirOfChatDir, cardFileIn, chatDataPath, chatDirOfSessionDir, createChat, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
@@ -806,6 +808,8 @@ const branchMessages = (): unknown[] => {
 	let branch = session.sessionManager.getBranch();
 	try { branch = applyDraftRevisions(branch); } catch { /* A broken draft receipt must not discard mode provenance. */ }
 	const out: unknown[] = [];
+	// agent 模式：章条目在讨论区显示为内联卡片；序号取当前分支投影（修订卡片报修订后的版本）
+	const chapters = new Map(projectChapters(branch as BranchEntryLike[]).map((c) => [c.chapterId, c]));
 	for (const e of displayConversationBranch(branch) as unknown as Array<Record<string, unknown>>) {
 		if (e.type === "message" && e.message) out.push(e.message);
 		else if (e.type === "custom_message") {
@@ -814,9 +818,28 @@ const branchMessages = (): unknown[] => {
 		} else if (e.type === "custom" && e.customType === "rp-draft-revision") {
 			const revision = e.data as { requestId?: string; version?: number } | undefined;
 			if (revision?.requestId) out.push({ role: "custom", customType: "rp-draft-revision", content: `上一拍已修订 · v${revision.version}`, display: true });
+		} else if (e.type === "custom" && (e.customType === CHAPTER_ENTRY_TYPE || e.customType === CHAPTER_REVISION_TYPE)) {
+			const d = e.data as { chapterId?: string; version?: number; chars?: number; title?: string } | undefined;
+			const c = d?.chapterId ? chapters.get(d.chapterId) : undefined;
+			if (!c || typeof d?.version !== "number") continue;
+			const edit = e.customType === CHAPTER_REVISION_TYPE;
+			const label = `第 ${c.index} 章${c.title ? `「${c.title}」` : ""}`;
+			out.push({
+				role: "custom", customType: e.customType, display: true,
+				content: edit ? `${label}已修订 · v${d.version}` : `已写入${label}（${d.chars ?? c.chars} 字）`,
+				details: { rpChapter: { kind: edit ? "edit" : "append", chapterId: c.chapterId, version: d.version, index: c.index, ...(c.title ? { title: c.title } : {}), chars: d.chars ?? c.chars } },
+			});
 		}
 	}
 	return out;
+};
+
+/** agent 子项目：当前分支章目录（hello 用，轻；正文经 REST） */
+const storyOutline = (): { chapters: WireStoryChapter[] } | undefined => {
+	if (stage?.mode !== "agent") return undefined;
+	return { chapters: projectChapters(session.sessionManager.getBranch() as BranchEntryLike[]).map((c) => ({
+		index: c.index, chapterId: c.chapterId, ...(c.title ? { title: c.title } : {}), chars: c.chars, version: c.version, ...(c.entryId ? { entryId: c.entryId } : {}),
+	})) };
 };
 
 const helloFrame = (): ServerFrame => {
@@ -856,6 +879,7 @@ const helloFrame = (): ServerFrame => {
 		streaming: stage?.isStreaming ?? false,
 		conversationMode: stage?.mode ?? "roleplay",
 		turnMode: stage?.turnMode,
+		...(stage?.mode === "agent" ? { story: storyOutline() } : {}),
 		// 一档皮肤与消息同帧:首屏不得依赖二次 REST(缓存/竞态会让 StatusBlock 回落统一面板)
 		cardfront: { ...cardfrontLite, scriptManifest: authorScriptManifest(scripts) },
 	};
@@ -1740,6 +1764,15 @@ const restHost: RestHost = {
 		saveState(file, r.state); // fs.watch 自动广播 state 帧
 		syncStoryStateFromDisk();
 		return { applied: r.applied, warnings: r.warnings };
+	},
+	// ---- agent 模式：稿子（当前分支章投影＋正文） ----
+	storyView() {
+		const sm = session.sessionManager;
+		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
+		const outline = storyOutline();
+		if (!chatDir || !outline) return { chapters: [] };
+		const store = new StoryStore(storyDirectory(chatDir));
+		return { chapters: outline.chapters.map((c) => { let text = ""; try { text = store.read({ file: chapterFileName(c.chapterId, c.version) }); } catch { /* 文件缺失：正文空，目录仍在 */ } return { ...c, text }; }) };
 	},
 	// ---- 世界线视图 / 软删除 / 线名 ----
 	worldlineView() {
@@ -2983,6 +3016,7 @@ const listSessions = async (): Promise<ServerFrame> => {
 						createdAt: c.meta.createdAt,
 						modified: c.modified,
 						sessionCount: c.sessionCount,
+						...(c.meta.mode === "agent" ? { mode: "agent" as const } : {}),
 					})),
 				}
 			: {}),

@@ -90,6 +90,7 @@ import { createCardSpace, deleteChat, exportChatZip, importChatZip, listCardSpac
 import { scanSkillFiles, stageSkillRoot } from "../src/stage/materials.ts";
 import { deleteStageSkill, saveStageSkill } from "../src/stage/skill-store.ts";
 import type { WorldlineView } from "../src/worldline.ts";
+import type { WireStoryChapter } from "./wire.ts";
 import {
 	appendLorebookFileEntry,
 	applyDisabledLore,
@@ -307,6 +308,8 @@ export interface RestHost {
 	notify(level: "info" | "warning" | "error", text: string): void;
 	/** 世界线时间线视图（会话树 rp-save + 旁路 meta） */
 	worldlineView(): import("../src/worldline.ts").WorldlineView;
+	/** agent 模式的稿子：当前分支章目录＋正文（非 agent 子项目为空目录） */
+	storyView(): { chapters: Array<WireStoryChapter & { text: string }> };
 	/** 软删除存档节点 */
 	deleteWorldlineSave(saveId: string): void;
 	/** 重命名世界线（自动名可改） */
@@ -2099,6 +2102,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				if (!text) throw new Error("缺少 text");
 				const r = await host.ttsSpeak(text, body.caption?.trim() || undefined);
 				sendJson(res, 200, { ok: true, ...r });
+				return true;
+			}
+
+			// ---- agent 模式：稿子正文（hello 只带目录，正文走这里，有 gzip） ----
+			case "GET /api/story": {
+				sendJson(res, 200, host.storyView());
 				return true;
 			}
 

@@ -65,8 +65,8 @@ export interface SessionsPanelProps {
 	chats?: WireChatInfo[] | null;
 	stats: WireStats | null;
 	onOpen: (path: string) => void;
-	/** 新建：两层布局经弹窗起名后带 name（新建项目）；老布局无参直接建会话 */
-	onNew: (name?: string) => void;
+	/** 新建：两层布局经弹窗起名后带 name（新建项目）与形态（缺省扮演 / agent）；老布局无参直接建会话 */
+	onNew: (name?: string, mode?: "agent") => void;
 	/** 在指定子项目里再开一个会话（项目行右边的「＋」） */
 	onNewInChat?: (chatId: string) => void;
 	onCompact: () => void;
@@ -104,14 +104,16 @@ function RenameBox({ initial, onDone }: { initial: string; onDone: (name: string
 	);
 }
 
-/** 新建项目弹窗（顶栏「新建项目」也用它，App.tsx 引用） */
-export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy: boolean; onDone: (name: string | null) => void }) {
+/** 新建项目弹窗（顶栏「新建项目」也用它，App.tsx 引用）：起名 ＋ 选形态（扮演 / agent，建项目时定，之后不切换） */
+export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy: boolean; onDone: (name: string | null, mode?: "agent") => void }) {
 	const [value, setValue] = useState(initial);
+	const [mode, setMode] = useState<"roleplay" | "agent">("roleplay");
 	const ref = useRef<HTMLInputElement>(null);
 	useEffect(() => {
 		ref.current?.select();
 		ref.current?.focus();
 	}, []);
+	const done = (name: string | null) => onDone(name, mode === "agent" ? "agent" : undefined);
 	return (
 		<div
 			className="spv2-modal-mask"
@@ -127,15 +129,23 @@ export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
 					onKeyDown={(e) => {
-						if (e.key === "Enter") onDone(value.trim() || null);
+						if (e.key === "Enter") done(value.trim() || null);
 						if (e.key === "Escape") onDone(null);
 					}}
 				/>
+				<div className="spv2-modal-modes" role="radiogroup" aria-label="项目形态">
+					{([["roleplay", "扮演", "你是故事里的人，回复就是正文"], ["agent", "agent", "正文是稿子里的章，对话是讨论；agent 用工具写入"]] as const).map(([m, label, hint]) => (
+						<button key={m} type="button" role="radio" aria-checked={mode === m} className={`spv2-modal-mode ${mode === m ? "on" : ""}`} onClick={() => setMode(m)}>
+							<span className="spv2-modal-mode-label">{label}</span>
+							<span className="spv2-modal-mode-hint">{hint}</span>
+						</button>
+					))}
+				</div>
 				<div className="spv2-modal-row">
 					<button type="button" className="drawer-btn" onClick={() => onDone(null)}>
 						取消
 					</button>
-					<button type="button" className="drawer-btn spv2-modal-ok" disabled={busy} onClick={() => onDone(value.trim() || null)}>
+					<button type="button" className="drawer-btn spv2-modal-ok" disabled={busy} onClick={() => done(value.trim() || null)}>
 						创建
 					</button>
 				</div>
@@ -285,6 +295,7 @@ function ChatGroup({
 					<button type="button" className="spv2-chatname" onClick={openLatest} disabled={list.length === 0}>
 						<IconFolder size={15} />
 						<span className="spv2-chatname-text">{chatLabel(chat)}</span>
+						{chat.mode === "agent" && <span className="spv2-chat-mode" title="agent 模式：正文是稿子里的章">agent</span>}
 					</button>
 				)}
 				{!renaming && (
@@ -725,9 +736,9 @@ export function SessionsPanel({
 				<NewProjectBox
 					initial={nextProjectName(chats)}
 					busy={busy}
-					onDone={(name) => {
+					onDone={(name, mode) => {
 						setNaming(false);
-						if (name) onNew(name);
+						if (name) onNew(name, mode);
 					}}
 				/>
 			)}

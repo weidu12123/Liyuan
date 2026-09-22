@@ -109,15 +109,18 @@ import { AboutPanel } from "./components/AboutPanel.tsx";
 import { SessionStatsBar, StatusStrip } from "./components/StatusStrip.tsx";
 import { UploadsPanel } from "./components/UploadsPanel.tsx";
 import { StoreModal, WorldlinePanel } from "./components/WorldlinePanel.tsx";
+import { StoryPane, type StoryChapterView } from "./components/StoryPane.tsx";
 import { useWire, type ConnState } from "./ws.ts";
 import type {
 	AuthorScript,
+	ConversationMode,
 	RpPanel,
 	ServerFrame,
 	WireActivity,
 	WireChatInfo,
 	WireSessionInfo,
 	WireStats,
+	WireStoryChapter,
 	UpdateWire,
 	WorldState,
 } from "./wire.ts";
@@ -256,10 +259,17 @@ export default function App() {
 	const [liveSegs, setLiveSegs] = useState<TurnSegment[]>([]);
 	const [thinkingLive, setThinkingLive] = useState(false);
 	const [busy, setBusy] = useState(false);
-	const [conversationMode, setConversationMode] = useState<"roleplay" | "authoring">("roleplay");
-	const modeRef = useRef<"roleplay" | "authoring">("roleplay");
-	const [streamMode, setStreamMode] = useState<"roleplay" | "authoring">("roleplay");
-	const streamModeRef = useRef<"roleplay" | "authoring">("roleplay");
+	const [conversationMode, setConversationMode] = useState<ConversationMode>("roleplay");
+	const modeRef = useRef<ConversationMode>("roleplay");
+	const [streamMode, setStreamMode] = useState<ConversationMode>("roleplay");
+	const streamModeRef = useRef<ConversationMode>("roleplay");
+	/** agent 模式：当前分支章目录（hello 同帧）；正文按目录指纹变化才拉 GET /api/story */
+	const [storyOutline, setStoryOutline] = useState<WireStoryChapter[] | null>(null);
+	const [storyChapters, setStoryChapters] = useState<StoryChapterView[] | null>(null);
+	/** 手机：稿子与讨论是两个页签 */
+	const [storyTab, setStoryTab] = useState<"story" | "chat">("chat");
+	/** 讨论区章卡片点击 → 稿子视图滚到该章 */
+	const [storyFocus, setStoryFocus] = useState<{ chapterId: string; tick: number } | null>(null);
 	const [toolNote, setToolNote] = useState<string | null>(null);
 	/** 本轮过程步骤（实时清单渲染用；与 turnActsRef 同内容） */
 	const [liveActs, setLiveActs] = useState<WireActivity[]>([]);
@@ -515,6 +525,21 @@ export default function App() {
 		}, TOAST_TTL_MS[level]);
 	}, []);
 
+	/**
+	 * agent 模式的稿子：hello 只带章目录，正文按「目录指纹」变化才拉一次 GET /api/story（gzip）。
+	 * 指纹＝chapterId:version 序列——写章/修订/回退/分叉都会改它；纯讨论一轮不变，零请求。
+	 */
+	const storyKey = storyOutline ? storyOutline.map((c) => `${c.chapterId}:${c.version}`).join("|") : null;
+	useEffect(() => {
+		if (storyKey === null) { setStoryChapters(null); return; }
+		if (storyKey === "") { setStoryChapters([]); return; }
+		let live = true;
+		void apiGet<{ chapters: StoryChapterView[] }>("/api/story", { bypassCache: true })
+			.then((r) => { if (live) setStoryChapters(r.chapters); })
+			.catch((e) => { if (live) pushToast("warning", `读取稿子失败：${e instanceof Error ? e.message : String(e)}`); });
+		return () => { live = false; };
+	}, [storyKey, pushToast]);
+
 	const doTts = useCallback(
 		async (text: string) => {
 			const t = text.trim();
@@ -595,7 +620,7 @@ export default function App() {
 
 		let lastStoryUser = -1;
 		for (let i = ms.length - 1; i >= 0; i--) {
-			if (ms[i].channel === "user" && ms[i].mode !== "authoring" && !ms[i].backstage) {
+			if (ms[i].channel === "user" && ms[i].mode === undefined && !ms[i].backstage) {
 				lastStoryUser = i;
 				break;
 			}
@@ -738,6 +763,7 @@ export default function App() {
 					setConversationMode(modeRef.current);
 					streamModeRef.current = frame.turnMode ?? modeRef.current;
 					setStreamMode(streamModeRef.current);
+					setStoryOutline(modeRef.current === "agent" ? frame.story?.chapters ?? [] : null);
 					setCharName(frame.charName);
 					setUserName(frame.userName);
 					// wire timeline → 本地 segments：持久化的时间线在刷新后仍按时序渲染
@@ -817,7 +843,7 @@ export default function App() {
 					setConversationMode(frame.mode);
 					streamModeRef.current = frame.turnMode ?? frame.mode;
 					setStreamMode(streamModeRef.current);
-					if (frame.turnMode === "authoring" || frame.mode === "authoring") setDraftWorkspace(undefined);
+					if (frame.turnMode !== undefined ? frame.turnMode !== "roleplay" : frame.mode !== "roleplay") setDraftWorkspace(undefined);
 					break;
 				case "message":
 					if (frame.message.channel === "narrative" || frame.message.channel === "backstage") {
@@ -843,7 +869,7 @@ export default function App() {
 					} else if (frame.message.channel === "greeting") {
 						// 未开聊时切换开场白：替换已有开场白气泡，禁止往下叠楼
 						setMessages((ms) => {
-							const hasUser = ms.some((m) => m.channel === "user" && m.mode !== "authoring" && !m.backstage);
+							const hasUser = ms.some((m) => m.channel === "user" && m.mode === undefined && !m.backstage);
 							if (hasUser) return [...ms, frame.message];
 							const rest = ms.filter((m) => m.channel !== "greeting");
 							return [...rest, frame.message];
@@ -930,8 +956,8 @@ export default function App() {
 							clearStream();
 							if (text.trim() || thinking) {
 								const leftover: ChatMsg = {
-									channel: streamModeRef.current === "authoring" ? "authoring" : "narrative",
-									...(streamModeRef.current === "authoring" ? { mode: "authoring" as const } : {}),
+									channel: streamModeRef.current !== "roleplay" ? "authoring" : "narrative",
+									...(streamModeRef.current !== "roleplay" ? { mode: streamModeRef.current } : {}),
 									// 仅有思维链时也留痕；unfinished 与 resync 的 aborted 稿对齐
 									text: text.trim() ? text : "（正文未流出，见思维链）",
 									...(thinking ? { thinking } : {}),
@@ -1079,7 +1105,7 @@ export default function App() {
 		let floor = 0;
 		return messages.map((msg) => {
 			const counts =
-				msg.mode !== "authoring" && !msg.backstage && (msg.channel === "user" || msg.channel === "narrative" || msg.channel === "greeting");
+				msg.mode === undefined && !msg.backstage && (msg.channel === "user" || msg.channel === "narrative" || msg.channel === "greeting");
 			return { msg, floor: counts ? ++floor : undefined };
 		});
 	}, [messages]);
@@ -1111,14 +1137,14 @@ export default function App() {
 		return -1;
 	}, [messages]);
 	const lastUserIdx = useMemo(() => {
-		for (let i = messages.length - 1; i >= 0; i--) if (messages[i].channel === "user" && messages[i].mode !== "authoring" && !messages[i].backstage) return i;
+		for (let i = messages.length - 1; i >= 0; i--) if (messages[i].channel === "user" && messages[i].mode === undefined && !messages[i].backstage) return i;
 		return -1;
 	}, [messages]);
 	/** 本轮用户输入之后是否已有定稿角色回复（有则隐藏空的「生成中」壳，避免双泡） */
 	const turnHasCommittedReply = useMemo(() => {
 		let lastStoryUser = -1;
 		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].channel === "user" && messages[i].mode !== "authoring" && !messages[i].backstage) {
+			if (messages[i].channel === "user" && messages[i].mode === undefined && !messages[i].backstage) {
 				lastStoryUser = i;
 				break;
 			}
@@ -1130,13 +1156,13 @@ export default function App() {
 	}, [messages]);
 	/** 剧情用户轮（不含戏外），用于回退 N 计算 */
 	const storyUserIdxs = useMemo(
-		() => messages.map((m, i) => (m.channel === "user" && m.mode !== "authoring" && !m.backstage ? i : -1)).filter((i) => i >= 0),
+		() => messages.map((m, i) => (m.channel === "user" && m.mode === undefined && !m.backstage ? i : -1)).filter((i) => i >= 0),
 		[messages],
 	);
 	/** 仅有开场白、尚未开聊 → 可切换备选开场 */
 	const greetingOnly = useMemo(() => {
 		const hasGreet = messages.some((m) => m.channel === "greeting");
-		const hasUser = messages.some((m) => m.channel === "user" && m.mode !== "authoring" && !m.backstage);
+		const hasUser = messages.some((m) => m.channel === "user" && m.mode === undefined && !m.backstage);
 		return hasGreet && !hasUser;
 	}, [messages]);
 	const [greetingMeta, setGreetingMeta] = useState<{ index: number; total: number } | null>(null);
@@ -1511,8 +1537,8 @@ export default function App() {
 							ws.send({ type: "open", path });
 							dismissWelcome();
 						}}
-						onNew={(name) => {
-							ws.send({ type: "new", ...(name ? { name } : {}) });
+						onNew={(name, mode) => {
+							ws.send({ type: "new", ...(name ? { name } : {}), ...(mode ? { mode } : {}) });
 							dismissWelcome();
 						}}
 						onNewInChat={(chatId) => {
@@ -1851,6 +1877,8 @@ export default function App() {
 	/** 顶栏主标题：当前会话与卡名 */
 	const currentSession = sessions?.find((s) => s.current);
 	const homeHasHistory = sessions !== null && sessions.some((s) => s.preview);
+	/** agent 子项目的分栏：主页与写卡平台打开时让位（写卡平台占同一块中间区域） */
+	const agentSplit = conversationMode === "agent" && !welcome && !studioOpen;
 
 	return (
 		<PanelRefreshContext.Provider value={agentTick}>
@@ -1884,10 +1912,10 @@ export default function App() {
 				<NewProjectBox
 					initial={nextProjectName(chats)}
 					busy={busy}
-					onDone={(name) => {
+					onDone={(name, mode) => {
 						setNamingProject(false);
 						if (name) {
-							ws.send({ type: "new", name });
+							ws.send({ type: "new", name, ...(mode ? { mode } : {}) });
 							dismissWelcome();
 						}
 					}}
@@ -1989,6 +2017,11 @@ export default function App() {
 						{charName || "新对话"}
 					</span>
 					<span className="tb-title-sub">
+						{conversationMode === "agent" ? (
+							<button type="button" className="tb-sub-mode tb-sub-mode-agent" title="agent 模式：正文是稿子里的章，这里的对话是讨论；手机上点它看稿子" onClick={() => setStoryTab("story")}>
+								agent<span className="tb-sub-mode-agent-story">· 稿子{storyOutline?.length ? ` ${storyOutline.length} 章` : ""}</span>
+							</button>
+						) : (
 						<div className="tb-sub-mode" role="radiogroup" aria-label="对话模式" title="扮演：演剧情；工作：改卡、写前端/脚本、任何要动代码与文件的任务">
 							{(["roleplay", "authoring"] as const).map((m) => (
 								<button
@@ -2004,6 +2037,7 @@ export default function App() {
 								</button>
 							))}
 						</div>
+						)}
 						{(!coarse || busy || conn !== "open") && (
 							<>
 								<span className="tb-sub-sep" aria-hidden="true">
@@ -2077,15 +2111,26 @@ export default function App() {
 			</header>
 
 				<div className="layout">
-					<main className={`center ${welcome && sessions !== null && !homeHasHistory ? "center-home-empty" : ""} ${welcome && homeHasHistory ? "center-home-filled" : ""} ${studioOpen ? "center-studio-split" : ""}`}>
+					{/* agent 模式：稿子在中间（桌面 60%），讨论在右（40%）；手机上两者是页签（story-pane 覆盖式） */}
+					{agentSplit && (
+						<aside className={`story-pane ${storyTab === "story" ? "story-pane-active" : ""}`} aria-label="稿子">
+							<StoryPane chapters={storyChapters} focus={storyFocus} onBack={() => setStoryTab("chat")} />
+						</aside>
+					)}
+					<main className={`center ${welcome && sessions !== null && !homeHasHistory ? "center-home-empty" : ""} ${welcome && homeHasHistory ? "center-home-filled" : ""} ${studioOpen ? "center-studio-split" : ""} ${agentSplit ? "center-agent-split" : ""}`}>
 					<div className={`stage-wrap ${rightPanel ? "split-active" : ""}`}>
 					<div className="stage-col stage-col-left">
-						{(rightPanel || studioOpen) && (
+						{(rightPanel || studioOpen || agentSplit) && (
 							<div className="stage-col-head">
 								<span className="stage-col-title">
 									<IconCard size={14} />
-									<span>剧情推演</span>
+									<span>{agentSplit ? "讨论" : "剧情推演"}</span>
 								</span>
+								{agentSplit && (
+									<button type="button" className="story-tab-btn" onClick={() => setStoryTab("story")}>
+										稿子{storyOutline?.length ? `（${storyOutline.length} 章）` : ""}
+									</button>
+								)}
 							</div>
 						)}
 					<div className="list" ref={listRef} onScroll={onScroll} onPointerDown={() => composerTools && setComposerTools(false)}>
@@ -2138,6 +2183,7 @@ export default function App() {
 												fallbackName={b.msg.channel === "user" ? userName || "你" : charName}
 												avatarUrl={b.msg.channel === "user" ? userAvatarUrl : charAvatarUrl}
 												skin={cardSkin}
+												onChapter={agentSplit || conversationMode === "agent" ? (chapterId) => { setStoryFocus({ chapterId, tick: Date.now() }); setStoryTab("story"); } : undefined}
 												onReroll={
 													!busy &&
 													!msgEdit &&
@@ -2255,14 +2301,14 @@ export default function App() {
 								<div className="msg msg-char msg-live">
 									<div className="msg-head">
 										<MsgAvatar src={charAvatarUrl} name={charName} kind="char" />
-										<span className="msg-name msg-name-char">{streamMode === "authoring" ? "工作" : charName}</span>
+										<span className="msg-name msg-name-char">{streamMode === "authoring" ? "工作" : streamMode === "agent" ? "agent" : charName}</span>
 										<span className="msg-live-tag">生成中</span>
 									</div>
 									{liveSegs.length > 0 ? (
-										<TurnTimeline segments={liveSegs} skin={streamMode === "authoring" ? null : liveSkin} plain={streamMode === "authoring"} live />
+										<TurnTimeline segments={liveSegs} skin={streamMode !== "roleplay" ? null : liveSkin} plain={streamMode !== "roleplay"} live />
 									) : (
 										<div className="info-line pulse" style={{ margin: "0.4rem 0 0" }}>
-											{thinkingLive ? `${charName} 正在思考…` : `${charName} 工作中…`}
+											{`${streamMode === "authoring" ? "工作" : streamMode === "agent" ? "agent" : charName} ${thinkingLive ? "正在思考…" : "工作中…"}`}
 										</div>
 									)}
 									{toolNote && (
@@ -2459,7 +2505,7 @@ export default function App() {
 							<textarea
 								ref={inputRef}
 								value={input}
-								placeholder={conn === "open" ? (conversationMode === "authoring" ? "描述要做的事：改卡、写前端或脚本、整理文件…" : userName ? `以「${userName}」的身份发言…` : "输入消息…") : "等待连接…"}
+								placeholder={conn === "open" ? (conversationMode === "authoring" ? "描述要做的事：改卡、写前端或脚本、整理文件…" : conversationMode === "agent" ? "讨论剧情、下达写作指令；正文由 agent 写进稿子…" : userName ? `以「${userName}」的身份发言…` : "输入消息…") : "等待连接…"}
 								rows={1}
 								onFocus={() => {
 									setComposerTools(false);
@@ -2533,8 +2579,8 @@ export default function App() {
 										resetSegs();
 										clearStream();
 										const leftover: ChatMsg = {
-											channel: streamModeRef.current === "authoring" ? "authoring" : "narrative",
-											...(streamModeRef.current === "authoring" ? { mode: "authoring" as const } : {}),
+											channel: streamModeRef.current !== "roleplay" ? "authoring" : "narrative",
+											...(streamModeRef.current !== "roleplay" ? { mode: streamModeRef.current } : {}),
 											text: text.trim()
 												? text
 												: thinking

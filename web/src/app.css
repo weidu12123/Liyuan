@@ -2826,7 +2826,9 @@ html[data-theme="dark"] .msg-md-code {
 	color: var(--text-faint);
 	line-height: 1.55;
 	margin: 3px 0;
-	word-break: break-all;
+	/* 英文不许拆词；中文本就逐字可断，长路径/URL 靠 anywhere 兜底 */
+	word-break: normal;
+	overflow-wrap: anywhere;
 }
 .panel-error {
 	font-size: 12.5px;

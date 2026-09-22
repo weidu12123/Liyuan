@@ -33,6 +33,7 @@ import {
 	type RulesSaveResponse,
 } from "../api.ts";
 import { ConfirmButton, PanelStatus, SliderField, Toggle, useAction, usePanelData } from "./kit.tsx";
+import { t } from "../i18n/index.ts";
 import {
 	appendEntry,
 	deleteEntry,
@@ -43,18 +44,18 @@ import {
 } from "../../../src/prompt-entries.ts";
 
 const CHANNEL_LABEL: Record<string, string> = {
-	system: "历史前",
-	postHistory: "历史后",
+	system: "历史前", // i18n-ignore：用时 t()
+	postHistory: "历史后", // i18n-ignore：用时 t()
 };
 
 const SAMPLER_META: Array<{ key: string; min: number; max: number; step: number; hint: string }> = [
-	{ key: "temperature", min: 0, max: 2, step: 0.01, hint: "越高越随机发散，越低越确定" },
-	{ key: "top_p", min: 0, max: 1, step: 0.01, hint: "核采样：只从累计概率 top_p 的词里选" },
-	{ key: "top_k", min: 0, max: 200, step: 1, hint: "只从概率最高的 k 个词里选（0=不限）" },
-	{ key: "frequency_penalty", min: -2, max: 2, step: 0.01, hint: "惩罚高频词，抑制复读" },
-	{ key: "presence_penalty", min: -2, max: 2, step: 0.01, hint: "惩罚已出现词，鼓励换话题" },
-	{ key: "repetition_penalty", min: 1, max: 2, step: 0.01, hint: "重复惩罚（1=不惩罚）" },
-	{ key: "min_p", min: 0, max: 1, step: 0.01, hint: "过滤概率低于峰值 min_p 倍的词" },
+	{ key: "temperature", min: 0, max: 2, step: 0.01, hint: "越高越随机发散，越低越确定" }, // i18n-ignore：用时 t()
+	{ key: "top_p", min: 0, max: 1, step: 0.01, hint: "核采样：只从累计概率 top_p 的词里选" }, // i18n-ignore：用时 t()
+	{ key: "top_k", min: 0, max: 200, step: 1, hint: "只从概率最高的 k 个词里选（0=不限）" }, // i18n-ignore：用时 t()
+	{ key: "frequency_penalty", min: -2, max: 2, step: 0.01, hint: "惩罚高频词，抑制复读" }, // i18n-ignore：用时 t()
+	{ key: "presence_penalty", min: -2, max: 2, step: 0.01, hint: "惩罚已出现词，鼓励换话题" }, // i18n-ignore：用时 t()
+	{ key: "repetition_penalty", min: 1, max: 2, step: 0.01, hint: "重复惩罚（1=不惩罚）" }, // i18n-ignore：用时 t()
+	{ key: "min_p", min: 0, max: 1, step: 0.01, hint: "过滤概率低于峰值 min_p 倍的词" }, // i18n-ignore：用时 t()
 ];
 
 /** 行级对照（投影 vs 文件）：只给「差在哪」的直觉，不追求完整 diff 算法 */
@@ -66,18 +67,18 @@ function diffPreview(base: string, mine: string): string {
 	const out: string[] = [];
 	for (const l of a) if (!setB.has(l)) out.push(`- ${l.slice(0, 120)}`);
 	for (const l of b) if (!setA.has(l)) out.push(`+ ${l.slice(0, 120)}`);
-	if (out.length === 0) return "（与投影无差异）";
-	return out.slice(0, 80).join("\n") + (out.length > 80 ? `\n… 共 ${out.length} 行差异` : "");
+	if (out.length === 0) return t("（与投影无差异）");
+	return out.slice(0, 80).join("\n") + (out.length > 80 ? `\n${t("… 共 {n} 行差异", { n: out.length })}` : "");
 }
 
 /** 条目来源徽标：只认标题后缀这一个协议（PromptEntry.source），不搜正文措辞。带来源的条目由服务端同步持有 */
 function SourceBadge({ entry }: { entry: PromptEntry }) {
 	const s = entry.source;
 	if (!s) return null;
-	if (s.kind === "preset") return <span className="preset-src-badge preset" title="预设转译条目：随预设装载/开关自动更新">预设</span>;
+	if (s.kind === "preset") return <span className="preset-src-badge preset" title={t("预设转译条目：随预设装载/开关自动更新")}>{t("预设")}</span>;
 	return (
-		<span className="preset-src-badge lore" title="挂载书常驻条目的镜像：挂上就有、卸下就没、书改了跟着改">
-			世界书·{s.book}
+		<span className="preset-src-badge lore" title={t("挂载书常驻条目的镜像：挂上就有、卸下就没、书改了跟着改")}>
+			{t("世界书·{book}", { book: s.book })}
 		</span>
 	);
 }
@@ -119,13 +120,13 @@ function EntriesEditor({
 			setDirty(true);
 		}
 	};
-	const effectNote = effect === "restart" ? "保存后重启生效" : "保存后下一拍生效";
+	const effectNote = effect === "restart" ? t("保存后重启生效") : t("保存后下一拍生效");
 
 	const confirmCreate = () => {
 		const name = newName.trim();
 		if (!name) return;
 		if (entries.some((e) => e.name === name)) {
-			setCreateError(`已有同名条目「${name}」`);
+			setCreateError(t("已有同名条目「{name}」", { name }));
 			return;
 		}
 		const next = appendEntry(text, name, newContent);
@@ -153,7 +154,7 @@ function EntriesEditor({
 							className={`preset-tab ${view === "entries" ? "active" : ""}`}
 							onClick={() => setView("entries")}
 						>
-							条目
+							{t("条目")}
 						</button>
 						<button
 							type="button"
@@ -162,7 +163,7 @@ function EntriesEditor({
 							className={`preset-tab ${view === "source" ? "active" : ""}`}
 							onClick={() => setView("source")}
 						>
-							源码
+							{t("源码")}
 						</button>
 					</div>
 					<button
@@ -170,7 +171,7 @@ function EntriesEditor({
 						disabled={busy || !dirty}
 						onClick={() => void onSave(text).then(() => setDirty(false))}
 					>
-						{dirty ? "保存 *" : "保存"}
+						{dirty ? t("保存 *") : t("保存")}
 					</button>
 				</div>
 			</div>
@@ -181,7 +182,7 @@ function EntriesEditor({
 					spellCheck={false}
 					value={text}
 					disabled={busy}
-					placeholder="写给模型的常驻提示词（markdown）…"
+					placeholder={t("写给模型的常驻提示词（markdown）…")}
 					onChange={(e) => {
 						setText(e.target.value);
 						setDirty(true);
@@ -204,10 +205,10 @@ function EntriesEditor({
 								>
 									<span className={`group-caret ${open === e.name ? "open" : ""}`}>▸</span>
 									<div className="block-info">
-										<span className="lore-title">{e.title || "（开头）"}</span>
+										<span className="lore-title">{e.title || t("（开头）")}</span>
 										<SourceBadge entry={e} />
 										<span className="lore-meta">
-											{e.content.length.toLocaleString()} 字 · {e.enabled ? "开" : "关"}
+											{t("{n} 字 · {state}", { n: e.content.length.toLocaleString(), state: e.enabled ? t("开") : t("关") })}
 										</span>
 									</div>
 								</button>
@@ -217,7 +218,7 @@ function EntriesEditor({
 							</div>
 							{open === e.name && (
 								<div className="preset-block-body">
-									<label className="field-label">正文</label>
+									<label className="field-label">{t("正文")}</label>
 									<textarea
 										className="panel-search ta preset-block-ta"
 										rows={8}
@@ -235,21 +236,21 @@ function EntriesEditor({
 												setOpen(null);
 											}}
 										>
-											保存条目
+											{t("保存条目")}
 										</button>
 										<button className="act" onClick={() => setOpen(null)}>
-											收起
+											{t("收起")}
 										</button>
 										<ConfirmButton
 											className="act preset-del-btn"
 											disabled={busy}
-											confirmText="确认删除"
+											confirmText={t("确认删除")}
 											onConfirm={() => {
 												apply(deleteEntry(text, e.name));
 												setOpen(null);
 											}}
 										>
-											删除
+											{t("删除")}
 										</ConfirmButton>
 									</div>
 								</div>
@@ -263,7 +264,7 @@ function EntriesEditor({
 								<div className="block-info" style={{ flex: 1 }}>
 									<input
 										className="panel-search"
-										placeholder="条目名（## 小节标题）"
+										placeholder={t("条目名（## 小节标题）")}
 										value={newName}
 										disabled={busy}
 										autoFocus
@@ -279,7 +280,7 @@ function EntriesEditor({
 								</div>
 							</div>
 							<div className="preset-block-body">
-								<label className="field-label">正文</label>
+								<label className="field-label">{t("正文")}</label>
 								<textarea
 									className="panel-search ta preset-block-ta"
 									rows={6}
@@ -295,10 +296,10 @@ function EntriesEditor({
 								)}
 								<div className="panel-row" style={{ marginTop: 6 }}>
 									<button className="act" disabled={busy || !newName.trim()} onClick={() => void confirmCreate()}>
-										添加
+										{t("添加")}
 									</button>
 									<button className="act" onClick={() => cancelCreate()}>
-										取消
+										{t("取消")}
 									</button>
 								</div>
 							</div>
@@ -315,13 +316,13 @@ function EntriesEditor({
 								setCreateError(null);
 							}}
 						>
-							＋ 添加条目
+							{t("＋ 添加条目")}
 						</button>
 					</div>
 				</>
 			)}
 			<div className="field-hint">
-				{text.length.toLocaleString()} 字{dirty ? " · 未保存" : ""} · {effectNote}
+				{t("{n} 字", { n: text.length.toLocaleString() })}{dirty ? t(" · 未保存") : ""} · {effectNote}
 			</div>
 		</section>
 	);
@@ -361,7 +362,7 @@ function RulesEditor({
 					disabled={busy || !dirty}
 					onClick={() => void onSave(text).then(() => setDirty(false))}
 				>
-					{dirty ? "保存 *" : "保存"}
+					{dirty ? t("保存 *") : t("保存")}
 				</button>
 			</div>
 			<textarea
@@ -370,14 +371,14 @@ function RulesEditor({
 				spellCheck={false}
 				value={text}
 				disabled={busy}
-				placeholder="写给模型的常驻提示词（markdown）…"
+				placeholder={t("写给模型的常驻提示词（markdown）…")}
 				onChange={(e) => {
 					setText(e.target.value);
 					setDirty(true);
 				}}
 			/>
 			<div className="field-hint">
-				{text.length.toLocaleString()} 字{dirty ? " · 未保存" : ""} · {effect === "restart" ? "保存后重启生效" : "保存后下一拍生效"}
+				{t("{n} 字", { n: text.length.toLocaleString() })}{dirty ? t(" · 未保存") : ""} · {effect === "restart" ? t("保存后重启生效") : t("保存后下一拍生效")}
 			</div>
 		</section>
 	);
@@ -399,7 +400,7 @@ export function PresetPanel({
 	const saveRules = useCallback(
 		async (scope: "global" | "agent" | "card", content: string) => {
 			const r = await apiPut<RulesSaveResponse>("/api/rules", { scope, content });
-			toast("info", `已保存（${r.chars.toLocaleString()} 字），下一拍生效`);
+			toast("info", t("已保存（{n} 字），下一拍生效", { n: r.chars.toLocaleString() }));
 		},
 		[toast],
 	);
@@ -408,7 +409,7 @@ export function PresetPanel({
 	const saveSystem = useCallback(
 		async (content: string) => {
 			const r = await apiPut<RulesSaveResponse>("/api/rules", { scope: "system", content });
-			toast("info", `SYSTEM.md 已保存（${r.chars.toLocaleString()} 字）——重启梨园后生效`);
+			toast("info", t("SYSTEM.md 已保存（{n} 字）——重启梨园后生效", { n: r.chars.toLocaleString() }));
 		},
 		[toast],
 	);
@@ -423,8 +424,8 @@ export function PresetPanel({
 			toast(
 				"info",
 				redeclare
-					? "已重新装载——重问一次模型（约 30 秒）后落新条目"
-					: "已装载并转译——在上方预设库里展开该预设拨开关即自动更新",
+					? t("已重新装载——重问一次模型（约 30 秒）后落新条目")
+					: t("已装载并转译——在上方预设库里展开该预设拨开关即自动更新"),
 			);
 			files.reload();
 			rules.reload();
@@ -437,13 +438,13 @@ export function PresetPanel({
 			await apiPost("/api/preset/save", {});
 			setDirty(false);
 			files.reload();
-		}, "预设已保存到文件");
+		}, t("预设已保存到文件"));
 
 	/** 卸载：不再使用活动预设（文件保留在库里；卡文件里的预设条目由服务端剥净） */
 	const unloadPreset = () =>
 		run(async () => {
 			await apiPost("/api/presets/select", { file: null });
-			toast("info", "已卸载——预设文件保留在库里");
+			toast("info", t("已卸载——预设文件保留在库里"));
 			files.reload();
 			rules.reload();
 			agents.reload();
@@ -457,7 +458,7 @@ export function PresetPanel({
 			if (activeFile === file) {
 				rules.reload();
 				agents.reload();
-				if (mode === "process") toast("info", "已切到「深度处理」——点「重新装载」生成产物（要几分钟）");
+				if (mode === "process") toast("info", t("已切到「深度处理」——点「重新装载」生成产物（要几分钟）"));
 			}
 		});
 
@@ -529,7 +530,7 @@ export function PresetPanel({
 	const saveAgents = useCallback(
 		async (content: string) => {
 			const r = await apiPut<CardAgentsSaveResponse>("/api/card-agents", { content });
-			toast("info", `卡档案已保存（${r.chars.toLocaleString()} 字），下一拍生效`);
+			toast("info", t("卡档案已保存（{n} 字），下一拍生效", { n: r.chars.toLocaleString() }));
 			agents.reload();
 		},
 		[toast, agents],
@@ -538,7 +539,7 @@ export function PresetPanel({
 	const deleteAgents = () =>
 		run(async () => {
 			await apiDelete("/api/card-agents");
-			toast("info", "已删除卡档案——回到自动投影");
+			toast("info", t("已删除卡档案——回到自动投影"));
 			agents.reload();
 		});
 
@@ -642,14 +643,14 @@ export function PresetPanel({
 			setDirty(false);
 			files.reload();
 			if (openFile) void loadBlocks(openFile);
-		}, "预设已保存到文件");
+		}, t("预设已保存到文件"));
 
 	const revertDraft = () =>
 		run(async () => {
 			await apiPost("/api/preset/revert", {});
 			await loadFromDisk();
 			if (openFile) void loadBlocks(openFile);
-		}, "已恢复为文件中的版本");
+		}, t("已恢复为文件中的版本"));
 
 	const doImport = async (file: File) => {
 		try {
@@ -658,7 +659,7 @@ export function PresetPanel({
 				"/api/presets/import",
 				{ name: file.name.replace(/\.json$/i, ""), json },
 			);
-			toast("info", `已导入预设库（${r.blockCount} 条 · 启用 ${r.enabledCount}）——已设为活动预设并转译`);
+			toast("info", t("已导入预设库（{blocks} 条 · 启用 {enabled}）——已设为活动预设并转译", { blocks: r.blockCount, enabled: r.enabledCount }));
 			files.reload();
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
@@ -678,7 +679,7 @@ export function PresetPanel({
 		run(async () => {
 			await apiDelete(`/api/presets?file=${encodeURIComponent(file)}`);
 			files.reload();
-		}, "已从预设库删除");
+		}, t("已从预设库删除"));
 
 	return (
 		<div className="panel-body">
@@ -690,7 +691,7 @@ export function PresetPanel({
 					className={`preset-tab ${tab === "global" ? "active" : ""}`}
 					onClick={() => setTab("global")}
 				>
-					全局系统提示词
+					{t("全局系统提示词")}
 				</button>
 				<button
 					type="button"
@@ -699,8 +700,8 @@ export function PresetPanel({
 					className={`preset-tab ${tab === "local" ? "active" : ""}`}
 					onClick={() => setTab("local")}
 				>
-					局部提示词
-					{agents.data?.active === "projection" ? <span className="preset-tab-count">投影</span> : null}
+					{t("局部提示词")}
+					{agents.data?.active === "projection" ? <span className="preset-tab-count">{t("投影")}</span> : null}
 				</button>
 				<button
 					type="button"
@@ -709,8 +710,8 @@ export function PresetPanel({
 					className={`preset-tab ${tab === "library" ? "active" : ""}`}
 					onClick={() => setTab("library")}
 				>
-					预设库
-					{activeFile ? <span className="preset-tab-count">已装载</span> : null}
+					{t("预设库")}
+					{activeFile ? <span className="preset-tab-count">{t("已装载")}</span> : null}
 				</button>
 			</div>
 
@@ -727,13 +728,13 @@ export function PresetPanel({
 								busy={busy}
 							/>
 							<EntriesEditor
-								title="APPEND_SYSTEM.md（全局·扮演模式）"
+								title={t("APPEND_SYSTEM.md（全局·扮演模式）")}
 								initial={rules.data.global.content}
 								onSave={(c) => saveRules("global", c)}
 								busy={busy}
 							/>
 							<EntriesEditor
-								title="AGENT_APPEND_SYSTEM.md（全局·agent 模式）"
+								title={t("AGENT_APPEND_SYSTEM.md（全局·agent 模式）")}
 								initial={rules.data.agent.content}
 								onSave={(c) => saveRules("agent", c)}
 								busy={busy}
@@ -749,7 +750,7 @@ export function PresetPanel({
 					{/* APPEND_SYSTEM 放最前：破限/身份条目小而关键，不能被可能极长的 AGENTS.md 条目列表（世界书镜像可达上百条）压到页面底 */}
 					{rules.data && (
 						<EntriesEditor
-							title="APPEND_SYSTEM.md（这张卡）"
+							title={t("APPEND_SYSTEM.md（这张卡）")}
 							initial={rules.data.card.content}
 							onSave={(c) => saveRules("card", c)}
 							busy={busy}
@@ -758,20 +759,20 @@ export function PresetPanel({
 					{agents.data && (
 						<section className="sp-section">
 							<div className="preset-chan-head">
-								<h4>卡档案{agents.data.active === "file" ? "（生效中）" : "（未建立）"}</h4>
+								<h4>{t("卡档案")}{agents.data.active === "file" ? t("（生效中）") : t("（未建立）")}</h4>
 								<div className="preset-block-acts">
 									<button className="act" disabled={busy} onClick={() => setShowDiff((v) => !v)}>
-										{showDiff ? "收起对照" : "对照投影"}
+										{showDiff ? t("收起对照") : t("对照投影")}
 									</button>
 									{agents.data.exists && (
-										<ConfirmButton className="act preset-del-btn" disabled={busy} confirmText="确认删除（回到投影）" onConfirm={() => void deleteAgents()}>
-											删除
+										<ConfirmButton className="act preset-del-btn" disabled={busy} confirmText={t("确认删除（回到投影）")} onConfirm={() => void deleteAgents()}>
+											{t("删除")}
 										</ConfirmButton>
 									)}
 								</div>
 							</div>
 							{agents.data.active === "projection" && (
-								<div className="field-hint">还没有卡档案——当前卡内容以自动投影提供。</div>
+								<div className="field-hint">{t("还没有卡档案——当前卡内容以自动投影提供。")}</div>
 							)}
 							{showDiff && (
 								<pre className="field-hint" style={{ whiteSpace: "pre-wrap", maxHeight: 260, overflow: "auto" }}>
@@ -782,7 +783,7 @@ export function PresetPanel({
 					)}
 					{agents.data && (
 						<EntriesEditor
-							title="AGENTS.md（卡档案）"
+							title={t("AGENTS.md（卡档案）")}
 							initial={agents.data.content}
 							onSave={saveAgents}
 							busy={busy}
@@ -795,9 +796,9 @@ export function PresetPanel({
 				<>
 					<section className="sp-section">
 						<div className="preset-chan-head">
-							<h4>预设库</h4>
-							<label className="drawer-btn" title="导入酒馆预设 JSON（原文存档，导入后自动装载）">
-								导入
+							<h4>{t("预设库")}</h4>
+							<label className="drawer-btn" title={t("导入酒馆预设 JSON（原文存档，导入后自动装载）")}>
+								{t("导入")}
 								<input
 									type="file"
 									accept=".json,application/json"
@@ -821,25 +822,25 @@ export function PresetPanel({
 											type="button"
 											className="preset-block-toggle"
 											aria-expanded={openFile === p.file}
-											title="展开块开关（不必装载即可编辑原版）"
+											title={t("展开块开关（不必装载即可编辑原版）")}
 											onClick={() => expandPreset(p.file)}
 										>
 											<span className={`group-caret ${openFile === p.file ? "open" : ""}`}>▸</span>
 											<div className="block-info">
 												<span className="lore-title">{p.name}</span>
-												{isActive && <span className="lore-meta">活动预设</span>}
+												{isActive && <span className="lore-meta">{t("活动预设")}</span>}
 											</div>
 										</button>
 										<div className="preset-block-acts">
 											<select
 												className="preset-mode-select"
-												title="快速处理＝分类照搬（30 秒级，逐块条目）；深度处理＝模型重组（分钟级，产物两条）——大预设快速处理偷懒时用深度处理"
+												title={t("快速处理＝分类照搬（30 秒级，逐块条目）；深度处理＝模型重组（分钟级，产物两条）——大预设快速处理偷懒时用深度处理")}
 												value={p.mode ?? "declare"}
 												disabled={busy}
 												onChange={(e) => void changeMode(p.file, e.target.value)}
 											>
-												<option value="declare">快速处理</option>
-												<option value="process">深度处理</option>
+												<option value="declare">{t("快速处理")}</option>
+												<option value="process">{t("深度处理")}</option>
 											</select>
 											<button
 												className="act"
@@ -847,13 +848,13 @@ export function PresetPanel({
 												title={
 													isActive
 														? (p.mode ?? "declare") === "process"
-															? "丢弃草稿、强制重跑深度处理（要几分钟）"
-															: "丢弃草稿与声明缓存，重新编译并重问一次模型（约 30 秒）"
+															? t("丢弃草稿、强制重跑深度处理（要几分钟）")
+															: t("丢弃草稿与声明缓存，重新编译并重问一次模型（约 30 秒）")
 														: undefined
 												}
 												onClick={() => void loadPreset(p.file, isActive)}
 											>
-												{isActive ? "重新装载" : "装载"}
+												{isActive ? t("重新装载") : t("装载")}
 											</button>
 										</div>
 									</div>
@@ -863,33 +864,33 @@ export function PresetPanel({
 												<button
 													className="act"
 													disabled={busy || !isActive}
-													title="把未落盘的改动写回预设文件"
+													title={t("把未落盘的改动写回预设文件")}
 													onClick={() => void savePreset()}
 												>
-													保存
+													{t("保存")}
 												</button>
 												<button className="act" disabled={busy} onClick={() => void doExport(p.file)}>
-													导出
+													{t("导出")}
 												</button>
 												<ConfirmButton
 													className="act preset-del-btn"
 													disabled={busy}
-													confirmText="确认删除"
+													confirmText={t("确认删除")}
 													onConfirm={() => void removePreset(p.file)}
 												>
-													删除
+													{t("删除")}
 												</ConfirmButton>
 											</div>
-											{!detail && <div className="field-hint">读取中…</div>}
+											{!detail && <div className="field-hint">{t("读取中…")}</div>}
 											{detail && (
 												<>
 													{detail.dirty && (
 														<div className="field-hint preset-dirty-hint">
-															有未保存修改（运行时草稿）——「保存」在本栏上方，写回后生效。
+															{t("有未保存修改（运行时草稿）——「保存」在本栏上方，写回后生效。")}
 														</div>
 													)}
 													{detail.blocks.filter((b) => !b.marker).length === 0 && (
-														<div className="sp-empty">该预设没有可拨的块。</div>
+														<div className="sp-empty">{t("该预设没有可拨的块。")}</div>
 													)}
 													{detail.blocks
 														.filter((b) => !b.marker)
@@ -908,10 +909,10 @@ export function PresetPanel({
 																			<span className={`group-caret ${open ? "open" : ""}`}>▸</span>
 																			<div className="block-info">
 																				<span className="lore-title">{b.name || b.id}</span>
-																				<span className="preset-src-badge preset">预设</span>
+																				<span className="preset-src-badge preset">{t("预设")}</span>
 																				<span className="lore-meta">
-																					{b.content.length.toLocaleString()} 字 · {CHANNEL_LABEL[b.channel] ?? b.channel}
-																					{b.depth !== undefined ? ` · 深度${b.depth}` : ""}
+																					{t("{n} 字 · {channel}", { n: b.content.length.toLocaleString(), channel: CHANNEL_LABEL[b.channel] ? t(CHANNEL_LABEL[b.channel]) : b.channel })}
+																					{b.depth !== undefined ? t(" · 深度{depth}", { depth: b.depth }) : ""}
 																				</span>
 																			</div>
 																		</button>
@@ -925,7 +926,7 @@ export function PresetPanel({
 																	</div>
 																	{open && (
 																		<div className="preset-block-body">
-																			<label className="field-label">正文</label>
+																			<label className="field-label">{t("正文")}</label>
 																			<textarea
 																				className="panel-search ta preset-block-ta"
 																				rows={10}
@@ -934,11 +935,11 @@ export function PresetPanel({
 																				value={b.content}
 																			/>
 																			{b.content.trim().length === 0 && (
-																				<div className="field-hint">无正文（求值后零字或 setvar 类块：装配时会被丢弃，开关无效果）</div>
+																				<div className="field-hint">{t("无正文（求值后零字或 setvar 类块：装配时会被丢弃，开关无效果）")}</div>
 																			)}
 																			<div className="panel-row" style={{ marginTop: 6 }}>
 																				<button className="act" onClick={() => setOpenBlockKey(null)}>
-																					收起
+																					{t("收起")}
 																				</button>
 																			</div>
 																		</div>
@@ -947,11 +948,11 @@ export function PresetPanel({
 															);
 														})}
 													<div className="field-hint">
-														拨开关＝编辑这份预设的原版选项：活动预设进草稿（「保存」落盘）并即时重转译；未装载的直接写文件，装载时生效。
+														{t("拨开关＝编辑这份预设的原版选项：活动预设进草稿（「保存」落盘）并即时重转译；未装载的直接写文件，装载时生效。")}
 													</div>
 													{(p.mode ?? "declare") === "process" && (
 														<div className="field-hint">
-															这份预设用「深度处理」：拨开关后产物不自动更新，要点「重新装载」重跑（要几分钟）。
+															{t("这份预设用「深度处理」：拨开关后产物不自动更新，要点「重新装载」重跑（要几分钟）。")}
 														</div>
 													)}
 												</>
@@ -962,46 +963,46 @@ export function PresetPanel({
 							);
 						})}
 						{files.data && files.data.presets.length === 0 && (
-							<div className="sp-empty">预设库是空的。</div>
+							<div className="sp-empty">{t("预设库是空的。")}</div>
 						)}
 					</section>
 
 					{activeFile && (
 						<section className="sp-section">
 							<div className="preset-chan-head">
-								<h4>活动预设</h4>
-								<ConfirmButton className="act" disabled={busy} confirmText="确认卸载（卡文件里的预设条目一并移除，预设文件保留）" onConfirm={() => void unloadPreset()}>
-									卸载
+								<h4>{t("活动预设")}</h4>
+								<ConfirmButton className="act" disabled={busy} confirmText={t("确认卸载（卡文件里的预设条目一并移除，预设文件保留）")} onConfirm={() => void unloadPreset()}>
+									{t("卸载")}
 								</ConfirmButton>
 							</div>
 							<div className="field-hint">
-								装载即转译：按开关编译、快速处理分类后落进这张卡的提示词文件（局部提示词里带「预设」徽标的条目）。在上面的预设库里展开该预设拨开关即自动更新。
+								{t("装载即转译：按开关编译、快速处理分类后落进这张卡的提示词文件（局部提示词里带「预设」徽标的条目）。在上面的预设库里展开该预设拨开关即自动更新。")}
 							</div>
 							<div className="panel-row list-toolbar preset-actions">
 								<button className="drawer-btn save-btn" disabled={busy || !dirty} onClick={() => void saveToDisk()}>
-									{dirty ? "保存 *" : "保存"}
+									{dirty ? t("保存 *") : t("保存")}
 								</button>
 								<button className="drawer-btn" disabled={busy || !dirty} onClick={() => void revertDraft()}>
-									还原
+									{t("还原")}
 								</button>
 							</div>
 							{dirty && (
 								<div className="field-hint preset-dirty-hint">
-									有未保存修改：已转译、已用于对话；点「保存」写回预设文件。
+									{t("有未保存修改：已转译、已用于对话；点「保存」写回预设文件。")}
 								</div>
 							)}
 							<PanelStatus loading={loadingDetail} error={loadError} hasData={!!draft || !!missing} />
-							{missing && <div className="panel-error">配置指向的预设文件不存在：{missing}</div>}
+							{missing && <div className="panel-error">{t("配置指向的预设文件不存在：{file}", { file: missing })}</div>}
 							{draft && (
 								<section className="sp-section">
 									{Object.keys(draft.samplers).length === 0 && (
-										<div className="sp-empty">该预设未带采样参数。</div>
+										<div className="sp-empty">{t("该预设未带采样参数。")}</div>
 									)}
 									{SAMPLER_META.filter((m) => m.key in draft.samplers).map((m) => (
 										<SliderField
 											key={m.key}
 											label={m.key}
-											hint={m.hint}
+											hint={t(m.hint)}
 											value={draft.samplers[m.key]}
 											min={m.min}
 											max={m.max}

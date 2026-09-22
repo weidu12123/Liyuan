@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiDelete, apiGet, apiPost } from "../api.ts";
 import { ConfirmButton, Toggle } from "./kit.tsx";
+import { t } from "../i18n/index.ts";
 
 type Scope = "global" | "card";
 type StageSkill = { dir: string; name: string; description: string; chars: number; body: string; disabled: boolean; scope: Scope; shadowed?: boolean };
@@ -46,7 +47,7 @@ export function SkillLibrary({ toast }: { toast: (level: "info" | "warning" | "e
 				description: edit.description,
 				body: edit.body,
 			});
-			toast("info", "已保存，下一拍装载即生效");
+			toast("info", t("已保存，下一拍装载即生效"));
 			setEdit(null);
 			await reload();
 		} catch (e) {
@@ -80,7 +81,7 @@ export function SkillLibrary({ toast }: { toast: (level: "info" | "warning" | "e
 		setBusy(true);
 		try {
 			await apiDelete(`/api/stage-skills?dir=${encodeURIComponent(dir)}&scope=${scope}`);
-			toast("info", `已删除「${dir}」`);
+			toast("info", t("已删除「{name}」", { name: dir }));
 			if (edit?.dir === dir && edit.scope === scope) setEdit(null);
 			await reload();
 		} catch (e) {
@@ -94,31 +95,31 @@ export function SkillLibrary({ toast }: { toast: (level: "info" | "warning" | "e
 		if (!edit) return null;
 		return (
 			<div className="skill-edit-form">
-				<label className="field-label">适用范围</label>
-				<select aria-label="技能适用范围" value={edit.scope} disabled={busy || edit.dir !== null} onChange={(e) => setEdit({ ...edit, scope: e.target.value as Scope })}>
-					{defaultScope === "card" && <option value="card">当前角色卡</option>}
-					<option value="global">所有角色卡</option>
+				<label className="field-label">{t("适用范围")}</label>
+				<select aria-label={t("技能适用范围")} value={edit.scope} disabled={busy || edit.dir !== null} onChange={(e) => setEdit({ ...edit, scope: e.target.value as Scope })}>
+					{defaultScope === "card" && <option value="card">{t("当前角色卡")}</option>}
+					<option value="global">{t("所有角色卡")}</option>
 				</select>
-				<label className="field-label">名称（模型用它点名 skill_read）</label>
+				<label className="field-label">{t("名称（模型用它点名 skill_read）")}</label>
 				<input
 					className="panel-search"
 					value={edit.name}
 					disabled={busy}
-					placeholder="如：打斗、我的文风"
+					placeholder={t("如：打斗、我的文风")}
 					onChange={(e) => setEdit({ ...edit, name: e.target.value })}
 				/>
 				<label className="field-label" style={{ marginTop: 8 }}>
-					简要说明（检索触发面）
+					{t("简要说明（检索触发面）")}
 				</label>
 				<input
 					className="panel-search"
 					value={edit.description}
 					disabled={busy}
-					placeholder="只写什么时候用（触发场面）；别写做法摘要——模型会照摘要走捷径不读正文"
+					placeholder={t("只写什么时候用（触发场面）；别写做法摘要——模型会照摘要走捷径不读正文")}
 					onChange={(e) => setEdit({ ...edit, description: e.target.value })}
 				/>
 				<label className="field-label" style={{ marginTop: 8 }}>
-					正文
+					{t("正文")}
 				</label>
 				<textarea
 					className="panel-search ta preset-block-ta"
@@ -126,15 +127,15 @@ export function SkillLibrary({ toast }: { toast: (level: "info" | "warning" | "e
 					spellCheck={false}
 					value={edit.body}
 					disabled={busy}
-					placeholder="写给模型看的正文：何时用/怎么写/一两段示范。Markdown。"
+					placeholder={t("写给模型看的正文：何时用/怎么写/一两段示范。Markdown。")}
 					onChange={(e) => setEdit({ ...edit, body: e.target.value })}
 				/>
 				<div className="panel-row list-toolbar skill-edit-acts">
 					<button className="drawer-btn save-btn" disabled={busy} onClick={() => void save()}>
-						保存
+						{t("保存")}
 					</button>
 					<button className="drawer-btn" disabled={busy} onClick={() => setEdit(null)}>
-						取消
+						{t("取消")}
 					</button>
 				</div>
 			</div>
@@ -149,12 +150,12 @@ export function SkillLibrary({ toast }: { toast: (level: "info" | "warning" | "e
 					disabled={busy || !!edit}
 						onClick={() => setEdit({ dir: null, name: "", description: "", body: "", scope: defaultScope })}
 				>
-					＋ 新建 skill
+					{t("＋ 新建 skill")}
 				</button>
 			</div>
 			{error && <div className="panel-error">{error}</div>}
 			{skills && skills.length === 0 && !edit && (
-				<div className="sp-empty">还没有 skill。点「新建」写第一个（写作方法/场面写法/文风示范都可以）。</div>
+				<div className="sp-empty">{t("还没有 skill。点「新建」写第一个（写作方法/场面写法/文风示范都可以）。")}</div>
 			)}
 			{/* 新建表单在顶部；编辑既有项时表单内联到那一行的位置（不用翻回顶部） */}
 			{edit && edit.dir === null && renderForm()}
@@ -168,11 +169,11 @@ export function SkillLibrary({ toast }: { toast: (level: "info" | "warning" | "e
 								{s.name}
 							</span>
 							<span className="lore-meta">
-									{s.scope === "card" ? "当前卡" : "全局"}{s.shadowed ? " · 当前卡已覆盖" : ""} · {s.description} · {s.chars.toLocaleString()} 字
+									{s.scope === "card" ? t("当前卡") : t("全局")}{s.shadowed ? t(" · 当前卡已覆盖") : ""} · {s.description} · {t("{n} 字", { n: s.chars.toLocaleString() })}
 							</span>
 						</div>
-						<label className="expose-toggle" title="开＝名字与说明上 skill_read 清单，剧情模型按需读；关＝对模型隐身（本页仍在，随时开回来）">
-							<span className="expose-label">{s.disabled ? "已隐藏" : "已暴露"}</span>
+						<label className="expose-toggle" title={t("开＝名字与说明上 skill_read 清单，剧情模型按需读；关＝对模型隐身（本页仍在，随时开回来）")}>
+							<span className="expose-label">{s.disabled ? t("已隐藏") : t("已暴露")}</span>
 							<Toggle checked={!s.disabled} disabled={busy || !!edit} onChange={(v) => void setExposed(s, v)} />
 						</label>
 						<div className="preset-block-acts">
@@ -181,10 +182,10 @@ export function SkillLibrary({ toast }: { toast: (level: "info" | "warning" | "e
 								disabled={busy || !!edit}
 									onClick={() => setEdit({ dir: s.dir, name: s.name, description: s.description, body: s.body, scope: s.scope })}
 							>
-								编辑
+								{t("编辑")}
 							</button>
-								<ConfirmButton className="act" disabled={busy || !!edit} confirmText="确认删除" onConfirm={() => void remove(s.dir, s.scope)}>
-								删除
+								<ConfirmButton className="act" disabled={busy || !!edit} confirmText={t("确认删除")} onConfirm={() => void remove(s.dir, s.scope)}>
+								{t("删除")}
 							</ConfirmButton>
 						</div>
 					</div>

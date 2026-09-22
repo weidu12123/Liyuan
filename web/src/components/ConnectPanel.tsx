@@ -21,9 +21,10 @@ import {
 	type RpConfigView,
 } from "../api.ts";
 import { ConfirmButton, Field, PanelStatus, useAction, usePanelData } from "./kit.tsx";
+import { t } from "../i18n/index.ts";
 
 const API_TYPES = [
-	{ value: "openai-completions", label: "OpenAI 兼容（chat/completions）" },
+	{ value: "openai-completions", label: "OpenAI 兼容（chat/completions）" }, // i18n-ignore：用时 t(label)
 	{ value: "openai-responses", label: "OpenAI Responses" },
 	{ value: "anthropic-messages", label: "Anthropic Messages" },
 	{ value: "google-generative-ai", label: "Google Generative AI" },
@@ -204,18 +205,18 @@ function entryKeyOf(m: ModelEntry): string {
 function parseTokenCount(raw: string, kind: "context" | "maxOut"): number {
 	const s = raw.trim().toLowerCase().replace(/,/g, "").replace(/\s/g, "");
 	const m = /^(\d+(?:\.\d+)?)(k|m)?$/.exec(s);
-	if (!m) throw new Error(kind === "context" ? "请输入数字，如 128000、500k、1m" : "请输入数字，如 8192、16k、32k");
+	if (!m) throw new Error(kind === "context" ? t("请输入数字，如 128000、500k、1m") : t("请输入数字，如 8192、16k、32k"));
 	let n = Number(m[1]);
 	if (m[2] === "k") n *= 1000;
 	if (m[2] === "m") n *= 1_000_000;
 	n = Math.round(n);
-	if (!Number.isFinite(n)) throw new Error("无效数字");
+	if (!Number.isFinite(n)) throw new Error(t("无效数字"));
 	if (kind === "context") {
-		if (n < 1024) throw new Error("上下文至少 1024");
-		if (n > 10_000_000) throw new Error("上下文过大（上限 10M）");
+		if (n < 1024) throw new Error(t("上下文至少 1024"));
+		if (n > 10_000_000) throw new Error(t("上下文过大（上限 10M）"));
 	} else {
-		if (n < 256) throw new Error("最大回复至少 256");
-		if (n > 2_000_000) throw new Error("最大回复过大（上限 2M）");
+		if (n < 256) throw new Error(t("最大回复至少 256"));
+		if (n > 2_000_000) throw new Error(t("最大回复过大（上限 2M）"));
 	}
 	return n;
 }
@@ -240,7 +241,7 @@ const fmtCtx = (n: number) => {
 
 function StatusLine({ status }: { status: { ok: boolean; detail: string } | null }) {
 	if (!status) return null;
-	return <div className={`channel-status ${status.ok ? "ok" : "bad"}`}>{status.ok ? status.detail : `失败：${status.detail}`}</div>;
+	return <div className={`channel-status ${status.ok ? "ok" : "bad"}`}>{status.ok ? status.detail : t("失败：{detail}", { detail: status.detail })}</div>;
 }
 
 function ThinkingInput({
@@ -264,14 +265,14 @@ function ThinkingInput({
 	return (
 		<div className="conn-thinking">
 			<div className="field-label" style={{ marginBottom: 4 }}>
-				思考档
+				{t("思考档")}
 			</div>
 			<div className="conn-thinking-row">
 				<input
 					className="panel-search"
 					value={text}
 					disabled={busy}
-					placeholder="如 off / low / high / xhigh / max"
+					placeholder={t("如 off / low / high / xhigh / max")}
 					spellCheck={false}
 					onChange={(e) => setText(e.target.value)}
 					onBlur={commit}
@@ -283,12 +284,12 @@ function ThinkingInput({
 					}}
 				/>
 				<button type="button" className="drawer-btn" disabled={busy || !text.trim() || text.trim() === value} onClick={commit}>
-					应用
+					{t("应用")}
 				</button>
 			</div>
 			<div className="field-hint">
-				英文档位名，因模型而异
-				{hints && hints.length > 0 ? ` · 常见：${hints.join(" / ")}` : ""}
+				{t("英文档位名，因模型而异")}
+				{hints && hints.length > 0 ? t(" · 常见：{hints}", { hints: hints.join(" / ") }) : ""}
 			</div>
 		</div>
 	);
@@ -319,14 +320,14 @@ function ContextWindowInput({
 	return (
 		<div className="conn-thinking" style={{ marginTop: 8 }}>
 			<div className="field-label" style={{ marginBottom: 4 }}>
-				上下文窗口
+				{t("上下文窗口")}
 			</div>
 			<div className="conn-thinking-row">
 				<input
 					className="panel-search"
 					value={text}
 					disabled={busy}
-					placeholder="如 128000 / 500k / 1m"
+					placeholder={t("如 128000 / 500k / 1m")}
 					spellCheck={false}
 					onChange={(e) => setText(e.target.value)}
 					onBlur={commit}
@@ -350,7 +351,7 @@ function ContextWindowInput({
 						}
 					}}
 				>
-					应用
+					{t("应用")}
 				</button>
 			</div>
 		</div>
@@ -384,14 +385,14 @@ function MaxTokensInput({
 	return (
 		<div className="conn-thinking" style={{ marginTop: 8 }}>
 			<div className="field-label" style={{ marginBottom: 4 }}>
-				最大回复 tokens
+				{t("最大回复 tokens")}
 			</div>
 			<div className="conn-thinking-row">
 				<input
 					className="panel-search"
 					value={text}
 					disabled={busy}
-					placeholder="如 8192 / 16k / 32k（空=运行时默认 16k）"
+					placeholder={t("如 8192 / 16k / 32k（空=运行时默认 16k）")}
 					spellCheck={false}
 					onChange={(e) => setText(e.target.value)}
 					onBlur={commit}
@@ -403,12 +404,12 @@ function MaxTokensInput({
 					}}
 				/>
 				<button type="button" className="drawer-btn" disabled={busy || !text.trim()} onClick={commit}>
-					应用
+					{t("应用")}
 				</button>
 			</div>
 			<div className="field-hint">
-				单次模型输出上限（不是上下文总窗口）
-				{value > 0 ? ` · 当前 ${fmtCtx(value)}` : " · 未配置时 pi 默认 16384"}
+				{t("单次模型输出上限（不是上下文总窗口）")}
+				{value > 0 ? t(" · 当前 {v}", { v: fmtCtx(value) }) : t(" · 未配置时 pi 默认 16384")}
 			</div>
 		</div>
 	);
@@ -439,7 +440,7 @@ function StreamingInput({
 				cursor: "pointer",
 			}}
 		>
-			<span className="field-label">流式传输</span>
+			<span className="field-label">{t("流式传输")}</span>
 			<input type="checkbox" checked={value} disabled={busy} onChange={(e) => onCommit(e.target.checked)} />
 		</label>
 	);
@@ -582,7 +583,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 				try {
 					await apiPost("/api/models/thinking", { level: perModel });
 				} catch (e) {
-					toast("warning", `模型已切换，思考档未能应用：${e instanceof Error ? e.message : String(e)}`);
+					toast("warning", t("模型已切换，思考档未能应用：{err}", { err: e instanceof Error ? e.message : String(e) }));
 				}
 			}
 			const cfg = {
@@ -600,7 +601,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 				await apiPut("/api/agent-profiles", { id: active.id, name: active.name, config: cfg });
 			}
 			reloadAll();
-			toast("info", perModel ? `已切换：${key} · ${perModel}` : `已切换：${key}`);
+			toast("info", perModel ? t("已切换：{key} · {level}", { key, level: perModel }) : t("已切换：{key}", { key }));
 		});
 
 	/**
@@ -611,12 +612,12 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 		run(async () => {
 			await apiPut("/api/config", { sideModel: sel });
 			rpConfig.reload();
-		}, sel ? `旁路：${sel.entry}` : "旁路：跟随剧情模型");
+		}, sel ? t("旁路：{entry}", { entry: sel.entry }) : t("旁路：跟随剧情模型"));
 
 	const setThinking = (level: string) =>
 		run(async () => {
 			const lv = level.trim();
-			if (!lv) throw new Error("请填写思考档");
+			if (!lv) throw new Error(t("请填写思考档"));
 			await apiPost("/api/models/thinking", { level: lv });
 			const cfg = { ...activeConfig, defaultThinkingLevel: lv, providers: { ...activeConfig.providers } };
 			if (current) {
@@ -634,13 +635,13 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			const active = profiles.find((p) => p.active);
 			if (active) await apiPut("/api/agent-profiles", { id: active.id, name: active.name, config: cfg });
 			reloadAll();
-		}, `思考档 ${level.trim()}`);
+		}, t("思考档 {level}", { level: level.trim() }));
 
 	/** 改当前模型 contextWindow → 写 agent 配置 + models.json，重绑会话模型 */
 	const setContextWindow = (n: number) =>
 		run(async () => {
-			if (!current) throw new Error("尚未启用模型");
-			if (!Number.isFinite(n) || n < 1024) throw new Error("上下文至少 1024");
+			if (!current) throw new Error(t("尚未启用模型"));
+			if (!Number.isFinite(n) || n < 1024) throw new Error(t("上下文至少 1024"));
 			const cfg: LiyuanAgentConfig = {
 				...activeConfig,
 				providers: { ...activeConfig.providers },
@@ -658,13 +659,13 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			const active = profiles.find((p) => p.active);
 			if (active) await apiPut("/api/agent-profiles", { id: active.id, name: active.name, config: cfg });
 			reloadAll();
-		}, `上下文窗口 ${fmtCtx(n)}（${n.toLocaleString()}）`);
+		}, t("上下文窗口 {short}（{full}）", { short: fmtCtx(n), full: n.toLocaleString() }));
 
 	/** 改当前模型 maxTokens（单次最大输出） */
 	const setMaxTokens = (n: number) =>
 		run(async () => {
-			if (!current) throw new Error("尚未启用模型");
-			if (!Number.isFinite(n) || n < 256) throw new Error("最大回复至少 256");
+			if (!current) throw new Error(t("尚未启用模型"));
+			if (!Number.isFinite(n) || n < 256) throw new Error(t("最大回复至少 256"));
 			const cfg: LiyuanAgentConfig = {
 				...activeConfig,
 				providers: { ...activeConfig.providers },
@@ -682,12 +683,12 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			const active = profiles.find((p) => p.active);
 			if (active) await apiPut("/api/agent-profiles", { id: active.id, name: active.name, config: cfg });
 			reloadAll();
-		}, `最大回复 ${fmtCtx(n)}（${n.toLocaleString()} tokens）`);
+		}, t("最大回复 {short}（{full} tokens）", { short: fmtCtx(n), full: n.toLocaleString() }));
 
 	/** 改当前模型流式传输 → 写 agent 配置（provider.compat.streaming），重绑会话模型 */
 	const setStreaming = (on: boolean) =>
 		run(async () => {
-			if (!current) throw new Error("尚未启用模型");
+			if (!current) throw new Error(t("尚未启用模型"));
 			const cfg: LiyuanAgentConfig = {
 				...activeConfig,
 				providers: { ...activeConfig.providers },
@@ -704,27 +705,27 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			const active = profiles.find((p) => p.active);
 			if (active) await apiPut("/api/agent-profiles", { id: active.id, name: active.name, config: cfg });
 			reloadAll();
-		}, on ? "已开启流式传输" : "已关闭流式传输（该中转将改用非流式接口）");
+		}, on ? t("已开启流式传输") : t("已关闭流式传输（该中转将改用非流式接口）"));
 
 	const enableProfile = (id: string) =>
 		run(async () => {
 			await apiPost("/api/agent-profiles/enable", { id });
 			reloadAll();
-		}, `已启用配置「${id}」`);
+		}, t("已启用配置「{id}」", { id }));
 
 	/** 启用中的配置：从仓库重读 → agent.json → models.json → 重绑（改完不必再点启用） */
 	const refreshProfile = (id: string) =>
 		run(async () => {
 			await apiPost("/api/agent-profiles/refresh", { id });
 			reloadAll();
-		}, `已刷新「${id}」并重传到运行时`);
+		}, t("已刷新「{id}」并重传到运行时", { id }));
 
 	const deleteProf = (id: string) =>
 		run(async () => {
 			await apiDelete(`/api/agent-profiles?id=${encodeURIComponent(id)}`);
 			if (mode?.kind === "edit" && mode.id === id) closeEditor();
 			reloadAll();
-		}, `已删除「${id}」`);
+		}, t("已删除「{id}」", { id }));
 
 	/** 解析配置 JSON → draft（不抛到 UI 外时由调用方 toast） */
 	const parseConfigToDraft = (text: string): { config: LiyuanAgentConfig; draft: Draft } => {
@@ -732,10 +733,10 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 		try {
 			parsed = JSON.parse(text);
 		} catch (e) {
-			throw new Error(`JSON 无法解析：${e instanceof Error ? e.message : String(e)}`);
+			throw new Error(t("JSON 无法解析：{err}", { err: e instanceof Error ? e.message : String(e) }));
 		}
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new Error("配置须为 JSON 对象");
+			throw new Error(t("配置须为 JSON 对象"));
 		}
 		const raw = parsed as LiyuanAgentConfig;
 		const config: LiyuanAgentConfig = {
@@ -756,14 +757,14 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 
 	const applyJsonPreview = () => {
 		if (jsonOverride === null) {
-			toast("info", "预览与表单已一致");
+			toast("info", t("预览与表单已一致"));
 			return;
 		}
 		try {
 			const { draft: next } = parseConfigToDraft(jsonOverride);
 			setDraft(next);
 			setJsonOverride(null);
-			toast("info", "已从 JSON 写回表单");
+			toast("info", t("已从 JSON 写回表单"));
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
 		}
@@ -781,11 +782,11 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			}
 
 			const name = working.name.trim();
-			if (!name) throw new Error("请填写配置名（渠道名）");
-			if (!working.baseUrl.trim()) throw new Error("请填写 Base URL");
-			if (!working.api.trim()) throw new Error("请选择 API 类型");
-			if (!working.apiKey.trim() && mode?.kind === "gen") throw new Error("请填写 API key");
-			if (working.models.length === 0) throw new Error("请至少添加一个模型");
+			if (!name) throw new Error(t("请填写配置名（渠道名）"));
+			if (!working.baseUrl.trim()) throw new Error(t("请填写 Base URL"));
+			if (!working.api.trim()) throw new Error(t("请选择 API 类型"));
+			if (!working.apiKey.trim() && mode?.kind === "gen") throw new Error(t("请填写 API key"));
+			if (working.models.length === 0) throw new Error(t("请至少添加一个模型"));
 
 			const config = draftToConfig(working);
 			// 编辑时：key 留空则从原配置保留
@@ -805,11 +806,11 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			pushUrlHist(working.baseUrl);
 			closeEditor();
 			reloadAll();
-		}, mode?.kind === "edit" ? "仓库配置已更新" : "已存入配置仓库（未启用）");
+		}, mode?.kind === "edit" ? t("仓库配置已更新") : t("已存入配置仓库（未启用）"));
 
 	const testDraft = () =>
 		run(async () => {
-			if (!draft.baseUrl.trim()) throw new Error("先填 Base URL");
+			if (!draft.baseUrl.trim()) throw new Error(t("先填 Base URL"));
 			const r = await apiPost<{ ok: boolean; detail: string }>("/api/channels/test", {
 				baseUrl: draft.baseUrl.trim(),
 				apiKey: draft.apiKey.trim() || undefined,
@@ -819,13 +820,13 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 
 	const checkModels = () =>
 		run(async () => {
-			if (!draft.baseUrl.trim()) throw new Error("先填 Base URL");
+			if (!draft.baseUrl.trim()) throw new Error(t("先填 Base URL"));
 			const r = await apiPost<{ models: string[] }>("/api/channels/fetch-models", {
 				baseUrl: draft.baseUrl.trim(),
 				apiKey: draft.apiKey.trim() || undefined,
 			});
 			setDiscovered(r.models);
-			setProbe({ ok: true, detail: `检查到 ${r.models.length} 个模型（点 ＋ 加入已选）` });
+			setProbe({ ok: true, detail: t("检查到 {n} 个模型（点 ＋ 加入已选）", { n: r.models.length }) });
 		});
 
 	/**
@@ -881,17 +882,17 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 	const renderEditor = (isGen: boolean) => (
 		<div className="conn-body">
 			<div className="conn-editor-bar">
-				<span className="conn-editor-bar-title">{isGen ? "生成新配置" : "修改配置"}</span>
-				<button type="button" className="icon-btn conn-editor-x" title="关闭" aria-label="关闭" onClick={closeEditor}>
+				<span className="conn-editor-bar-title">{isGen ? t("生成新配置") : t("修改配置")}</span>
+				<button type="button" className="icon-btn conn-editor-x" title={t("关闭")} aria-label={t("关闭")} onClick={closeEditor}>
 					×
 				</button>
 			</div>
 			<section className="conn-sec">
-				<div className="conn-sec-title">接入</div>
-				<Field label="配置名 / 渠道名">
+				<div className="conn-sec-title">{t("接入")}</div>
+				<Field label={t("配置名 / 渠道名")}>
 					<input
 						className="panel-search"
-						placeholder="如 deepseek / cpa"
+						placeholder={t("如 deepseek / cpa")}
 						value={draft.name}
 						disabled={!isGen}
 						onChange={(e) => patchDraft({ name: e.target.value })}
@@ -905,16 +906,16 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 						onChange={(e) => patchDraft({ baseUrl: e.target.value })}
 					/>
 				</Field>
-				<Field label="API 类型">
+				<Field label={t("API 类型")}>
 					<select className="panel-search" value={draft.api} onChange={(e) => patchDraft({ api: e.target.value })}>
-						{API_TYPES.map((t) => (
-							<option key={t.value} value={t.value}>
-								{t.label}
+						{API_TYPES.map((at) => (
+							<option key={at.value} value={at.value}>
+								{t(at.label)}
 							</option>
 						))}
 					</select>
 				</Field>
-				<Field label={isGen ? "API key" : "更换 API key（留空保留）"} hint="写入配置文件，不使用环境变量">
+				<Field label={isGen ? "API key" : t("更换 API key（留空保留）")} hint={t("写入配置文件，不使用环境变量")}>
 					<input
 						className="panel-search"
 						type="password"
@@ -926,21 +927,21 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			</section>
 
 			<section className="conn-sec">
-				<div className="conn-sec-title">模型</div>
+				<div className="conn-sec-title">{t("模型")}</div>
 				<div className="panel-row">
 					<button type="button" className="act" disabled={busy || !draft.baseUrl.trim()} onClick={() => void testDraft()}>
-						测试连通
+						{t("测试连通")}
 					</button>
 					<button type="button" className="drawer-btn" disabled={busy || !draft.baseUrl.trim()} onClick={() => void checkModels()}>
-						检查模型
+						{t("检查模型")}
 					</button>
 				</div>
 				<StatusLine status={probe} />
 				{discovered.length > 0 && (
 					<div className="conn-models conn-discovered">
 						<div className="conn-models-head">
-							<span className="field-label">可用模型（{discovered.length}）</span>
-							<span className="field-hint">点 ＋ 加入已选；同一个模型可以加多条（各配一个思考档）</span>
+							<span className="field-label">{t("可用模型（{n}）", { n: discovered.length })}</span>
+							<span className="field-hint">{t("点 ＋ 加入已选；同一个模型可以加多条（各配一个思考档）")}</span>
 						</div>
 						<ul className="conn-model-list">
 							{discovered.map((id) => {
@@ -949,7 +950,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 								return (
 									<li key={id} className={`conn-model-row ${n > 0 ? "in-list" : ""}`}>
 										<span className="conn-model-id">{id}</span>
-										{n > 0 && <span className="conn-model-added">已加入 {n} 条</span>}
+										{n > 0 && <span className="conn-model-added">{t("已加入 {n} 条", { n })}</span>}
 										<button type="button" className="conn-model-plus" onClick={() => addModelById(id)}>
 											＋
 										</button>
@@ -961,11 +962,11 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 				)}
 				<div className="conn-models">
 					<div className="conn-models-head">
-						<span className="field-label">已选清单（{draft.models.length}）</span>
-						<span className="field-hint">每个模型单独设置思考档、上下文窗口与最大回复</span>
+						<span className="field-label">{t("已选清单（{n}）", { n: draft.models.length })}</span>
+						<span className="field-hint">{t("每个模型单独设置思考档、上下文窗口与最大回复")}</span>
 					</div>
 					{draft.models.length === 0 ? (
-						<div className="sp-empty">检查模型后点 ＋，或手填</div>
+						<div className="sp-empty">{t("检查模型后点 ＋，或手填")}</div>
 					) : (
 						<ul className="conn-model-list">
 							{draft.models.map((m, i) => (
@@ -975,22 +976,22 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 											{m.id}
 										</span>
 										{dupEntryKeys.has(entryKeyOf(m)) && (
-											<span className="chip chip-cap" title="两条条目名字一样，指定旁路/剧情时分不出是哪条——改一个">
-												条目名重复
+											<span className="chip chip-cap" title={t("两条条目名字一样，指定旁路/剧情时分不出是哪条——改一个")}>
+												{t("条目名重复")}
 											</span>
 										)}
 										<button type="button" className="act" onClick={() => removeModelAt(i)}>
-											移除
+											{t("移除")}
 										</button>
 									</div>
 									<div className="conn-model-fields">
 										<label className="conn-model-field">
-											<span className="conn-model-field-label">条目名</span>
+											<span className="conn-model-field-label">{t("条目名")}</span>
 											<input
 												className="panel-search"
-												placeholder="同一模型加多条时用来区分，如 flash off"
+												placeholder={t("同一模型加多条时用来区分，如 flash off")}
 												spellCheck={false}
-												title="这条条目的名字；留空 = 用模型 id。指定旁路模型时按这个名字认"
+												title={t("这条条目的名字；留空 = 用模型 id。指定旁路模型时按这个名字认")}
 												value={typeof m.label === "string" ? m.label : ""}
 												onChange={(e) =>
 													patchModelAt(i, (x) => {
@@ -1006,22 +1007,22 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 											/>
 										</label>
 										<label className="conn-model-field">
-											<span className="conn-model-field-label">思考档</span>
+											<span className="conn-model-field-label">{t("思考档")}</span>
 											<input
 												className="panel-search"
-												placeholder="如 high / max / off"
+												placeholder={t("如 high / max / off")}
 												spellCheck={false}
 												value={typeof m.thinkingLevel === "string" ? m.thinkingLevel : ""}
 												onChange={(e) => patchModelAt(i, (x) => ({ ...x, thinkingLevel: e.target.value }))}
 											/>
 										</label>
 										<label className="conn-model-field">
-											<span className="conn-model-field-label">上下文</span>
+											<span className="conn-model-field-label">{t("上下文")}</span>
 											<input
 												className="panel-search"
-												placeholder="总窗口 如 500k / 1m"
+												placeholder={t("总窗口 如 500k / 1m")}
 												spellCheck={false}
-												title="contextWindow：整段对话上下文上限"
+												title={t("contextWindow：整段对话上下文上限")}
 												value={
 													typeof m.contextWindow === "number" &&
 													Number.isFinite(m.contextWindow) &&
@@ -1063,18 +1064,18 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 															void _drop;
 															return { ...rest, id: x.id };
 														});
-														toast("warning", `「${entryKeyOf(m)}」上下文无效，已清空（可用 500k）`);
+														toast("warning", t("「{key}」上下文无效，已清空（可用 500k）", { key: entryKeyOf(m) }));
 													}
 												}}
 											/>
 										</label>
 										<label className="conn-model-field">
-											<span className="conn-model-field-label">最大回复</span>
+											<span className="conn-model-field-label">{t("最大回复")}</span>
 											<input
 												className="panel-search"
-												placeholder="单次输出 如 16k / 32k"
+												placeholder={t("单次输出 如 16k / 32k")}
 												spellCheck={false}
-												title="maxTokens：单次回复最大输出；空=默认 16384"
+												title={t("maxTokens：单次回复最大输出；空=默认 16384")}
 												value={
 													typeof m.maxTokens === "number" && Number.isFinite(m.maxTokens) && m.maxTokens > 0
 														? String(m.maxTokens)
@@ -1114,7 +1115,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 															void _drop;
 															return { ...rest, id: x.id };
 														});
-														toast("warning", `「${entryKeyOf(m)}」最大回复无效，已清空（可用 16k）`);
+														toast("warning", t("「{key}」最大回复无效，已清空（可用 16k）", { key: entryKeyOf(m) }));
 													}
 												}}
 											/>
@@ -1128,7 +1129,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 						<div className="conn-model-add">
 							<input
 								className="panel-search"
-								placeholder="模型 id"
+								placeholder={t("模型 id")}
 								value={newModelId}
 								autoFocus
 								onChange={(e) => setNewModelId(e.target.value)}
@@ -1150,10 +1151,10 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 									setShowAddModel(false);
 								}}
 							>
-								加入
+								{t("加入")}
 							</button>
 							<button type="button" className="act" onClick={() => setShowAddModel(false)}>
-								取消
+								{t("取消")}
 							</button>
 						</div>
 					) : (
@@ -1165,7 +1166,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 			</section>
 
 			<section className="conn-sec">
-				<div className="conn-sec-title">{isGen ? "生成预览（可改）" : "配置内容（可改）"}</div>
+				<div className="conn-sec-title">{isGen ? t("生成预览（可改）") : t("配置内容（可改）")}</div>
 				<textarea
 					className="panel-search ta conn-json conn-json-full"
 					rows={10}
@@ -1175,15 +1176,15 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 				/>
 				<div className="panel-row" style={{ marginTop: 8 }}>
 					<button type="button" className="act" disabled={busy || jsonOverride === null} onClick={applyJsonPreview}>
-						应用 JSON 到表单
+						{t("应用 JSON 到表单")}
 					</button>
-					<span className="field-hint">可直接改 maxTokens / contextWindow 等；保存时会一并写入</span>
+					<span className="field-hint">{t("可直接改 maxTokens / contextWindow 等；保存时会一并写入")}</span>
 				</div>
 			</section>
 
 			<div className="panel-row">
 				<button type="button" className="drawer-btn save-btn" disabled={busy} onClick={() => void saveToWarehouse()}>
-					{isGen ? "存入配置仓库" : "保存修改"}
+					{isGen ? t("存入配置仓库") : t("保存修改")}
 				</button>
 				{isGen && (
 					<button
@@ -1193,7 +1194,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 							downloadText(`${draft.name.trim() || "profile"}.json`, jsonOverride ?? pretty(genPreview))
 						}
 					>
-						导出
+						{t("导出")}
 					</button>
 				)}
 			</div>
@@ -1204,7 +1205,7 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 		<div className="panel-body conn-panel">
 			{/* ① 当前生效：模型 + 思考 + 切换列表（唯一选型入口） */}
 			<section className="sp-section conn-block">
-				<div className="conn-section-label">当前生效</div>
+				<div className="conn-section-label">{t("当前生效")}</div>
 				<PanelStatus loading={modelsData.loading} error={modelsData.error} hasData={!!modelsData.data} />
 				{current ? (
 					<>
@@ -1213,9 +1214,9 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 							<div className="connect-current-info">
 								<div className="model-current">{current.name}</div>
 								<div className="field-hint">
-									{current.provider} · 窗口 {fmtCtx(liveContext)}
-									{liveThinking ? ` · 思考 ${liveThinking}` : ""}
-									{liveMaxTokens > 0 ? ` · 回复 ${fmtCtx(liveMaxTokens)}` : ""}
+									{t("{provider} · 窗口 {ctx}", { provider: current.provider, ctx: fmtCtx(liveContext) })}
+									{liveThinking ? t(" · 思考 {level}", { level: liveThinking }) : ""}
+									{liveMaxTokens > 0 ? t(" · 回复 {n}", { n: fmtCtx(liveMaxTokens) }) : ""}
 								</div>
 							</div>
 						</div>
@@ -1257,15 +1258,15 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 												>
 													<span className="conn-pick-name">{key}</span>
 													<span className="conn-pick-meta">
-														{on && <span className="chip chip-cap">剧情</span>}
-														{isSide && <span className="chip chip-cap">旁路</span>}
-														{missing && <span className="chip chip-cap">不在可用清单</span>}
+														{on && <span className="chip chip-cap">{t("剧情")}</span>}
+														{isSide && <span className="chip chip-cap">{t("旁路")}</span>}
+														{missing && <span className="chip chip-cap">{t("不在可用清单")}</span>}
 														{key !== String(entry.id) ? (
 															<span className="chip chip-cap">{String(entry.id)}</span>
 														) : null}
 														{think ? <span className="chip chip-cap">{think}</span> : null}
 														{ctx > 0 ? <span className="chip chip-cap">{fmtCtx(ctx)}</span> : null}
-														{maxOut ? <span className="chip chip-cap">出{fmtCtx(maxOut)}</span> : null}
+														{maxOut ? <span className="chip chip-cap">{t("出{n}", { n: fmtCtx(maxOut) })}</span> : null}
 													</span>
 												</button>
 												<button
@@ -1274,12 +1275,12 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 													disabled={busy}
 													title={
 														isSide
-															? "取消旁路指定，记账与压缩回到跟随剧情模型"
-															: "把记账与压缩交给这条条目（思考档就用它自己的）"
+															? t("取消旁路指定，记账与压缩回到跟随剧情模型")
+															: t("把记账与压缩交给这条条目（思考档就用它自己的）")
 													}
 													onClick={() => void setSideEntry(isSide ? null : { provider: pk, entry: key })}
 												>
-													旁路
+													{t("旁路")}
 												</button>
 											</li>
 										);
@@ -1289,15 +1290,15 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 						)}
 					</>
 				) : (
-					!modelsData.loading && <div className="sp-empty">尚未启用配置 — 在仓库中启用</div>
+					!modelsData.loading && <div className="sp-empty">{t("尚未启用配置 — 在仓库中启用")}</div>
 				)}
 			</section>
 
 			{/* ② 配置仓库：名 + 右侧 启用|刷新 / 修改 / 删除；点击行展开修改 */}
 			<section className="sp-section conn-block">
-				<div className="conn-section-label">配置仓库</div>
+				<div className="conn-section-label">{t("配置仓库")}</div>
 				<PanelStatus loading={profilesData.loading} error={profilesData.error} hasData={!!profilesData.data} />
-				{profiles.length === 0 && <div className="sp-empty">仓库为空 — 用下方生成器创建</div>}
+				{profiles.length === 0 && <div className="sp-empty">{t("仓库为空 — 用下方生成器创建")}</div>}
 				{profiles.map((p) => {
 					const editing = mode?.kind === "edit" && mode.id === p.id;
 					return (
@@ -1314,12 +1315,12 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 									<span className={`group-caret ${editing ? "open" : ""}`}>▸</span>
 									<span className={`auth-dot ${p.active ? "ok" : ""}`} />
 									<span className="conn-wh-name">{p.name}</span>
-									{p.active && <span className="chip chip-cap">启用中</span>}
+									{p.active && <span className="chip chip-cap">{t("启用中")}</span>}
 								</button>
 								<span className="conn-wh-acts" onClick={(e) => e.stopPropagation()}>
 									{!p.active && (
 										<button type="button" className="act" disabled={busy} onClick={() => void enableProfile(p.id)}>
-											启用
+											{t("启用")}
 										</button>
 									)}
 									{p.active && (
@@ -1327,10 +1328,10 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 											type="button"
 											className="act"
 											disabled={busy}
-											title="从仓库重读配置并重传到 models.json / 当前会话"
+											title={t("从仓库重读配置并重传到 models.json / 当前会话")}
 											onClick={() => void refreshProfile(p.id)}
 										>
-											刷新
+											{t("刷新")}
 										</button>
 									)}
 									<button
@@ -1342,10 +1343,10 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 											else void openEdit(p.id);
 										}}
 									>
-										修改
+										{t("修改")}
 									</button>
-									<ConfirmButton className="act" disabled={busy} confirmText="确认删除" onConfirm={() => void deleteProf(p.id)}>
-										删除
+									<ConfirmButton className="act" disabled={busy} confirmText={t("确认删除")} onConfirm={() => void deleteProf(p.id)}>
+										{t("删除")}
 									</ConfirmButton>
 								</span>
 							</div>
@@ -1357,14 +1358,14 @@ export function ConnectPanel({ toast }: { toast: (level: "info" | "warning" | "e
 
 			{/* ③ 配置生成器：只生成进仓库 */}
 			<section className="sp-section conn-block">
-				<div className="conn-section-label">配置生成器</div>
+				<div className="conn-section-label">{t("配置生成器")}</div>
 				{mode?.kind === "gen" ? (
 					<div className="conn-card selected add-channel">
 						<div className="conn-expand">{renderEditor(true)}</div>
 					</div>
 				) : (
 					<button type="button" className="drawer-btn conn-add-btn" onClick={openGenerator}>
-						＋ 生成配置
+						{t("＋ 生成配置")}
 					</button>
 				)}
 			</section>

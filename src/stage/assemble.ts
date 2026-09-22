@@ -82,6 +82,8 @@ export interface RpSummaryData {
 	turns?: number;
 	/** 被摘要替换的原文字数（过程条用） */
 	chars?: number;
+	/** agent 模式：本摘要覆盖的稿子文件名（docs/PLAN-AGENT-CODING.md §七） */
+	coveredFiles?: string[];
 }
 
 const summaryDataOf = (e: BranchEntryLike): RpSummaryData | null => {

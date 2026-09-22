@@ -19,6 +19,7 @@ import type { AuthorScript } from "../src/authorScripts.ts";
 import type { CardProjectPreview } from "../src/card-authoring-types.ts";
 import { isBackstageText } from "../src/stance.ts";
 import { messageMode, type ConversationMode } from "../src/conversation-mode.ts";
+import { STORY_CHECKPOINT_TYPE } from "../src/stage/story-history.ts";
 export type { ConversationMode };
 import { applyDraftOps, type DraftMsgLike } from "../src/draft.ts";
 import type { RpPanel } from "../src/panels.ts";
@@ -45,27 +46,34 @@ export type WireChannel =
 	| "choice"
 	/** 对话流内嵌 HTML（show_html 工具 / 正文 ```html 块） */
 	| "html"
-	/** agent 模式：稿子写入/修订的内联卡片（点击定位到稿子视图） */
+	/** agent 模式：本轮改动（检查点）的内联卡片（点击定位到稿子视图） */
 	| "chapter";
 
-/** agent 模式的章（当前分支投影；hello 带目录，正文经 GET /api/story） */
-export interface WireStoryChapter {
-	index: number;
-	chapterId: string;
-	title?: string;
+/** agent 模式的稿子文件（docs/PLAN-AGENT-CODING.md §三；hello 带目录，正文经 GET /api/story） */
+export interface WireStoryFile {
+	name: string;
+	/** 去掉序号前缀与扩展名的展示名 */
+	title: string;
 	chars: number;
-	version: number;
-	/** rp-chapter 条目 id */
-	entryId?: string;
+	mtime: number;
 }
-/** 讨论区里的章卡片 */
-export interface WireChapterRef {
-	kind: "append" | "edit";
-	chapterId: string;
-	version: number;
-	index: number;
-	title?: string;
-	chars: number;
+/** 快照仓的一次改动 */
+export interface WireChangeSet {
+	added: string[];
+	modified: string[];
+	renamed: Array<[string, string]>;
+	removed: string[];
+}
+/** 检查点（历史视图与讨论区卡片共用） */
+export interface WireCheckpoint {
+	id: string;
+	ts: number;
+	author: "agent" | "user";
+	message: string;
+	turnId?: string;
+	aborted?: boolean;
+	restoredFrom?: string;
+	changed: WireChangeSet;
 }
 
 /** ST 式回复变体：挂在 narrative 上；左右箭头切换，agent 只见当前选中 */
@@ -127,7 +135,7 @@ export interface WireMsg {
 	 */
 	greetingPick?: { index: number; total: number };
 	/** chapter 通道专用：写入/修订了哪一章 */
-	chapter?: WireChapterRef;
+	checkpoint?: WireCheckpoint;
 }
 
 /**
@@ -250,7 +258,7 @@ export type ServerFrame =
 			conversationMode?: ConversationMode;
 			turnMode?: ConversationMode;
 			/** agent 子项目：当前分支的章目录（正文经 GET /api/story 取，hello 不扛正文） */
-			story?: { chapters: WireStoryChapter[] };
+			story?: { files: WireStoryFile[]; checkpoints: WireCheckpoint[] };
 			sessionId: string;
 			charName: string;
 			userName: string;
@@ -285,7 +293,6 @@ export type ServerFrame =
 	/** draft=true：该 text 增量是 draft_write 参数的转发（替换语义——重交原地更新，不叠加）；reset=true：本次调用的首个分片 */
 	| { type: "delta"; kind: "text" | "thinking"; delta: string; draft?: boolean; reset?: boolean }
 	/** agent 模式：story_append 正文的流式预览（替换语义，全量；空串＝撤下） */
-	| { type: "story_preview"; text: string; title?: string }
 	/** 稿件分段重同步（修复/重交后）：前端把屏上全部稿段原位替换为 segments（按空行切段） */
 	| { type: "draft_resync"; segments: string[] }
 	| { type: "draft_workspace"; workspace: DraftView; streaming: boolean }
@@ -337,7 +344,8 @@ export type ClientFrame =
 	| { type: "choice_reply"; id: string; value?: string; stop?: boolean }
 	| { type: "new"; name?: string; mode?: "agent" }
 	/** agent 模式：回退到写入该章的那一轮之后（之后的章随分支退掉，文件仍在；再写＝分叉） */
-	| { type: "story_rewind"; chapterId: string }
+	/** agent 模式：恢复到检查点。files＝只恢复文件；both＝文件和对话一起（截到那轮输入之前） */
+	| { type: "story_restore"; checkpointId: string; scope: "files" | "both" }
 	/** 两层布局：在指定子项目里再开一个会话（「第二个窗口继续聊」） */
 	| { type: "chat_new_session"; chatId: string }
 	| { type: "ping" }; // 保活，服务端丢弃
@@ -584,10 +592,10 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 		if (msg.customType === "rp-import") {
 			return text ? { channel: "import", text: prepareDisplayText(text, skin) } : null;
 		}
-		// agent 模式：章写入/修订的内联卡片（main.ts branchMessages 由 rp-chapter 条目投影而来）
-		if (msg.customType === "rp-chapter" || msg.customType === "rp-chapter-revision") {
-			const ref = (msg.details as { rpChapter?: WireChapterRef } | undefined)?.rpChapter;
-			return ref ? { channel: "chapter", text, chapter: ref } : null;
+		// agent 模式：检查点卡片（main.ts branchMessages 由 liyuan-story-checkpoint 条目投影而来）
+		if (msg.customType === STORY_CHECKPOINT_TYPE) {
+			const cp = (msg.details as { checkpoint?: WireCheckpoint } | undefined)?.checkpoint;
+			return cp ? { channel: "chapter", text, checkpoint: cp } : null;
 		}
 		// 用户气泡「配音」写入的可展示音频（details.rpAudio；正文尽量不进 LLM 注意力，见 convert 侧仍可能带短标记）
 		if (msg.customType === "rp-audio") {

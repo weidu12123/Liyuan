@@ -28,7 +28,9 @@ import {
 import { buildRpSummaryPrompt } from "../scribe.ts";
 import { formatState } from "../state.ts";
 import { applyDraftRevisions } from "./draft-projection.ts";
-import { hasChapters, projectChapters, type StoryStore } from "./story.ts";
+import { listStoryFiles } from "./story-history.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { storyBranch } from "../conversation-mode.ts";
 import type { WorldState } from "../types.ts";
 
@@ -50,8 +52,10 @@ export const MANUAL_MIN_COMPACT_CHARS = 500;
 export interface CompactPlan {
 	/** 覆盖到此条目为止（含）——装配时该条及之前不进历史 */
 	coversThroughId: string;
-	/** 待摘要的条目（已按分支顺序） */
+	/** 待摘要的条目（已按分支顺序；agent 模式为空——正文在文件里） */
 	covered: BranchEntryLike[];
+	/** agent 模式：摘要落地后覆盖的全部文件名（含更早摘要已覆盖的） */
+	coveredFiles?: string[];
 	/** 覆盖的叙事拍数（用户消息条数） */
 	turns: number;
 	/** 序列化后的待摘要正文 */
@@ -69,8 +73,8 @@ export interface PlanCompactionOptions {
 	keepRecentBeats?: number;
 	/** 可裁正文字数地板（缺省 MIN_COMPACT_CHARS） */
 	minChars?: number;
-	/** 章文件仓（agent 模式）：分支上有章条目时单位从「拍」换成「章」，正文从文件读 */
-	story?: Pick<StoryStore, "read">;
+	/** 稿子目录（agent 模式，docs/PLAN-AGENT-CODING.md §七）：单位从「拍」换成「文件」，正文从文件读 */
+	storyDir?: string;
 }
 
 /**
@@ -96,7 +100,7 @@ export function serializeForSummary(entries: BranchEntryLike[], userName: string
  * 返回 null = 本拍不压缩。
  */
 export function planCompaction(branch: BranchEntryLike[], opts: PlanCompactionOptions): CompactPlan | null {
-	if (opts.story && hasChapters(branch)) return planChapterCompaction(branch, opts, opts.story);
+	if (opts.storyDir !== undefined) return planFileCompaction(branch, opts, opts.storyDir);
 	branch = applyDraftRevisions(storyBranch(branch), { omitEditRequests: true });
 	const keep = opts.keepRecentBeats ?? KEEP_RECENT_BEATS;
 	const minChars = opts.minChars ?? MIN_COMPACT_CHARS;
@@ -133,41 +137,48 @@ export function planCompaction(branch: BranchEntryLike[], opts: PlanCompactionOp
 }
 
 /**
- * agent 模式（docs/PLAN-AGENT-MODE.md §5.4）：单位是章不是拍。上下文里本来就只有稿子尾部，「到期」＝有章落到
- * 尾部之外且攒够字数；覆盖边界锚在最后一个被摘要的 rp-chapter 条目上，之后的章与其修订照常活着。
+ * agent 模式（docs/PLAN-AGENT-CODING.md §七）：单位是文件不是拍。上下文里没有正文，「到期」＝按文件名序排在最后
+ * keep 个文件之外、且还没被摘要覆盖过的正文攒够字数。摘要条目记 coveredFiles（文件名）；改名/新插的文件不在
+ * 名单里就重新算活的（多摘一次不丢）。coversThroughId 取分支末条，只为满足 activeSummary 的锚点。
  */
-function planChapterCompaction(branch: BranchEntryLike[], opts: PlanCompactionOptions, story: Pick<StoryStore, "read">): CompactPlan | null {
-	branch = storyBranch(branch);
+function planFileCompaction(branch: BranchEntryLike[], opts: PlanCompactionOptions, storyDir: string): CompactPlan | null {
 	const keep = opts.keepRecentBeats ?? KEEP_RECENT_BEATS;
 	const minChars = opts.minChars ?? MIN_COMPACT_CHARS;
 	if (!Number.isFinite(opts.everyNTurns) || opts.everyNTurns <= 0) return null;
 
 	const active = activeSummary(branch);
-	const liveIds = new Set((active ? branch.slice(active.cut) : branch).map((e) => e.id));
-	const live = projectChapters(branch).filter((c) => c.entryId && liveIds.has(c.entryId));
-	if (live.length < keep + opts.everyNTurns) return null;
-
-	const covered = live.slice(0, live.length - keep);
-	const coversThroughId = covered[covered.length - 1]?.entryId;
-	if (!coversThroughId) return null;
+	const coveredNames = new Set(latestCoveredFiles(branch));
+	const files = listStoryFiles(storyDir);
+	const candidates = files.slice(0, Math.max(0, files.length - keep)).filter((f) => !coveredNames.has(f.name));
+	if (!candidates.length) return null;
 
 	const parts: string[] = [];
-	for (const c of covered) {
-		let text: string;
-		try { text = story.read(c); } catch { continue; }
-		parts.push(`第 ${c.index} 章${c.title ? `「${c.title}」` : ""}\n\n${text}`);
+	for (const f of candidates) {
+		try { parts.push(`${f.name}\n\n${readFileSync(join(storyDir, f.name), "utf8")}`); } catch { continue; }
 	}
 	const conversationText = parts.join("\n\n");
 	if (conversationText.length < minChars) return null;
 
-	const at = branch.findIndex((e) => e.id === coversThroughId);
+	const last = branch[branch.length - 1];
+	if (!last?.id) return null;
 	return {
-		coversThroughId,
-		covered: branch.slice(active?.cut ?? 0, at + 1),
-		turns: covered.length,
+		coversThroughId: last.id,
+		covered: [],
+		coveredFiles: [...coveredNames, ...candidates.map((f) => f.name)],
+		turns: candidates.length,
 		conversationText,
 		...(active ? { previousSummary: active.summary } : {}),
 	};
+}
+
+function latestCoveredFiles(branch: BranchEntryLike[]): string[] {
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const e = branch[i]!;
+		if (e.type !== "custom" || e.customType !== SUMMARY_ENTRY_TYPE) continue;
+		const d = e.data as Partial<RpSummaryData> | undefined;
+		return Array.isArray(d?.coveredFiles) ? d.coveredFiles.filter((x): x is string => typeof x === "string") : [];
+	}
+	return [];
 }
 
 export interface CompactRunDeps {
@@ -191,8 +202,8 @@ export interface CompactRunInput {
 	everyNTurns: number;
 	keepRecentBeats?: number;
 	minChars?: number;
-	/** 章文件仓（agent 模式；扮演分支上没有章条目，给了也不生效） */
-	story?: Pick<StoryStore, "read">;
+	/** 稿子目录（agent 模式；给了就按文件计划） */
+	storyDir?: string;
 }
 
 export type CompactOutcome =
@@ -212,7 +223,7 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 		charName: input.charName,
 		keepRecentBeats: input.keepRecentBeats,
 		minChars: input.minChars,
-		story: input.story,
+		...(input.storyDir !== undefined ? { storyDir: input.storyDir } : {}),
 	});
 	if (!plan) return { kind: "skipped", reason: "not-due" };
 
@@ -251,6 +262,7 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 		coversThroughId: plan.coversThroughId,
 		turns: plan.turns,
 		chars: plan.conversationText.length,
+		...(plan.coveredFiles ? { coveredFiles: plan.coveredFiles } : {}),
 	});
 	deps.onActivity?.(`前情已压缩：${plan.turns} 拍 ${plan.conversationText.length} 字 → 摘要 ${summary.length} 字`);
 	return { kind: "compacted", summary, turns: plan.turns, chars: plan.conversationText.length };

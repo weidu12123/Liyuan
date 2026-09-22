@@ -17,7 +17,9 @@ import { projectToolContext } from "./context.ts";
 import { authoringHistory, authoringRequestIds, contextText, conversationMode, CONVERSATION_MODE_TYPE, CONVERSATION_PROCESS_TYPE, isConversationMode, roleplayHistory, type ConversationMode, type ContextMessage } from "../conversation-mode.ts";
 import { authoringTools, authoringSystemPrompt, runAuthoringTool, AUTHORING_NATIVE_TOOLS, CONVERSATION_MODE_TOOL } from "./authoring.ts";
 import { AGENT_ASK_TOOL, agentSystemPrompt, buildAgentStateBlock } from "./agent.ts";
-import { DEFAULT_STORY_TAIL_CHARS, projectChapters, runStoryTool, STORY_TOOL_NAMES, StoryStore, storyDirectory, storyTail, storyTools, type Chapter, type StoryToolDeps } from "./story.ts";
+import { describeChange, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, storyDirectory, type ChangeSet } from "./story-history.ts";
+import { agentHistory, buildDiscussionSummaryPrompt, DISCUSSION_SUMMARY_TYPE, planDiscussionCompaction } from "./discussion.ts";
+import { readFileSync } from "node:fs";
 import { createSandboxGate, sandboxGrantsFromBranch, SANDBOX_GRANT_TYPE } from "../sandbox.ts";
 import type { CardDeps } from "../tools/card.ts";
 import type { GateInput } from "../tools/gate.ts";
@@ -169,8 +171,8 @@ export interface StageTurnEndInfo {
 	entryId?: string;
 	/** An existing reply was revised; no new story or memory-ingestion turn was created. */
 	revisedEntryId?: string;
-	/** agent 模式：本轮 story_append 写入的章（顺序即写入顺序；宿主据此入向量记忆） */
-	chapters?: Array<{ chapterId: string; version: number; index: number; text: string }>;
+	/** agent 模式：本轮落下的检查点（正文/ 有改动才有）；added 带新文件全文，宿主据此入向量记忆 */
+	checkpoint?: { id: string; changed: ChangeSet; added: Array<{ name: string; text: string }> };
 }
 
 export interface StageEvents {
@@ -200,11 +202,6 @@ export interface StageEvents {
 	/** Refresh the original reply after its revision receipt is durable. */
 	onReplyRevised?: (entryId: string) => void;
 	onTurnEnd?: (info: StageTurnEndInfo) => void;
-	/**
-	 * agent 模式：story_append 的正文随工具参数增量流式落到稿子视图（替换语义：每次给全量；
-	 * 空串＝本章已落盘或调用结束，预览撤下）。工具参数在 pi 里按块增量到达，与 draft_write 预览同源。
-	 */
-	onStoryPreview?: (content: string, title?: string) => void;
 	/** 面向用户的告警（宏降级等）；每种只发一次 */
 	onNotify?: (level: "info" | "warning" | "error", text: string) => void;
 	/** 过程条短句（验收/修订进度；kind:"note" 形态，无需工具名） */
@@ -896,23 +893,22 @@ export class StageEngine {
 		const workTools: StageTool[] = [CONVERSATION_MODE_TOOL, ...authoringTools(config.language, cardDeps),
 			...(skillList.length ? [skillReadTool(config.language, skillList)] : []), ...mcpTools];
 		const nativeNames = config.backendControl === false ? [] : session.getAllTools().map((t) => t.name).filter((n) => AUTHORING_NATIVE_TOOLS.includes(n));
-		// agent 模式清单＝工作模式清单 ∪ 扮演数据工具 ∪ story_*（§5.3）；不含稿纸/上一拍/计划/conversation_mode。
-		// 排在最前：同名工具（ask）以 agent 版定义为准。
-		const story = agentTurn ? this.#storyDeps(sm, chatDir!) : undefined;
+		// agent 模式清单（docs/PLAN-AGENT-CODING.md §五）＝扮演数据工具中与树无关的（世界线是树分支，不给）∪ skill_read ∪ ask
+		// ∪ 媒体 ∪ MCP ∪ 写卡工具 ∪ 原生七工具；稿子就用原生 read/grep/edit/write。排在最前：同名工具（ask）以 agent 版定义为准。
+		const storyDir = agentTurn ? storyDirectory(chatDir!) : undefined;
 		const agentTools: StageTool[] = agentTurn ? [
-			...stageTools(config.language, readDeps),
+			...stageTools(config.language, readDeps).filter((t) => !t.name.startsWith("worldline_")),
 			...(skillList.length ? [skillReadTool(config.language, skillList)] : []),
 			...(askEnabled ? [AGENT_ASK_TOOL] : []),
 			...mediaTools, ...mcpTools,
 			...authoringTools(config.language, cardDeps),
-			...storyTools(),
 		] : [];
 		const rpNames = rpTools.map((t) => t.name);
 		const workNames = [...new Set([...workTools.map((t) => t.name), ...nativeNames])];
 		const agentNames = [...new Set([...agentTools.map((t) => t.name), ...nativeNames])];
 		const tools = [...new Map([...agentTools, ...rpTools, ...workTools].map((t) => [t.name, t])).values()];
 		const workPrompt = agentTurn
-			? agentSystemPrompt({ cwd, cardPath: config.card, userRules: materials.userRules, cardAgents: materials.cardAgents, macro: { charName: card.name, userName: config.userName } })
+			? agentSystemPrompt({ cwd, cardPath: config.card, storyDir: storyDir!, userRules: materials.userRules, cardAgents: materials.cardAgents, macro: { charName: card.name, userName: config.userName } })
 			: authoringSystemPrompt(cwd, config.card);
 		const ws = createWorkspace({ sessionId: sm.getSessionId(), parentId: sm.getLeafId(),
 			...(userText === null ? { userId: [...branch].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.id } : {}) });
@@ -968,11 +964,8 @@ export class StageEngine {
 		// 两者语义同为「更早剧情的既定事实」，本局摘要在前、往局记忆在后。摘要是数据块，
 		// 走既有通道与既有语义句（铁律一/二：零新增文案、零新增注入点）；预算在 card-memory。
 		const residentSummary = authoringTurn && !agentTurn ? undefined : this.#residentSummary(sm, summary, state, rosterIndex);
-		// agent 模式的项目状态块（§5.4 通道 2）：与扮演同一份数据，多带稿子尾部；每次装配现算——本轮刚写的章也在尾部里。
-		const agentStateBlock = (): string => buildAgentStateBlock({
-			state, rosterIndex, summary, residentSummary,
-			tail: storyTail(story!.store, projectChapters(sm.getBranch() as BranchEntryLike[]), config.agentStoryTailChars ?? DEFAULT_STORY_TAIL_CHARS),
-		});
+		// agent 模式的项目状态块（docs/PLAN-AGENT-CODING.md §六）：与扮演同一份数据，多带稿子目录（不带正文）；每次装配现读目录。
+		const agentStateBlock = (): string => buildAgentStateBlock({ state, rosterIndex, summary, residentSummary, files: listStoryFiles(storyDir!) });
 
 		// 末端消息 = 梨园数据块 + 本拍用户原话 + 预设 after 段（各按自己的 role）。
 		// 顺序要紧：用户当拍的话必须落在**梨园数据块之后**。数据块压在提问之后时，模型会把提问
@@ -1069,12 +1062,10 @@ export class StageEngine {
 		let finished = false;
 		let endInfo: StageTurnEndInfo | undefined;
 		const readNames = new Set([...unifiedStageToolNames(readDeps), "world_state_get", "skill_read"]);
-		const storyNames = new Set<string>(STORY_TOOL_NAMES);
 		const mcpNames = mcpStageToolNames(this.#deps.mcp);
 		const mediaNames = this.#deps.media ? mediaStageToolNames(mediaOpts) : new Set<string>();
 		const publish = () => ev.onWorkspace?.(structuredClone(ws));
 		let lastCheckpoint = 0;
-		let lastPreviewAt = 0;
 		const checkpoint = (force = false) => {
 			if (authoringTurn) return;
 			if (force || Date.now() - lastCheckpoint > 250) {
@@ -1082,8 +1073,6 @@ export class StageEngine {
 			}
 		};
 		const exchanges: ContextMessage[] = [];
-		/** agent 轮：本轮 story_append 写入的章，按写入顺序；收尾时逐章跑旁路链（§5.5） */
-		const appended: Array<{ chapter: Chapter; text: string }> = [];
 		const agentMedia: Array<{ toolName: string; toolCallId: string; details: Record<string, unknown>; text: string }> = [];
 		const requestId = () => ws.userId ??= [...sm.getBranch() as BranchEntryLike[]].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.id;
 		const finishAuthoring = (): StageTurnEndInfo => {
@@ -1111,16 +1100,32 @@ export class StageEngine {
 				sm.flush();
 			}
 			if (errored && !aborted) ev.onNotify?.("error", `${agentTurn ? "本轮" : "写卡"}失败：${errored}`);
-			return { mode: liyuanMode, aborted, entryId, ...(errored ? { error: errored } : {}),
-				...(appended.length ? { chapters: appended.map((a) => ({ chapterId: a.chapter.chapterId, version: a.chapter.version, index: a.chapter.index, text: a.text })) } : {}) };
+			return { mode: liyuanMode, aborted, entryId, ...(errored ? { error: errored } : {}) };
 		};
 
 		const finish = async (): Promise<StageTurnEndInfo> => {
 			if (authoringTurn) {
 				const info = finishAuthoring();
-				if (agentTurn) rawEv.onStoryPreview?.("");
-				// 章写入＝定稿边界（§5.5）：场记→钉档→压缩，同一条旁路链换挂点；纯讨论一轮什么都不触发。
-				if (agentTurn && appended.length) await this.#afterChapters({ model, auth: { apiKey, headers }, materials, sm, ev, appended, aborted: info.aborted, story: story!.store });
+				if (agentTurn) {
+					// 轮末落检查点（docs/PLAN-AGENT-CODING.md §4.2）：正文/ 有改动才落；纯讨论一轮什么都不发生。
+					const turnId = requestId();
+					const message = `${lastUserText.replace(/\s+/g, " ").trim().slice(0, 60)}${info.aborted ? "（已中止）" : ""}`;
+					let checkpoint: ReturnType<StoryHistory["commit"]>;
+					try { checkpoint = new StoryHistory(chatDir!).commit({ author: "agent", message, ...(turnId ? { turnId } : {}), ...(info.aborted ? { aborted: true } : {}) }); }
+					catch (err) { ev.onNotify?.("warning", `稿子检查点未落下：${err instanceof Error ? err.message : String(err)}`); }
+					if (checkpoint) {
+						const { files: _files, ...lite } = checkpoint;
+						sm.appendCustomEntry(STORY_CHECKPOINT_TYPE, lite);
+						sm.flush();
+						const added = checkpoint.changed.added.map((name) => { try { return { name, text: readFileSync(join(storyDir!, name), "utf8") }; } catch { return { name, text: "" }; } }).filter((f) => f.text.trim());
+						info.checkpoint = { id: checkpoint.id, changed: checkpoint.changed, added };
+						ev.onActivity?.(`已保存检查点：${describeChange(checkpoint.changed)}`);
+						// 旁路链挂在检查点上（§七）：场记只对新增文件跑；前情压缩按文件、按字数到期。
+						await this.#afterCheckpoint({ model, auth: { apiKey, headers }, materials, sm, ev, added, aborted: info.aborted, storyDir: storyDir! });
+					}
+					// 讨论层压缩（§六.3）：估算超过窗口才压，与正文无关；失败只记日志。
+					if (!info.aborted) await this.#compactDiscussion(model, { apiKey, headers }, sm, ev);
+				}
 				return info;
 			}
 			const aborted = userStopped || this.#abort?.signal.aborted === true || final?.stopReason === "aborted";
@@ -1283,8 +1288,8 @@ export class StageEngine {
 				contextStart ??= piMessages.length;
 				ws.userId ??= [...sm.getBranch() as Array<{ id: string; type: string; message?: { role?: string } }>].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.id;
 				if (authoringTurn) {
-					const history = authoringHistory(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]));
-					// agent：项目状态块压在本轮用户原话之前（同扮演「数据块之后才是提问」的装配锚点）
+					// agent：讨论历史认讨论摘要（docs/PLAN-AGENT-CODING.md §六.3）；项目状态块压在本轮用户原话之前（同扮演「数据块之后才是提问」的装配锚点）
+					const history = agentTurn ? agentHistory(sm.getBranch() as BranchEntryLike[]) : authoringHistory(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]));
 					if (agentTurn) prependToLastUser(history, agentStateBlock());
 					return history;
 				}
@@ -1304,14 +1309,6 @@ export class StageEngine {
 			update: (event) => {
 				if (authoringTurn) {
 					if ((event.type === "text_delta" || event.type === "thinking_delta") && event.delta) ev.onDelta?.(event.type === "text_delta" ? "text" : "thinking", event.delta);
-					// agent：story_append 的 content 参数边到边上屏（稿子视图末尾的「写入中」章），落盘后撤下
-					if (agentTurn && event.type.startsWith("toolcall_") && event.partial && event.contentIndex !== undefined) {
-						const call = event.partial.content[event.contentIndex];
-						if (call?.name === "story_append" && typeof call.arguments?.content === "string" && Date.now() - lastPreviewAt > 120) {
-							lastPreviewAt = Date.now();
-							rawEv.onStoryPreview?.(call.arguments.content, typeof call.arguments.title === "string" ? call.arguments.title : undefined);
-						}
-					}
 					return;
 				}
 				if (ws.revision) return; // A completed edit cannot grow another narrative or mutate its saved timeline.
@@ -1448,13 +1445,6 @@ export class StageEngine {
 					return { content: [{ type: "text", text: modeExit ? "已切回扮演，维护操作结束；下一条用户输入继续剧情。" : "已进入工作模式；下一次模型调用可见本会话完整操作记录与工作工具。" }], ...(modeExit ? { terminate: true } : {}) };
 				}
 				if (authoringTurn) {
-					if (agentTurn && storyNames.has(name)) {
-						const r = runStoryTool(story!, name, input);
-						if (name === "story_append") rawEv.onStoryPreview?.("");
-						if (r.appended) appended.push(r.appended);
-						if (r.activity) ev.onActivity?.(r.activity);
-						return { content: [{ type: "text", text: r.text }], ...(r.details ? { details: r.details as Record<string, unknown> } : {}), ...(r.isError ? { isError: true } : {}) };
-					}
 					if (agentTurn && name === "ask" && this.#deps.askUser) {
 						const question = String(input.question ?? "").trim() || "请你定夺";
 						const options = Array.isArray(input.options) ? input.options.map((v) => String(v).trim()).filter(Boolean) : [];
@@ -1609,45 +1599,48 @@ export class StageEngine {
 	}
 
 	/**
-	 * agent 模式的定稿边界（docs/PLAN-AGENT-MODE.md §5.5）：每写入一章跑一遍场记（账本随章推进），
-	 * 然后按原顺序钉档、按章压缩。story_edit 不走这里。用户中途停止时旁路调用会因 abort 信号立即失败——只记日志。
+	 * agent 模式的旁路链挂在检查点上（docs/PLAN-AGENT-CODING.md §七）：场记只对新增文件跑（一文件一遍，账本随新章推进）；
+	 * 修改/改名/删除不触发；然后按文件、按字数到期压缩前情。世界线钉档不在 agent 模式里。
+	 * 用户中途停止时旁路调用会因 abort 信号立即失败——只记日志。
 	 */
-	async #afterChapters(o: {
+	async #afterCheckpoint(o: {
 		model: StageModelLike; auth: { apiKey?: string; headers?: Record<string, string | null> }; materials: StageMaterials;
-		sm: StageSessionManager; ev: StageEvents; appended: Array<{ chapter: Chapter; text: string }>; aborted: boolean; story: StoryStore;
+		sm: StageSessionManager; ev: StageEvents; added: Array<{ name: string; text: string }>; aborted: boolean; storyDir: string;
 	}): Promise<void> {
 		const { model, auth, materials, sm, ev } = o;
-		for (const { text } of o.appended) {
+		for (const { text } of o.added) {
 			const state = stateFromBranch(sm.getBranch() as BranchEntryLike[]);
 			await this.#scribe({ model, auth, materials, sm, ev, state, userText: "", assistantText: text });
 			this.#pendingPanelData = {};
 		}
-		if (this.#pendingSave && this.#deps.storeSave && !o.aborted) {
-			const want = this.#pendingSave;
-			try {
-				const saved = this.#deps.storeSave(sm.getSessionId(), want);
-				if (saved) { ev.onActivity?.(`已钉档「${saved.name}」（${saved.worldlineName}）`); sm.flush(); }
-				else ev.onNotify?.("warning", `存档「${want}」未能钉下（无当前叶位）。`);
-			} catch (err) {
-				console.error("[stage] 钉档失败", err);
-				ev.onNotify?.("warning", `存档「${want}」失败：${err instanceof Error ? err.message : String(err)}`);
-			}
-		}
 		this.#pendingSave = null;
-		// 按章压缩：上下文里本来只有稿子尾部，「到期」＝有章落到尾部之外且攒够字数（keep 1 章、每章判一次）；
-		// compactEveryNTurns<=0 仍表示关闭。
-		if (!o.aborted && (materials.config.compactEveryNTurns ?? 30) > 0) {
-			await this.#compact(model, auth, 1, undefined, 1);
-		}
+		// 前情压缩按文件：保留按文件名序最后 N 个（N 复用 compactEveryNTurns，<=0 关闭），其余未覆盖的攒够字数就压。
+		const keep = materials.config.compactEveryNTurns ?? 30;
+		if (!o.aborted && keep > 0) await this.#compact(model, auth, keep, undefined, keep);
 	}
 
-	#storyDeps(sm: StageSessionManager, chatDir: string): StoryToolDeps & { store: StoryStore } {
-		const store = new StoryStore(storyDirectory(chatDir));
-		return {
-			store,
-			getBranch: () => sm.getBranch() as BranchEntryLike[],
-			appendEntry: (customType, data) => { sm.appendCustomEntry(customType, data); sm.flush(); },
-		};
+	/**
+	 * 讨论层压缩（docs/PLAN-AGENT-CODING.md §六.3）：判据照 pi（估算 token > 上下文窗口 − 预留），摘要由旁路模型写，
+	 * 落 liyuan-discussion-summary 条目，agentHistory 从 firstKeptEntryId 起回放。叶守卫同前情压缩。
+	 */
+	async #compactDiscussion(model: StageModelLike, auth: { apiKey?: string; headers?: Record<string, string | null> }, sm: StageSessionManager, ev: StageEvents): Promise<void> {
+		const contextWindow = typeof model.contextWindow === "number" ? model.contextWindow : 0;
+		if (!(contextWindow > 0)) return;
+		try {
+			const plan = planDiscussionCompaction(sm.getBranch() as BranchEntryLike[], { contextWindow });
+			if (!plan) return;
+			const leafBefore = sm.getLeafId();
+			ev.onActivity?.(`正在压缩讨论（${plan.turns} 轮 · 约 ${plan.tokensBefore} token）…`);
+			const prompt = buildDiscussionSummaryPrompt({ conversationText: plan.conversationText, ...(plan.previousSummary ? { previousSummary: plan.previousSummary } : {}) });
+			const resp = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, 4096, "compact");
+			if (typeof resp !== "string" || !resp.trim()) { console.error(`[stage-discussion] 压缩跳过：${typeof resp === "string" ? "摘要为空" : resp.error}`); return; }
+			if (sm.getLeafId() !== leafBefore) { ev.onActivity?.("讨论压缩已丢弃（期间切换了分支）"); return; }
+			sm.appendCustomEntry(DISCUSSION_SUMMARY_TYPE, { summary: resp.trim(), firstKeptEntryId: plan.firstKeptEntryId, tokensBefore: plan.tokensBefore });
+			sm.flush();
+			ev.onActivity?.(`讨论已压缩：${plan.turns} 轮 → 摘要 ${resp.trim().length} 字`);
+		} catch (err) {
+			console.error(`[stage-discussion] 压缩异常：${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	/** 压缩一次（自动/手动共用）。失败只记日志不抛——压缩从不影响正文。 */
@@ -1663,8 +1656,9 @@ export class StageEngine {
 		const { config, card } = loadStageMaterials(this.#deps.cwd);
 		try {
 			const branch = sm.getBranch() as BranchEntryLike[];
-			// agent 子项目有章条目时 planCompaction 按章计划；扮演分支给了 story 也不生效
+			// agent 子项目：planCompaction 按稿子文件计划（docs/PLAN-AGENT-CODING.md §七）
 			const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
+			const agentStoryDir = chatDir && chatModeOfSessionDir(sm.getSessionDir?.()) === "agent" ? storyDirectory(chatDir) : undefined;
 			const c = await runCompaction(
 				{
 					// 4096：摘要要装下前情/人物/伏笔/事实账五节，且要合并上一份摘要
@@ -1685,7 +1679,7 @@ export class StageEngine {
 					everyNTurns,
 					...(minChars !== undefined ? { minChars } : {}),
 					...(keepRecentBeats !== undefined ? { keepRecentBeats } : {}),
-					...(chatDir ? { story: new StoryStore(storyDirectory(chatDir)) } : {}),
+					...(agentStoryDir ? { storyDir: agentStoryDir } : {}),
 				},
 			);
 			if (c.kind === "failed") console.error(`[stage-compact] 压缩跳过：${c.error}`);

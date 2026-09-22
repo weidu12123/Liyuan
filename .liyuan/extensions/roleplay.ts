@@ -1393,9 +1393,12 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		description: cmdDesc("rewind"),
 		handler: async (args, ctx) => {
 			const n = Math.max(1, Number.parseInt((args ?? "").trim(), 10) || 1);
-			// agent 子项目：树上只有讨论，「用户轮」＝讨论轮（该轮写入的章随分支一起退掉，文件仍在）
-			const rawBranch = ctx.sessionManager.getBranch();
-			const branch = (chatModeOfSessionDir(ctx.sessionManager.getSessionDir()) === "agent" ? rawBranch : storyBranch(rawBranch)) as Array<{
+			// agent 子项目不给树导航（docs/PLAN-AGENT-CODING.md §4.3）：回退走稿子视图的检查点恢复
+			if (chatModeOfSessionDir(ctx.sessionManager.getSessionDir()) === "agent") {
+				notify(ctx, "agent 项目没有 /rewind：在稿子视图的「历史」里恢复到某个检查点。", "error");
+				return;
+			}
+			const branch = storyBranch(ctx.sessionManager.getBranch()) as Array<{
 				id: string;
 				type: string;
 				message?: { role?: string };

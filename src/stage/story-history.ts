@@ -14,6 +14,8 @@ import { CHAT_HISTORY_DIR, CHAT_STORY_DIR } from "../paths.ts";
 
 export const HISTORY_OBJECTS_DIR = "对象";
 export const HISTORY_LOG_FILE = "检查点.jsonl";
+/** 会话树上的检查点留痕（讨论区卡片、「文件和对话一起恢复」的对应关系）；真相在 检查点.jsonl，这只是投影 */
+export const STORY_CHECKPOINT_TYPE = "liyuan-story-checkpoint";
 
 export const storyDirectory = (chatDir: string): string => join(chatDir, CHAT_STORY_DIR);
 export const historyDirectory = (chatDir: string): string => join(chatDir, CHAT_HISTORY_DIR);
@@ -91,6 +93,16 @@ export interface Checkpoint {
 const hashOf = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
 export const isEmptyChange = (c: ChangeSet): boolean => !c.added.length && !c.modified.length && !c.renamed.length && !c.removed.length;
+
+/** 一句话说清一次改动（过程条 / 卡片用） */
+export function describeChange(c: ChangeSet): string {
+	const parts: string[] = [];
+	if (c.added.length) parts.push(`新增 ${c.added.join("、")}`);
+	if (c.modified.length) parts.push(`修改 ${c.modified.join("、")}`);
+	if (c.renamed.length) parts.push(`改名 ${c.renamed.map(([a, b]) => `${a}→${b}`).join("、")}`);
+	if (c.removed.length) parts.push(`删除 ${c.removed.join("、")}`);
+	return parts.join("；") || "无改动";
+}
 
 /** 两份清单的差。改名＝同一哈希在旧清单里消失、在新清单里出现（一对一，多出的算增删）。 */
 export function diffManifests(prev: Manifest, next: Manifest): ChangeSet {

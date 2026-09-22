@@ -27,9 +27,11 @@ import {
 	CARD_CONFIG_FILE,
 	CARDS_ROOT,
 	CHAT_META_FILE,
+	CHAT_HISTORY_DIR,
 	CHAT_PANELS_FILE,
 	CHAT_SESSIONS_DIR,
 	CHAT_STATE_FILE,
+	CHAT_STORY_DIR,
 	CHAT_WORLDLINE_FILE,
 	CHATS_DIR,
 	cardDirOf,
@@ -410,6 +412,8 @@ export function createChat(cardDir: string, opts?: { id?: string; name?: string;
 	const now = opts?.now ?? new Date();
 	const id = opts?.id ?? newChatId(now);
 	mkdirSync(chatSessionsDirOf(cardDir, id), { recursive: true });
+	// agent 子项目：稿子目录与快照仓一开始就在（docs/PLAN-AGENT-CODING.md §三），打开目录就能看见项目的形状
+	if (opts?.mode === "agent") for (const d of [CHAT_STORY_DIR, CHAT_HISTORY_DIR]) mkdirSync(join(chatDirOf(cardDir, id), d), { recursive: true });
 	writeChatMeta(cardDir, id, { createdAt: now.toISOString(), ...(opts?.name ? { name: opts.name } : {}), ...(opts?.mode === "agent" ? { mode: "agent" } : {}) });
 	return chatInfo(cardDir, id);
 }

@@ -15,7 +15,7 @@ import { cardAuthoringDirectory } from "./card-authoring.ts";
 import { loadCardConfig, resolveCardSpace, saveCardConfig } from "./cardspace.ts";
 import type { ConversationEntry } from "./conversation-mode.ts";
 import { mountedLorebookPaths } from "./lorebook.ts";
-import { CARDS_ROOT, CHATS_DIR, CHAT_SESSIONS_DIR, CHAT_STORY_DIR, SHARED_LIBRARY_DIRS, cardsRoot, insidePath } from "./paths.ts";
+import { CARDS_ROOT, CHATS_DIR, CHAT_HISTORY_DIR, CHAT_SESSIONS_DIR, SHARED_LIBRARY_DIRS, cardsRoot, insidePath } from "./paths.ts";
 
 /** pi 原生工具 → 访问类别。键集＝工作模式开放的原生工具清单（stage/authoring.ts 从这里派生）。 */
 export const NATIVE_TOOL_ACCESS = {
@@ -142,15 +142,15 @@ export function sandboxScope(cwd: string, config: { card: string; lorebook?: str
 }
 
 /**
- * 卡目录里由 harness 持有的数据（docs/PLAN-AGENT-MODE.md §5.2）：`对话/<id>/正文/`（章文件，版本与归属在会话树上）
- * 与 `对话/<id>/会话/`（会话树本身）。原生写工具改这里会绕开树条目，故拒绝；读照常。这是路径规则，不是识别器。
+ * 卡目录里由 harness 持有的数据（docs/PLAN-AGENT-CODING.md §三）：`对话/<id>/历史/`（快照仓）与 `对话/<id>/会话/`（会话树）。
+ * 原生写工具不碰这两处；`正文/` 就是稿子，完全开放读写。这是路径规则，不是识别器。
  */
 export function harnessManagedPath(cardDir: string | undefined, target: string): boolean {
 	if (!cardDir) return false;
 	const rel = relative(realExisting(cardDir), target);
 	if (!rel || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return false;
 	const segs = rel.split(sep);
-	return segs[0] === CHATS_DIR && segs.length >= 3 && (segs[2] === CHAT_STORY_DIR || segs[2] === CHAT_SESSIONS_DIR);
+	return segs[0] === CHATS_DIR && segs.length >= 3 && (segs[2] === CHAT_HISTORY_DIR || segs[2] === CHAT_SESSIONS_DIR);
 }
 
 export function sandboxVerdict(tool: string, input: Record<string, unknown>, scope: SandboxScope, grants: SandboxGrants): SandboxVerdict {
@@ -159,7 +159,7 @@ export function sandboxVerdict(tool: string, input: Record<string, unknown>, sco
 	if (access === "bash") return grants.bash ? { kind: "allow" } : { kind: "ask-bash", command: String(input.command ?? "") };
 	const target = realExisting(sandboxTarget(tool, input, scope.cwd)!);
 	if (access === "write" && harnessManagedPath(scope.cardDir, target)) {
-		return { kind: "deny", reason: `${display(scope.cwd, target)} 属于梨园管理的数据（章文件 / 会话树），原生 ${tool} 不能写；正文用 story_* 工具。` };
+		return { kind: "deny", reason: `${display(scope.cwd, target)} 属于梨园管理的数据（快照仓 / 会话树），原生 ${tool} 不能写。` };
 	}
 	const within = (roots: string[]) => roots.some((r) => insidePath(r, target));
 	if (within(scope.roots)) return { kind: "allow" };

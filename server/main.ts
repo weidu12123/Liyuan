@@ -11,7 +11,7 @@
  *   --new 开新会话；默认续接最近会话。同一会话勿同时开 TUI（无文件锁）。
  */
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { networkInterfaces } from "node:os";
@@ -139,9 +139,10 @@ import {
 	type ServerFrame,
 	type WireNames,
 	type WireStats,
-	type WireStoryChapter,
+	type WireStoryFile,
+	type WireCheckpoint,
 } from "./wire.ts";
-import { CHAPTER_ENTRY_TYPE, CHAPTER_REVISION_TYPE, chapterFileName, chapterRewindTarget, projectChapters, replaceChapterText, StoryStore, storyDirectory } from "../src/stage/story.ts";
+import { chapterTitle, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, storyDirectory, type Checkpoint } from "../src/stage/story-history.ts";
 import { sameCardPath } from "../src/paths.ts";
 import { readSessionCardInfo } from "../src/session-scan.ts";
 import { cardDirOfChatDir, cardFileIn, chatDataPath, chatDirOfSessionDir, createChat, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
@@ -808,8 +809,6 @@ const branchMessages = (): unknown[] => {
 	let branch = session.sessionManager.getBranch();
 	try { branch = applyDraftRevisions(branch); } catch { /* A broken draft receipt must not discard mode provenance. */ }
 	const out: unknown[] = [];
-	// agent 模式：章条目在讨论区显示为内联卡片；序号取当前分支投影（修订卡片报修订后的版本）
-	const chapters = new Map(projectChapters(branch as BranchEntryLike[]).map((c) => [c.chapterId, c]));
 	for (const e of displayConversationBranch(branch) as unknown as Array<Record<string, unknown>>) {
 		if (e.type === "message" && e.message) out.push(e.message);
 		else if (e.type === "custom_message") {
@@ -818,28 +817,34 @@ const branchMessages = (): unknown[] => {
 		} else if (e.type === "custom" && e.customType === "rp-draft-revision") {
 			const revision = e.data as { requestId?: string; version?: number } | undefined;
 			if (revision?.requestId) out.push({ role: "custom", customType: "rp-draft-revision", content: `上一拍已修订 · v${revision.version}`, display: true });
-		} else if (e.type === "custom" && (e.customType === CHAPTER_ENTRY_TYPE || e.customType === CHAPTER_REVISION_TYPE)) {
-			const d = e.data as { chapterId?: string; version?: number; chars?: number; title?: string } | undefined;
-			const c = d?.chapterId ? chapters.get(d.chapterId) : undefined;
-			if (!c || typeof d?.version !== "number") continue;
-			const edit = e.customType === CHAPTER_REVISION_TYPE;
-			const label = `第 ${c.index} 章${c.title ? `「${c.title}」` : ""}`;
-			out.push({
-				role: "custom", customType: e.customType, display: true,
-				content: edit ? `${label}已修订 · v${d.version}` : `已写入${label}（${d.chars ?? c.chars} 字）`,
-				details: { rpChapter: { kind: edit ? "edit" : "append", chapterId: c.chapterId, version: d.version, index: c.index, ...(c.title ? { title: c.title } : {}), chars: d.chars ?? c.chars } },
-			});
+		} else if (e.type === "custom" && e.customType === STORY_CHECKPOINT_TYPE) {
+			// agent 模式：检查点在讨论区显示为「本轮改动」卡片（真相在 历史/检查点.jsonl，这只是树上的留痕）
+			const cp = e.data as Omit<Checkpoint, "files"> | undefined;
+			if (!cp?.id || !cp.changed) continue;
+			out.push({ role: "custom", customType: STORY_CHECKPOINT_TYPE, display: true, content: cp.message, details: { checkpoint: toWireCheckpoint(cp) } });
 		}
 	}
 	return out;
 };
 
-/** agent 子项目：当前分支章目录（hello 用，轻；正文经 REST） */
-const storyOutline = (): { chapters: WireStoryChapter[] } | undefined => {
+/** 用户手改的稿子文件名：稿子目录下的一个 .md，不带路径分隔与非法字符 */
+const STORY_FILE_NAME_RE = /^[^\\/:*?"<>|]+\.md$/i;
+const toWireCheckpoint = (c: Omit<Checkpoint, "files">): WireCheckpoint => ({
+	id: c.id, ts: c.ts, author: c.author, message: c.message, changed: c.changed,
+	...(c.turnId ? { turnId: c.turnId } : {}), ...(c.aborted ? { aborted: true } : {}), ...(c.restoredFrom ? { restoredFrom: c.restoredFrom } : {}),
+});
+/** agent 子项目目录（不是 agent 子项目＝undefined） */
+const agentChatDir = (): string | undefined => {
 	if (stage?.mode !== "agent") return undefined;
-	return { chapters: projectChapters(session.sessionManager.getBranch() as BranchEntryLike[]).map((c) => ({
-		index: c.index, chapterId: c.chapterId, ...(c.title ? { title: c.title } : {}), chars: c.chars, version: c.version, ...(c.entryId ? { entryId: c.entryId } : {}),
-	})) };
+	return chatDirOfSessionDir(session.sessionManager.getSessionDir?.()) ?? undefined;
+};
+/** agent 子项目：稿子目录与检查点列表（hello 用，轻；正文与 diff 经 REST） */
+const storyOutline = (): { files: WireStoryFile[]; checkpoints: WireCheckpoint[] } | undefined => {
+	const chatDir = agentChatDir();
+	if (!chatDir) return undefined;
+	const files = listStoryFiles(storyDirectory(chatDir)).map((f) => ({ name: f.name, title: chapterTitle(f.name), chars: f.chars, mtime: f.mtime }));
+	const checkpoints = new StoryHistory(chatDir).list().map(toWireCheckpoint);
+	return { files, checkpoints };
 };
 
 const helloFrame = (): ServerFrame => {
@@ -1765,26 +1770,37 @@ const restHost: RestHost = {
 		syncStoryStateFromDisk();
 		return { applied: r.applied, warnings: r.warnings };
 	},
-	// ---- agent 模式：稿子（当前分支章投影＋正文） ----
+	// ---- agent 模式：稿子（正文/ 文件）与快照仓 ----
 	storyView() {
-		const sm = session.sessionManager;
-		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
+		const chatDir = agentChatDir();
 		const outline = storyOutline();
-		if (!chatDir || !outline) return { chapters: [] };
-		const store = new StoryStore(storyDirectory(chatDir));
-		return { chapters: outline.chapters.map((c) => { let text = ""; try { text = store.read({ file: chapterFileName(c.chapterId, c.version) }); } catch { /* 文件缺失：正文空，目录仍在 */ } return { ...c, text }; }) };
+		if (!chatDir || !outline) return { files: [] };
+		const dir = storyDirectory(chatDir);
+		return { files: outline.files.map((f) => { let text = ""; try { text = readFileSync(join(dir, f.name), "utf8"); } catch { /* 读不到：正文空，目录仍在 */ } return { ...f, text }; }) };
 	},
-	async editChapter(input) {
-		const sm = session.sessionManager;
-		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
-		if (!chatDir || stage.mode !== "agent") throw new Error("当前不是 agent 子项目");
-		const r = replaceChapterText({
-			store: new StoryStore(storyDirectory(chatDir)),
-			getBranch: () => sm.getBranch() as BranchEntryLike[],
-			appendEntry: (customType, data) => { sm.appendCustomEntry(customType, data); sm.flush(); },
-		}, input.chapterId, input.version, input.text);
+	storyDiff(checkpointId) {
+		const chatDir = agentChatDir();
+		if (!chatDir) throw new Error("当前不是 agent 子项目");
+		return { files: new StoryHistory(chatDir).diff(checkpointId) };
+	},
+	async editStoryFile(input) {
+		const chatDir = agentChatDir();
+		if (!chatDir) throw new Error("当前不是 agent 子项目");
+		if (stage.isStreaming) throw new Error("模型正在写，稍后再改");
+		if (!STORY_FILE_NAME_RE.test(input.name) || input.name.startsWith(".")) throw new Error("文件名须是稿子目录下的 .md 文件");
+		const dir = storyDirectory(chatDir);
+		mkdirSync(dir, { recursive: true });
+		const abs = join(dir, input.name);
+		if (input.text === null) { if (existsSync(abs)) rmSync(abs); }
+		else writeFileSync(abs, input.text, "utf8");
+		const cp = new StoryHistory(chatDir).commit({ author: "user", message: input.text === null ? `删除 ${input.name}` : `手改 ${input.name}` });
+		if (cp) {
+			const { files: _files, ...lite } = cp;
+			session.sessionManager.appendCustomEntry(STORY_CHECKPOINT_TYPE, lite);
+			session.sessionManager.flush();
+		}
 		resyncAll();
-		return r;
+		return { checkpointId: cp?.id };
 	},
 	// ---- 世界线视图 / 软删除 / 线名 ----
 	worldlineView() {
@@ -2612,7 +2628,6 @@ stage = new StageEngine({
 		onReplyRevised: () => resyncAll(),
 		onStreamClear: () => broadcast({ type: "stream", state: "clear" }),
 		onNotify: (level, text) => broadcast({ type: "notify", level, text }),
-		onStoryPreview: (text, title) => broadcast({ type: "story_preview", text, ...(title ? { title } : {}) }),
 		onActivity: (detail) => broadcast({ type: "activity", activity: { kind: "note", name: "stage", detail } }),
 		onTurnEnd: (info) => {
 			broadcast({ type: "agent", state: "end" });
@@ -2634,19 +2649,19 @@ stage = new StageEngine({
 			if (stats) broadcast({ type: "stats", stats });
 			// 向量记忆入库：只在真落了新正文时（中断/错误拍不入）
 			if (info.mode === "authoring") return;
-			// agent 模式：正文是章，不是讨论——逐章入库（story_edit 不产生新章，不入）
+			// agent 模式：正文是文件，不是讨论——检查点里新增的文件逐个入库（修改/改名不入）
 			if (info.mode === "agent") {
-				if (!info.chapters?.length || info.aborted || !info.entryId) return;
+				if (!info.checkpoint?.added.length || info.aborted || !info.entryId) return;
 				const agentNodeId = info.entryId;
 				const agentBranchIds = branchNodeIds();
 				void (async () => {
-					for (const ch of info.chapters!) {
+					for (const f of info.checkpoint!.added) {
 						try {
-							const mem = await onNarrativeTurnEnd(cwd, memoryScopeFor(), ch.text, { nodeId: agentNodeId, branchIds: agentBranchIds });
-							if (mem.error) broadcast({ type: "notify", level: "warning", text: `向量记忆：第 ${ch.index} 章入库失败 · ${mem.error}` });
-							else if (mem.stored) broadcast({ type: "notify", level: "info", text: `向量记忆：第 ${ch.index} 章已入剧情库` });
+							const mem = await onNarrativeTurnEnd(cwd, memoryScopeFor(), f.text, { nodeId: agentNodeId, branchIds: agentBranchIds });
+							if (mem.error) broadcast({ type: "notify", level: "warning", text: `向量记忆：${f.name} 入库失败 · ${mem.error}` });
+							else if (mem.stored) broadcast({ type: "notify", level: "info", text: `向量记忆：${f.name} 已入剧情库` });
 						} catch (e) {
-							console.warn("[memory] chapter ingest failed", e);
+							console.warn("[memory] story file ingest failed", e);
 						}
 					}
 				})();
@@ -3245,17 +3260,47 @@ wss.on("connection", (ws, req) => {
 						}
 						broadcast({ type: "notify", level: "info", text: "已新建会话" });
 						break;
-					case "story_rewind": {
-						if (refuseWhileStreaming(ws, "回退")) return;
-						if (stage.mode !== "agent") throw new Error("当前不是 agent 子项目");
-						const target = chapterRewindTarget(session.sessionManager.getBranch() as BranchEntryLike[], String(frame.chapterId ?? ""));
-						if (!target) throw new Error("当前分支没有该章");
-						if (target !== session.sessionManager.getLeafId()) {
-							const result = await session.navigateTree(target, { summarize: false });
-							if (result.cancelled) return;
+					case "story_restore": {
+						// docs/PLAN-AGENT-CODING.md §4.3：files＝只重写 正文/（讨论不动）；both＝再把讨论截到那轮输入之前。
+						if (refuseWhileStreaming(ws, "恢复")) return;
+						const chatDir = agentChatDir();
+						if (!chatDir) throw new Error("当前不是 agent 子项目");
+						const history = new StoryHistory(chatDir);
+						const target = history.get(String(frame.checkpointId ?? ""));
+						if (!target) throw new Error("没有这个检查点");
+						const both = frame.scope === "both" && !!target.turnId;
+						if (both) {
+							// 目标＝那轮 user 条目的父节点：那次输入还没发出的状态。底层仍是 pi 的叶子移动，但不提供树导航入口。
+							const branch = session.sessionManager.getBranch() as Array<{ id?: string; parentId?: string | null }>;
+							const at = branch.findIndex((e) => e.id === target.turnId);
+							if (at < 0) throw new Error("那轮输入不在当前会话里，只能恢复文件");
+							const parent = branch[at]!.parentId ?? null;
+							if (parent !== session.sessionManager.getLeafId()) {
+								if (parent === null) session.sessionManager.resetLeaf(); // 那轮是首条输入：回到空树
+								else {
+									const result = await session.navigateTree(parent, { summarize: false });
+									if (result.cancelled) return;
+								}
+							}
+						}
+						// 文件回到「那次改动之前」（both）或「那次改动之后」（files）——both 是回到输入前，文件也该是输入前的样子
+						const all = history.list();
+						const idx = all.findIndex((c) => c.id === target.id);
+						const fileTarget = both ? all[idx - 1] : target;
+						let cp: Checkpoint | undefined;
+						if (fileTarget) cp = history.restore(fileTarget.id) ?? undefined;
+						else if (both) {
+							// 第一条检查点之前＝空稿子
+							for (const f of listStoryFiles(storyDirectory(chatDir))) rmSync(join(storyDirectory(chatDir), f.name));
+							cp = history.commit({ author: "user", message: "恢复到最初（空稿子）", restoredFrom: target.id });
+						}
+						if (cp && !both) {
+							const { files: _files, ...lite } = cp;
+							session.sessionManager.appendCustomEntry(STORY_CHECKPOINT_TYPE, lite);
+							session.sessionManager.flush();
 						}
 						resyncAll();
-						broadcast({ type: "notify", level: "info", text: "已回退到该章之后。被回退的章仍在会话树里（可再导航回去）；从这里继续写＝分叉。" });
+						broadcast({ type: "notify", level: "info", text: both ? "已恢复文件并回到那次输入之前。" : "已恢复文件；讨论不变。" });
 						break;
 					}
 					case "chat_new_session": {

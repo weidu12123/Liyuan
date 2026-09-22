@@ -30,7 +30,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { listChats, type ChatInfo } from "./cardspace.ts";
+import { chatModeOfSessionDir, listChats, type ChatInfo } from "./cardspace.ts";
 import { readJsonFile } from "./jsonio.ts";
 import {
 	CARD_MEMORY_HANDBOOK_FILE,
@@ -41,7 +41,7 @@ import {
 } from "./paths.ts";
 import { rebuildHistory, stateFromBranch, type BranchEntryLike } from "./stage/assemble.ts";
 import { applyDraftRevisions } from "./stage/draft-projection.ts";
-import { hasChapters, projectChapters, StoryStore, storyDirectory } from "./stage/story.ts";
+import { listStoryFiles, storyDirectory } from "./stage/story-history.ts";
 import { storyBranch } from "./conversation-mode.ts";
 import { formatState } from "./state.ts";
 
@@ -216,25 +216,28 @@ export function collectChatEvidence(
 	const sections: string[] = [];
 	let beats = 0;
 	let lastBranch: BranchEntryLike[] = [];
-	// agent 模式子项目：正文是章文件，证据从分支上的章条目取（docs/PLAN-AGENT-MODE.md §5.5 第 4 条）
-	const story = new StoryStore(storyDirectory(dirname(chat.sessionsDir)));
-	for (const f of files) {
+	// agent 模式子项目（docs/PLAN-AGENT-CODING.md §七）：正文是 正文/ 里的文件，一个子项目一份；
+	// 前情摘要与账本取最后一个会话的分支。拍数＝文件数。
+	if (chatModeOfSessionDir(chat.sessionsDir) === "agent") {
+		const storyDir = storyDirectory(dirname(chat.sessionsDir));
+		const storyFiles = listStoryFiles(storyDir);
+		if (!storyFiles.length) return null;
+		for (const f of [...files].reverse()) {
+			const branch = branchOfSessionFile(join(chat.sessionsDir, f));
+			if (branch.length) { lastBranch = branch; break; }
+		}
+		const { summary } = rebuildHistory(lastBranch);
+		const lines: string[] = [];
+		if (summary) lines.push(`【前情提要】\n${summary}`);
+		for (const f of storyFiles) {
+			try { lines.push(`${f.name}\n\n${readFileSync(join(storyDir, f.name), "utf8")}`); } catch { /* 读不到就跳过 */ }
+		}
+		sections.push(lines.join("\n\n"));
+		beats = storyFiles.length;
+	}
+	for (const f of beats ? [] : files) {
 		const branch = branchOfSessionFile(join(chat.sessionsDir, f));
 		if (branch.length === 0) continue;
-		if (hasChapters(branch)) {
-			const chapters = projectChapters(storyBranch(branch));
-			const { summary } = rebuildHistory(branch);
-			const lines: string[] = [];
-			if (summary) lines.push(`【前情提要】\n${summary}`);
-			for (const c of chapters) {
-				try { lines.push(`第 ${c.index} 章${c.title ? `「${c.title}」` : ""}\n\n${story.read(c)}`); } catch { /* 章文件缺失：跳过该章 */ }
-			}
-			if (!lines.length) continue;
-			beats += chapters.length;
-			lastBranch = branch;
-			sections.push(lines.join("\n\n"));
-			continue;
-		}
 		const { history, summary } = rebuildHistory(branch);
 		const userBeats = history.filter((m) => m.role === "user").length;
 		if (userBeats === 0 && !summary) continue;

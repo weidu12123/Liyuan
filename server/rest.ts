@@ -90,7 +90,8 @@ import { createCardSpace, deleteChat, exportChatZip, importChatZip, listCardSpac
 import { scanSkillFiles, stageSkillRoot } from "../src/stage/materials.ts";
 import { deleteStageSkill, saveStageSkill } from "../src/stage/skill-store.ts";
 import type { WorldlineView } from "../src/worldline.ts";
-import type { WireStoryChapter } from "./wire.ts";
+import type { WireStoryFile } from "./wire.ts";
+import type { FileDiff } from "../src/stage/story-history.ts";
 import {
 	appendLorebookFileEntry,
 	applyDisabledLore,
@@ -308,10 +309,12 @@ export interface RestHost {
 	notify(level: "info" | "warning" | "error", text: string): void;
 	/** 世界线时间线视图（会话树 rp-save + 旁路 meta） */
 	worldlineView(): import("../src/worldline.ts").WorldlineView;
-	/** agent 模式的稿子：当前分支章目录＋正文（非 agent 子项目为空目录） */
-	storyView(): { chapters: Array<WireStoryChapter & { text: string }> };
-	/** 用户按章直接编辑：全文替换成新版本（来源 user），落树后全端对齐 */
-	editChapter(input: { chapterId: string; version: number; text: string }): Promise<{ chapterId: string; version: number; index: number; chars: number }>;
+	/** agent 模式的稿子：正文/ 文件与全文（非 agent 子项目为空） */
+	storyView(): { files: Array<WireStoryFile & { text: string }> };
+	/** 某检查点相对前一条的逐文件差 */
+	storyDiff(checkpointId: string): { files: FileDiff[] };
+	/** 用户直接改稿：写文件（text 为 null＝删除）并立即落检查点（来源 user） */
+	editStoryFile(input: { name: string; text: string | null }): Promise<{ checkpointId?: string }>;
 	/** 软删除存档节点 */
 	deleteWorldlineSave(saveId: string): void;
 	/** 重命名世界线（自动名可改） */
@@ -2112,12 +2115,18 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 				sendJson(res, 200, host.storyView());
 				return true;
 			}
+			case "GET /api/story/diff": {
+				const id = (query.get("checkpoint") ?? "").trim();
+				if (!id) throw new Error("需要 checkpoint");
+				sendJson(res, 200, host.storyDiff(id));
+				return true;
+			}
 			case "POST /api/story/edit": {
 				if (refuseWhileStreaming()) return true;
-				const body = JSON.parse(await readBody(req)) as { chapterId?: string; version?: number; text?: string };
-				const chapterId = (body.chapterId ?? "").trim();
-				if (!chapterId || !Number.isInteger(body.version) || typeof body.text !== "string") throw new Error("需要 chapterId、version 与 text");
-				sendJson(res, 200, { ok: true, ...(await host.editChapter({ chapterId, version: body.version!, text: body.text })) });
+				const body = JSON.parse(await readBody(req)) as { name?: string; text?: string | null };
+				const name = (body.name ?? "").trim();
+				if (!name || (typeof body.text !== "string" && body.text !== null)) throw new Error("需要 name 与 text（null＝删除）");
+				sendJson(res, 200, { ok: true, ...(await host.editStoryFile({ name, text: body.text })) });
 				return true;
 			}
 

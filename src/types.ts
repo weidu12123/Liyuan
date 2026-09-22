@@ -153,11 +153,6 @@ export interface RpConfig {
 	 */
 	compactEveryNTurns?: number;
 	/**
-	 * agent 模式项目状态块里带的「稿子尾部」字数（docs/PLAN-AGENT-MODE.md §5.4）：当前分支最后这么多字的
-	 * 原文随每轮送模，相当于「打开的文件」；其余章靠 story_read / story_grep。缺省见 stage/story.ts。
-	 */
-	agentStoryTailChars?: number;
-	/**
 	 * 旁路模型（场记记账 / 长局压缩）：指向连接配置里的一条**模型条目**——
 	 * `entry` 是条目名（`AgentModelEntry.label`，没起名就是它的 id），不是模型 id：
 	 * 同一个模型可以有多条条目、各带各的思考档，光有 id 分不出是哪条。

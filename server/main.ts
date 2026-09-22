@@ -2942,8 +2942,10 @@ const sessionInfos = async () => {
 		}
 		const info = readSessionCard(s.path, mtime);
 		const isCurrent = s.id === curId || isSameSessionPath(s.path, curFile);
-		// 严格按卡过滤：其它卡一律不出现（含「当前打开却属其它卡」——由换卡流程切会话）
-		if (!info || !belongsHere(info.card)) {
+		// 两层布局不过滤：文件在这张卡的子项目目录里就是这张卡的，rp-card 标记只作显示
+		// （issue #11：重绑定行漂到文件中部时按标记过滤会把会话藏掉）。
+		// 老布局严格按卡过滤：其它卡一律不出现（含「当前打开却属其它卡」——由换卡流程切会话）。
+		if (!chatEntries && (!info || !belongsHere(info.card))) {
 			// 仅当「当前会话尚未打上标记」时保留入口，避免新建后列表空白
 			if (!(isCurrent && !info && cardPath)) continue;
 		}

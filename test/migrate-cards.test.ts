@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { listCardSpaces, listChats, readChatMeta } from "../src/cardspace.ts";
+import { appendSessionCardRebind, listCardSpaces, listChats, readChatMeta } from "../src/cardspace.ts";
 import { ensureStorySessionDir } from "../src/story-guide.ts";
-import { parseCardFromSessionHead } from "../src/session-scan.ts";
+import { parseCardFromSessionHead, readSessionCardInfo } from "../src/session-scan.ts";
 import {
 	alreadyMigrated,
 	applyCardMigration,
@@ -363,6 +363,29 @@ test("ensureStorySessionDir：没有子项目就建第一个；已有则复用�
 
 		// 老布局（卡不在 cards/）：返回 null，调用方保持原行为
 		assert.equal(ensureStorySessionDir(cwd, "assets/cards/a.json"), null);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(sessionDir, { recursive: true, force: true });
+	}
+});
+
+test("readSessionCardInfo：重绑定行漂到文件中部（远超 64KB）也取到最后一条（issue #11）", () => {
+	const { cwd, sessionDir } = mkProject();
+	try {
+		const p = writeSession(sessionDir, "2026-08-01T00-00-00-000Z_01a0dddd-dddd.jsonl", "assets/cards/k.json", "神鳴村");
+		const bulk = (n: number) =>
+			Array.from({ length: n }, (_, i) =>
+				JSON.stringify({ type: "message", id: `m${i}`, message: { role: "assistant", content: "正文".repeat(400) } }),
+			).join("\n") + "\n";
+		// 升格前已有 200KB 正文；升格时 append 一条重绑定；之后又长了 300KB
+		appendFileSync(p, bulk(100), "utf8");
+		appendSessionCardRebind(p, "cards/神鳴村/k.json");
+		appendFileSync(p, bulk(150), "utf8");
+		assert.ok(statSync(p).size > 4 * 65536, "样本要远大于旧的头尾窗口");
+
+		const info = readSessionCardInfo(p);
+		assert.equal(info?.card, "cards/神鳴村/k.json", "认新卡路径，不被头部旧标记盖过");
+		assert.equal(info?.name, "神鳴村");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 		rmSync(sessionDir, { recursive: true, force: true });

@@ -1,16 +1,18 @@
 /**
- * 会话文件的浅扫描：不整份 load，只从头尾各取一段找 `rp-card` 自描述条目。
+ * 会话文件的卡归属：整份读、取最后一条 `rp-card` 自描述条目。
  *
  * 为什么单独一个模块：这段扫描原先只活在 `server/main.ts`（`readSessionCard`，带 mtime 缓存），
  * 而解析活在 `server/wire.ts`。迁移器（`src/migrate-cards.ts`）要按卡给会话分组，也需要同一份
  * 判据——与其在 src/ 里再抄一遍（铁律三：不新增平行实现），不如把「怎么认一个会话属于哪张卡」
  * 收进一处。`server/wire.ts` 同名再导出，既有调用方不动。
+ *
+ * 为什么整份读：换卡 / 迁移 / 导入的重绑定行是 append 在当时的文件末尾的，会话继续长，
+ * 这一行就漂到文件中部（issue #11：12MB 会话里标记在 36% 处，头尾各 64KB 的窗口读不到，
+ * 头部旧卡路径生效，会话被列表静默过滤）。pi 的 `SessionManager.list` 本来就逐行整读每个
+ * 会话文件，这里再整读一次、外加调用方的 mtime 缓存，成本不高于既有开销。
  */
 
-import { closeSync, openSync, readSync, statSync } from "node:fs";
-
-/** 会话头尾各扫这么多字节（换卡后新的 rp-card 标记 append 在文件末尾） */
-export const SESSION_SCAN_WINDOW = 65536;
+import { readFileSync } from "node:fs";
 
 export interface SessionCardInfo {
 	/** 角色卡路径（写入时的原文，可能是相对/绝对、正反斜杠） */
@@ -51,33 +53,13 @@ export function parseCardFromSessionHead(headText: string): SessionCardInfo | nu
 	return found;
 }
 
-/** 读一个会话文件的头尾窗口（大文件不整份读；读不到返回空串） */
-export function readSessionHeadTail(path: string, window = SESSION_SCAN_WINDOW): string {
+/** 这个会话文件属于哪张卡（认不出、读不到返回 null） */
+export function readSessionCardInfo(path: string): SessionCardInfo | null {
+	let text = "";
 	try {
-		const size = statSync(path).size;
-		const fd = openSync(path, "r");
-		try {
-			const headLen = Math.min(size, window);
-			const headBuf = Buffer.alloc(headLen);
-			readSync(fd, headBuf, 0, headLen, 0);
-			let text = headBuf.toString("utf8");
-			if (size > window) {
-				const tailLen = Math.min(size - headLen, window);
-				const tailBuf = Buffer.alloc(tailLen);
-				readSync(fd, tailBuf, 0, tailLen, size - tailLen);
-				text += `\n${tailBuf.toString("utf8")}`;
-			}
-			return text;
-		} finally {
-			closeSync(fd);
-		}
+		text = readFileSync(path, "utf8");
 	} catch {
-		return "";
+		return null;
 	}
-}
-
-/** 这个会话文件属于哪张卡（认不出返回 null） */
-export function readSessionCardInfo(path: string, window = SESSION_SCAN_WINDOW): SessionCardInfo | null {
-	const text = readSessionHeadTail(path, window);
 	return text ? parseCardFromSessionHead(text) : null;
 }

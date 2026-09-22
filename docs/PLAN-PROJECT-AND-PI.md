@@ -177,7 +177,7 @@ assistant 1 / audio 1 / skills 1）。但 **lore / worldline / memory / audio �
 
 | 口径 | 位置 | 形态 |
 |---|---|---|
-| 会话内自描述条目 | `.liyuan/extensions/roleplay.ts:1161`（写）、`server/main.ts:2659`（读） | `customType === "rp-card"`，`data.card` 存卡相对路径；读侧头尾各扫 64KB |
+| 会话内自描述条目 | `.liyuan/extensions/roleplay.ts:1161`（写）、`server/main.ts:2659`（读） | `customType === "rp-card"`，`data.card` 存卡相对路径；读侧整份扫、取最后一条（2026-09-23 issue #11 起，此前头尾各 64KB 会漏掉漂到中部的重绑定行） |
 | 路径字符串比对 | `src/paths.ts:33` `sameCardPath` | **7 处生产调用**：会话列表 `main.ts:2728`、换卡选会话 `:1285`、删卡删会话 `:1460`、助手四处 `assistant.ts:1439/1479/1503/1544`（含两道越权门） |
 | 内容哈希 / 卡名 | `src/memory/config.ts:29`（卡路径 sha1 前 10 位）、`src/lorebook.ts:415`（**按卡名**不是路径） | 两者口径互不一致 |
 

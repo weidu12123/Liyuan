@@ -6,6 +6,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { apiGet, apiPost } from "../api.ts";
 import { useAction, usePanelData } from "./kit.tsx";
+import { t } from "../i18n/index.ts";
 
 export interface WorldlineViewDto {
 	lines: Array<{
@@ -220,7 +221,7 @@ export function WorldlinePanel({ toast, runCommand, onStore }: Props) {
 	const backTo = (name: string) => {
 		setMenu(null);
 		runCommand(`/back ${name}`);
-		toast("info", `回档到「${name}」…`);
+		toast("info", t("回档到「{name}」…", { name }));
 		setTimeout(reload, 600);
 	};
 
@@ -229,16 +230,16 @@ export function WorldlinePanel({ toast, runCommand, onStore }: Props) {
 		void run(async () => {
 			await apiPost("/api/worldline/delete-save", { saveId });
 			reload();
-		}, `已删除存档「${name}」`);
+		}, t("已删除存档「{name}」", { name }));
 	};
 
 	const renameLine = (worldlineId: string, current: string) => {
-		const name = window.prompt("世界线名称", current);
+		const name = window.prompt(t("世界线名称"), current);
 		if (!name?.trim() || name.trim() === current) return;
 		void run(async () => {
 			await apiPost("/api/worldline/rename", { worldlineId, name: name.trim() });
 			reload();
-		}, "世界线已改名");
+		}, t("世界线已改名"));
 	};
 
 	const nodeById = useMemo(() => {
@@ -251,19 +252,19 @@ export function WorldlinePanel({ toast, runCommand, onStore }: Props) {
 		<div className="panel-body worldline-panel">
 			<div className="panel-row" style={{ marginBottom: 10 }}>
 				<button type="button" className="drawer-btn primary" onClick={onStore} disabled={busy}>
-					＋ 存档
+					{t("＋ 存档")}
 				</button>
 				<button type="button" className="drawer-btn" onClick={reload} disabled={loading}>
-					刷新
+					{t("刷新")}
 				</button>
 			</div>
 			<p className="field-hint" style={{ marginBottom: 12 }}>
-				从左到右是时间。回档后走出不同剧情再存档，会从该节点画出分叉。点击节点可回档或删除。
+				{t("从左到右是时间。回档后走出不同剧情再存档，会从该节点画出分叉。点击节点可回档或删除。")}
 			</p>
-			{loading && !data && <div className="panel-empty">加载中…</div>}
+			{loading && !data && <div className="panel-empty">{t("加载中…")}</div>}
 			{error && <div className="panel-error">{error}</div>}
 			{data && data.lines.length === 0 && (
-				<div className="panel-empty">尚无存档。点「存档」或输入 /store 钉一个节点。</div>
+				<div className="panel-empty">{t("尚无存档。点「存档」或输入 /store 钉一个节点。")}</div>
 			)}
 
 			{graph && (
@@ -274,7 +275,7 @@ export function WorldlinePanel({ toast, runCommand, onStore }: Props) {
 						width={graph.width}
 						height={graph.height}
 						role="img"
-						aria-label="世界线分叉图"
+						aria-label={t("世界线分叉图")}
 					>
 						{/* 边：先画非当前，再画当前（当前更醒目） */}
 						{graph.edges
@@ -345,13 +346,13 @@ export function WorldlinePanel({ toast, runCommand, onStore }: Props) {
 			{graph && graph.nodes.length > 0 && (
 				<div className="wl-legend">
 					<span>
-						<span className="wl-leg-dot current" /> 当前
+						<span className="wl-leg-dot current" /> {t("当前")}
 					</span>
 					<span>
-						<span className="wl-leg-dot on" /> 本线
+						<span className="wl-leg-dot on" /> {t("本线")}
 					</span>
 					<span>
-						<span className="wl-leg-dot off" /> 其他线
+						<span className="wl-leg-dot off" /> {t("其他线")}
 					</span>
 				</div>
 			)}
@@ -362,18 +363,18 @@ export function WorldlinePanel({ toast, runCommand, onStore }: Props) {
 						className="wl-menu"
 						role="dialog"
 						aria-modal="true"
-						aria-label={`存档 ${menu.name}`}
+						aria-label={t("存档 {name}", { name: menu.name })}
 						onClick={(e) => e.stopPropagation()}
 					>
 						<h4>{menu.name}</h4>
 						<button type="button" className="drawer-btn primary" onClick={() => backTo(menu.name)} disabled={busy}>
-							回到此节点
+							{t("回到此节点")}
 						</button>
 						<button type="button" className="drawer-btn danger" onClick={() => remove(menu.saveId, menu.name)} disabled={busy}>
-							删除节点
+							{t("删除节点")}
 						</button>
 						<button type="button" className="drawer-btn" onClick={() => setMenu(null)}>
-							取消
+							{t("取消")}
 						</button>
 					</div>
 				</div>
@@ -402,8 +403,8 @@ export function StoreModal({
 				aria-labelledby="store-modal-title"
 				onClick={(e) => e.stopPropagation()}
 			>
-				<h4 id="store-modal-title">存档</h4>
-				<p className="field-hint">给这个剧情点起个名字，会出现在世界线分叉图上。</p>
+				<h4 id="store-modal-title">{t("存档")}</h4>
+				<p className="field-hint">{t("给这个剧情点起个名字，会出现在世界线分叉图上。")}</p>
 				<input
 					className="field-input"
 					value={name}
@@ -419,10 +420,10 @@ export function StoreModal({
 				/>
 				<div className="panel-row" style={{ marginTop: 12 }}>
 					<button type="button" className="drawer-btn primary" onClick={() => onConfirm(name.trim() || defaultName)}>
-						保存
+						{t("保存")}
 					</button>
 					<button type="button" className="drawer-btn" onClick={onCancel}>
-						取消
+						{t("取消")}
 					</button>
 				</div>
 			</div>

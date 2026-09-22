@@ -90,6 +90,7 @@ export function scanFile(rel) {
 	const { src, sf } = parse(rel);
 	const misses = [];
 	const keys = new Set();
+	const ignored = new Set();
 	const visit = (node) => {
 		let text = null;
 		let ok = false;
@@ -97,6 +98,8 @@ export function scanFile(rel) {
 			text = node.text;
 			ok = isTCallArg0(node);
 			if (ok) keys.add(node.text);
+			// i18n-ignore 行上的常量表值是「用时再翻」（t(TABLE[k])）：目录里可以有它（不算死条目），但不强求有英文
+			else if (HAN.test(text) && lineHasIgnore(src, sf, node)) ignored.add(node.text);
 		} else if (ts.isJsxText(node)) {
 			text = node.text;
 			ok = false;
@@ -113,7 +116,7 @@ export function scanFile(rel) {
 		ts.forEachChild(node, visit);
 	};
 	visit(sf);
-	return { misses, keys };
+	return { misses, keys, ignored };
 }
 
 /** 读目录分片：返回 [{file, key, value}] */
@@ -148,7 +151,15 @@ export function runCheck() {
 	// 两棵树各自核对：web 源码的键对 web 目录，服务端源码的键对 src/i18n 目录
 	const treeOf = (rel) => (rel.startsWith("web/") ? "web" : "server");
 	const usedByTree = { web: new Set(), server: new Set() };
-	for (const rel of files) for (const k of scanFile(rel).keys) usedByTree[treeOf(rel)].add(k);
+	const knownByTree = { web: new Set(), server: new Set() };
+	for (const rel of files) {
+		const r = scanFile(rel);
+		for (const k of r.keys) {
+			usedByTree[treeOf(rel)].add(k);
+			knownByTree[treeOf(rel)].add(k);
+		}
+		for (const k of r.ignored) knownByTree[treeOf(rel)].add(k);
+	}
 	const byKey = { web: new Map(), server: new Map() };
 	for (const r of rows) {
 		const tree = treeOf(r.file);
@@ -156,7 +167,7 @@ export function runCheck() {
 		if (prev && prev.value !== r.value) misses.push({ file: r.file, line: 0, text: `键「${r.key}」与 ${prev.file} 译法不一致` });
 		byKey[tree].set(r.key, r);
 	}
-	const dead = rows.filter((r) => !usedByTree[treeOf(r.file)].has(r.key));
+	const dead = rows.filter((r) => !knownByTree[treeOf(r.file)].has(r.key));
 	const missingEn = [];
 	for (const tree of ["web", "server"]) for (const k of usedByTree[tree]) if (!byKey[tree].has(k)) missingEn.push(`${tree}: ${k}`);
 	return { files: files.length, misses, dead, missingEn, catalogSize: byKey.web.size + byKey.server.size };

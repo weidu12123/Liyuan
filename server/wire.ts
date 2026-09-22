@@ -15,6 +15,7 @@ import {
 	type DisplaySkin,
 } from "../src/postprocess.ts";
 import { hasDepthLimits } from "../src/cardfront.ts";
+import { t } from "../src/i18n/index.ts";
 import type { AuthorScript } from "../src/authorScripts.ts";
 import type { CardProjectPreview } from "../src/card-authoring-types.ts";
 import { isBackstageText } from "../src/stance.ts";
@@ -500,7 +501,7 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 		if (msg.role !== "assistant") return null;
 		const timeline = (msg.details as { rpTimeline?: WireSegment[] } | undefined)?.rpTimeline;
 		const thinking = thinkingOf(msg.content);
-		return text || thinking || timeline?.length ? { channel: "authoring", name: mode === "agent" ? "agent" : "写卡", text, mode, ...(thinking ? { thinking } : {}),
+		return text || thinking || timeline?.length ? { channel: "authoring", name: mode === "agent" ? "agent" : t("写卡"), text, mode, ...(thinking ? { thinking } : {}),
 			...(timeline?.length ? { timeline } : {}), ...(msg.stopReason === "aborted" ? { unfinished: true } : {}) } : null;
 	}
 
@@ -535,7 +536,7 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 				return {
 					channel,
 					name: names.charName,
-					text: "（已停止，本轮尚未生成可见内容）",
+					text: t("（已停止，本轮尚未生成可见内容）"),
 					unfinished: true,
 				};
 			}
@@ -544,7 +545,7 @@ export function toWireMsg(m: unknown, names: WireNames, opts?: ToWireOpts): Wire
 
 		const body =
 			display ||
-			(aborted ? "（正文未流出，见思维链）" : "（脚手架已折叠，见思维链）");
+			(aborted ? t("（正文未流出，见思维链）") : t("（脚手架已折叠，见思维链）"));
 		// 时间线：从 details.rpTimeline 取出持久化的段序列（引擎在定稿时写入）
 		// text 段必须走 prepareDisplayText——与 msg.text 同管线——否则 <catsay> 等
 		// unwrap 标签会以原文暴露在屏上（时间线优先渲染时绕过了 body 的处理结果）。

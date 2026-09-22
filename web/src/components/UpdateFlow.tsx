@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { apiPost } from "../api.ts";
 import type { UpdateWire } from "../wire.ts";
+import { t } from "../i18n/index.ts";
 
 const fmtMB = (n?: number) => (n && n > 0 ? `${(n / 1024 / 1024).toFixed(1)} MB` : "");
 
@@ -15,12 +16,12 @@ export function UpdateChip({ update, onClick }: { update: UpdateWire | null; onC
 	if (!update || update.phase === "none") return null;
 	const label =
 		update.phase === "ready"
-			? `v${update.latestVersion} 已就绪`
+			? t("v{v} 已就绪", { v: update.latestVersion })
 			: update.phase === "downloading"
-				? "更新下载中…"
-				: `新版本 v${update.latestVersion}`;
+				? t("更新下载中…")
+				: t("新版本 v{v}", { v: update.latestVersion });
 	return (
-		<button type="button" className="upd-chip" onClick={onClick} title="查看更新">
+		<button type="button" className="upd-chip" onClick={onClick} title={t("查看更新")}>
 			<span className="upd-chip-dot" aria-hidden="true" />
 			{label}
 		</button>
@@ -103,11 +104,11 @@ export function UpdateModal({
 	return (
 		<div className="card-lore-modal" onClick={onClose}>
 			<div className="card-lore-dialog upd-dialog" onClick={(e) => e.stopPropagation()}>
-				<button type="button" className="icon-btn upd-x" onClick={onClose} aria-label="关闭">
+				<button type="button" className="icon-btn upd-x" onClick={onClose} aria-label={t("关闭")}>
 					✕
 				</button>
 				<h3>
-					发现新版本{" "}
+					{t("发现新版本")}{" "}
 					<span className="upd-ver-jump">
 						v{update.currentVersion} → <b>v{update.latestVersion}</b>
 						{update.publishedAt ? ` · ${update.publishedAt.slice(0, 10)}` : ""}
@@ -129,10 +130,10 @@ export function UpdateModal({
 				)}
 				{failed && !update.dockerDeploy && !update.desktopDeploy && (
 					<label className="upd-mirror-row">
-						<span>下载镜像</span>
+						<span>{t("下载镜像")}</span>
 						<input
 							className="panel-search"
-							placeholder="如 https://ghproxy.net/（留空直连）"
+							placeholder={t("如 https://ghproxy.net/（留空直连）")}
 							value={mirror}
 							onChange={(e) => setMirror(e.target.value)}
 						/>
@@ -142,40 +143,40 @@ export function UpdateModal({
 					<span className="upd-meta">
 						{update.desktopDeploy ? (
 							<>
-								桌面版请从发布页下载新版安装包，直接安装即可。
+								{t("桌面版请从发布页下载新版安装包，直接安装即可。")}
 								<br />
-								角色卡 / 会话 / 配置在数据目录里，重装不丢
+								{t("角色卡 / 会话 / 配置在数据目录里，重装不丢")}
 							</>
 						) : update.dockerDeploy ? (
 							<>
-								这是 Docker 部署，容器内无法自动升级。请在宿主机执行：
+								{t("这是 Docker 部署，容器内无法自动升级。请在宿主机执行：")}
 								<br />
 								<code>git pull &amp;&amp; docker compose up -d --build</code>
 								<br />
-								角色卡 / 会话 / 配置在卷挂载里，重建不丢
+								{t("角色卡 / 会话 / 配置在卷挂载里，重建不丢")}
 							</>
 						) : (
 							<>
 								{fmtMB(update.assetSize)}
-								{update.assetSize ? " · " : ""}下载后 SHA256 校验
+								{update.assetSize ? " · " : ""}{t("下载后 SHA256 校验")}
 								<br />
-								你的角色卡 / 会话 / 配置全部保留
+								{t("你的角色卡 / 会话 / 配置全部保留")}
 							</>
 						)}
 					</span>
 					<div className="upd-actions">
 						{update.releaseUrl && (
 							<a className="act-link" href={update.releaseUrl} target="_blank" rel="noopener noreferrer">
-								查看发布页
+								{t("查看发布页")}
 							</a>
 						)}
 						{update.desktopDeploy || update.dockerDeploy ? (
 							<button type="button" className="drawer-btn upd-primary" onClick={onClose}>
-								知道了
+								{t("知道了")}
 							</button>
 						) : (
 							<button type="button" className="drawer-btn upd-primary" onClick={() => void startDownload()}>
-								{failed ? "重试下载" : "立即更新"}
+								{failed ? t("重试下载") : t("立即更新")}
 							</button>
 						)}
 					</div>
@@ -208,7 +209,7 @@ export function UpdateToast({
 		return (
 			<div className="toast toast-upd" role="status">
 				<div className="upd-toast-row">
-					<span className="upd-toast-title">正在下载 v{update.latestVersion}…</span>
+					<span className="upd-toast-title">{t("正在下载 v{v}…", { v: update.latestVersion })}</span>
 					<span className="upd-toast-pct">
 						{update.total ? `${pct}% · ${fmtMB(update.received)} / ${fmtMB(update.total)}` : fmtMB(update.received)}
 					</span>
@@ -225,7 +226,7 @@ export function UpdateToast({
 			setRestarting(true);
 			try {
 				await apiPost("/api/update/restart", {});
-				onToast("info", "正在重启升级，连接恢复后即是新版本…");
+				onToast("info", t("正在重启升级，连接恢复后即是新版本…"));
 			} catch (e) {
 				setRestarting(false);
 				onToast("error", e instanceof Error ? e.message : String(e));
@@ -233,21 +234,21 @@ export function UpdateToast({
 		};
 		return (
 			<div className="toast toast-upd-ok" role="status">
-				<div className="upd-toast-title">✓ v{update.latestVersion} 已就绪</div>
+				<div className="upd-toast-title">{t("✓ v{v} 已就绪", { v: update.latestVersion })}</div>
 				<div className="upd-toast-sub">
-					{update.verified === "none" ? "（该版本未提供校验清单，未做 SHA256 比对）" : ""}
+					{update.verified === "none" ? t("（该版本未提供校验清单，未做 SHA256 比对）") : ""}
 					{update.supervised
-						? "重启梨园即完成升级；旧版本自动备份，数据全部保留。"
-						: "下次启动梨园时自动完成升级；旧版本自动备份，数据全部保留。"}
+						? t("重启梨园即完成升级；旧版本自动备份，数据全部保留。")
+						: t("下次启动梨园时自动完成升级；旧版本自动备份，数据全部保留。")}
 				</div>
 				<div className="upd-toast-acts">
 					{update.supervised && (
 						<button type="button" className="upd-tbtn upd-tbtn-primary" disabled={restarting} onClick={() => void restart()}>
-							{restarting ? "重启中…" : "立即重启"}
+							{restarting ? t("重启中…") : t("立即重启")}
 						</button>
 					)}
 					<button type="button" className="upd-tbtn" onClick={onDismiss}>
-						{update.supervised ? "下次启动时升级" : "知道了"}
+						{update.supervised ? t("下次启动时升级") : t("知道了")}
 					</button>
 				</div>
 			</div>

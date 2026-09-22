@@ -16,6 +16,7 @@ import type { WireActivity, WireChoice, WireMsg } from "../wire.ts";
 import { lineDiff } from "../diff.ts";
 import { estimateTokens, formatTokenCount, type TurnSegment } from "../timeline.ts";
 import { HtmlFrame } from "./HtmlFrame.tsx";
+import { t } from "../i18n/index.ts";
 
 /** 一档卡皮肤：显示向规则 + 宏名（Task 7 由 App 注入） */
 export type SkinProp = SkinMacros;
@@ -65,39 +66,40 @@ export interface ChatMsg extends WireMsg {
 	segments?: TurnSegment[];
 }
 
+/** 工具的中文显示名：值经 toolLabel() 用时再翻（英文在 i18n/en/messages.ts） */
 export const TOOL_LABELS: Record<string, string> = {
-	lorebook_search: "检索设定",
-	world_state_get: "核对账本",
-	world_state_update: "记下变化",
-	lorebook_write: "固化设定",
-	knowledge_create: "建知识库",
-	knowledge_mount: "挂/卸知识库",
-	knowledge_list: "列知识库",
-	knowledge_delete: "删知识库条目",
-	knowledge_write: "写入知识库",
-	show_image: "展示插图",
-	show_audio: "展示音频",
-	show_video: "展示视频",
-	show_html: "嵌入界面",
-	tts: "配音",
-	skill_save: "沉淀技能",
-	panel_write: "更新面板",
-	panel_read: "查看面板",
-	panel_close: "收起面板",
-	ask_director: "请你定夺",
-	bash: "执行命令",
-	read: "查阅",
-	write: "写入",
-	edit: "改写",
-	grep: "检索文件",
-	find: "查找文件",
-	ls: "列目录",
-	conversation_mode: "切换模式",
-	card_project: "卡片资源",
+	lorebook_search: "检索设定", // i18n-ignore
+	world_state_get: "核对账本", // i18n-ignore
+	world_state_update: "记下变化", // i18n-ignore
+	lorebook_write: "固化设定", // i18n-ignore
+	knowledge_create: "建知识库", // i18n-ignore
+	knowledge_mount: "挂/卸知识库", // i18n-ignore
+	knowledge_list: "列知识库", // i18n-ignore
+	knowledge_delete: "删知识库条目", // i18n-ignore
+	knowledge_write: "写入知识库", // i18n-ignore
+	show_image: "展示插图", // i18n-ignore
+	show_audio: "展示音频", // i18n-ignore
+	show_video: "展示视频", // i18n-ignore
+	show_html: "嵌入界面", // i18n-ignore
+	tts: "配音", // i18n-ignore
+	skill_save: "沉淀技能", // i18n-ignore
+	panel_write: "更新面板", // i18n-ignore
+	panel_read: "查看面板", // i18n-ignore
+	panel_close: "收起面板", // i18n-ignore
+	ask_director: "请你定夺", // i18n-ignore
+	bash: "执行命令", // i18n-ignore
+	read: "查阅", // i18n-ignore
+	write: "写入", // i18n-ignore
+	edit: "改写", // i18n-ignore
+	grep: "检索文件", // i18n-ignore
+	find: "查找文件", // i18n-ignore
+	ls: "列目录", // i18n-ignore
+	conversation_mode: "切换模式", // i18n-ignore
+	card_project: "卡片资源", // i18n-ignore
 };
 
 export const toolLabel = (name: string) => {
-	if (TOOL_LABELS[name]) return TOOL_LABELS[name];
+	if (TOOL_LABELS[name]) return t(TOOL_LABELS[name]);
 	// MCP：mcp__server__tool → MCP · tool
 	if (name.startsWith("mcp__")) {
 		const rest = name.slice("mcp__".length);
@@ -254,7 +256,7 @@ export function ThinkingBlock({ text, live, defaultOpen }: { text: string; live?
 	return (
 		<details className="thinking" open={defaultOpen ? true : undefined}>
 			<summary className={live ? "pulse" : undefined}>
-				<span className="thinking-label">{live ? "思考中" : "已思考"}</span>
+				<span className="thinking-label">{live ? t("思考中") : t("已思考")}</span>
 				{text.trim() && <span className="thinking-count">{tokens} tokens</span>}
 			</summary>
 			<div className="thinking-body">
@@ -272,12 +274,12 @@ export function ThinkingBlock({ text, live, defaultOpen }: { text: string; live?
 export function ToolSegment({ activities, live }: { activities: WireActivity[]; live?: boolean }) {
 	const calls = activities.filter((a) => a.kind === "tool_start");
 	const names = [...new Set(calls.map((a) => toolLabel(a.name)))];
-	const summary = names.length === 0 ? "过程" : names.length <= 3 ? names.join("、") : `${names.slice(0, 3).join("、")} 等 ${names.length} 项`;
+	const summary = names.length === 0 ? t("过程") : names.length <= 3 ? names.join(t("、")) : t("{names} 等 {n} 项", { names: names.slice(0, 3).join(t("、")), n: names.length });
 	return (
 		<details className="turn-activity turn-activity-inline">
 			<summary className={live ? "pulse" : undefined}>
 				{summary}
-				{calls.length > 1 && ` · ${calls.length} 步`}
+				{calls.length > 1 && t(" · {n} 步", { n: calls.length })}
 			</summary>
 			<ul>
 				{activities.map((a, i) => (
@@ -333,9 +335,9 @@ export function TurnTimeline({
 				{process.length > 0 && (
 					<details className="turn-process">
 						<summary>
-							本轮历程
-							{thinks > 0 && ` · 思考 ${thinks} 段`}
-							{calls > 0 && ` · ${calls} 步`}
+							{t("本轮历程")}
+							{thinks > 0 && t(" · 思考 {n} 段", { n: thinks })}
+							{calls > 0 && t(" · {n} 步", { n: calls })}
 						</summary>
 						<div className="turn-process-body">
 							{segments.map((seg, i) => {
@@ -370,9 +372,9 @@ export function TurnTimeline({
 				return (
 					<details key={gi} className="turn-process turn-process-live" open={active ? true : undefined}>
 						<summary className={active ? "pulse" : undefined}>
-							{active ? plain ? "工作中" : "扮演中" : "过程"}
-							{thinks > 0 && ` · 思考 ${thinks} 段`}
-							{calls > 0 && ` · ${calls} 步`}
+							{active ? plain ? t("工作中") : t("扮演中") : t("过程")}
+							{thinks > 0 && t(" · 思考 {n} 段", { n: thinks })}
+							{calls > 0 && t(" · {n} 步", { n: calls })}
 						</summary>
 						<div className="turn-process-body">
 							{g.segs.map((seg, i) => {
@@ -403,7 +405,7 @@ function ActivityItem({ a }: { a: WireActivity }) {
 		return (
 			<li className="ta-call">
 				<span className="ta-label">{label}</span>
-				{change ? <span className="ta-detail">{file}</span> : human ? <span className="ta-detail">{human}</span> : <span className="ta-detail ta-detail-muted">进行中…</span>}
+				{change ? <span className="ta-detail">{file}</span> : human ? <span className="ta-detail">{human}</span> : <span className="ta-detail ta-detail-muted">{t("进行中…")}</span>}
 				{change && <FileChangeView change={change} />}
 			</li>
 		);
@@ -412,7 +414,7 @@ function ActivityItem({ a }: { a: WireActivity }) {
 	const human = detail && !looksLikeRawArgs(detail) ? detail : "";
 	return (
 		<li className={`ta-result ${a.isError ? "ta-error" : ""}`}>
-			<span className="ta-label">{a.isError ? "未办成" : "已办完"}</span>
+			<span className="ta-label">{a.isError ? t("未办成") : t("已办完")}</span>
 			{human ? <span className="ta-detail">{human}</span> : null}
 		</li>
 	);
@@ -426,7 +428,7 @@ function FileChangeView({ change }: { change: NonNullable<WireActivity["change"]
 	const isWrite = !change.edits;
 	return (
 		<details className="ta-change" open={!isWrite}>
-			<summary>{isWrite ? `写入整文件 · ${(change.content ?? "").length} 字` : `${change.edits!.length} 处替换`}</summary>
+			<summary>{isWrite ? t("写入整文件 · {n} 字", { n: (change.content ?? "").length }) : t("{n} 处替换", { n: change.edits!.length })}</summary>
 			{blocks.map((lines, i) => (
 				<pre key={i} className="ta-change-pre">
 					{lines.map((l, j) => (
@@ -445,8 +447,8 @@ export function ActivityBar({ activities }: { activities: WireActivity[] }) {
 	return (
 		<details className="turn-activity">
 			<summary>
-				过程
-				{steps > 0 && ` · ${steps} 步`}
+				{t("过程")}
+				{steps > 0 && t(" · {n} 步", { n: steps })}
 			</summary>
 			<ul>
 				{activities.map((a, i) => (
@@ -505,13 +507,13 @@ export function BackstageGroup({
 			<div className="msg-head">
 				<MsgAvatar src={avatarUrl} name={name} kind="char" />
 				<span className="msg-name">{name}</span>
-				<span className="chip chip-backstage">助手</span>
+				<span className="chip chip-backstage">{t("助手")}</span>
 			</div>
 			{mid.length > 0 && (
 				<details className="turn-activity">
 					<summary>
-						过程 · 中间步骤 ×{mid.length}
-						{toolCount > 0 && ` · 工具调用 ×${toolCount}`}
+						{t("过程 · 中间步骤 ×{n}", { n: mid.length })}
+						{toolCount > 0 && t(" · 工具调用 ×{n}", { n: toolCount })}
 					</summary>
 					{mid.map((m, i) => (
 						<BackstageStep key={i} msg={m} />
@@ -519,7 +521,7 @@ export function BackstageGroup({
 				</details>
 			)}
 			<details className="bs-final" open={open}>
-				<summary>{open ? "回复" : `回复：${firstLine(final.text)}`}</summary>
+				<summary>{open ? t("回复") : t("回复：{line}", { line: firstLine(final.text) })}</summary>
 				{final.thinking && <ThinkingBlock text={final.thinking} />}
 				<RichContent text={final.text} />
 				{final.activities && final.activities.length > 0 && <ActivityBar activities={final.activities} />}
@@ -570,7 +572,7 @@ export function ChoiceCard({ choice, onReply }: { choice: WireChoice; onReply?: 
 					<input
 						type="text"
 						value={custom}
-						placeholder={choice.placeholder ?? "或自己写一个…"}
+						placeholder={choice.placeholder ?? t("或自己写一个…")}
 						onChange={(e) => setCustom(e.target.value)}
 						onKeyDown={(e) => {
 							if (e.key === "Enter" && !e.nativeEvent.isComposing && custom.trim()) {
@@ -580,22 +582,22 @@ export function ChoiceCard({ choice, onReply }: { choice: WireChoice; onReply?: 
 						}}
 					/>
 					<button className="choice-send" disabled={!custom.trim()} onClick={() => onReply?.({ value: custom.trim() })}>
-						提交
+						{t("提交")}
 					</button>
-					<button className="choice-stop" onClick={() => onReply?.({ stop: true })} title="停止本回合，收回主导权">
-						停止
+					<button className="choice-stop" onClick={() => onReply?.({ stop: true })} title={t("停止本回合，收回主导权")}>
+						{t("停止")}
 					</button>
 				</div>
 			) : (
 				<div className="choice-result">
 					{choice.stopped ? (
-						<span className="choice-stopped">已停止本回合</span>
+						<span className="choice-stopped">{t("已停止本回合")}</span>
 					) : choice.answer !== undefined && !choice.options.includes(choice.answer) ? (
-						<span className="choice-answered">你的回答：{choice.answer}</span>
+						<span className="choice-answered">{t("你的回答：{answer}", { answer: choice.answer })}</span>
 					) : choice.answer !== undefined ? (
-						<span className="choice-answered">已选择</span>
+						<span className="choice-answered">{t("已选择")}</span>
 					) : (
-						<span className="choice-answered">已应答</span>
+						<span className="choice-answered">{t("已应答")}</span>
 					)}
 				</div>
 			)}
@@ -704,13 +706,13 @@ export function Bubble({
 		const c = msg.checkpoint;
 		const ch = c?.changed;
 		const parts = ch ? [
-			...ch.added.map((n) => `新增 ${n}`), ...ch.modified.map((n) => `修改 ${n}`),
-			...ch.renamed.map(([a, b]) => `改名 ${a}→${b}`), ...ch.removed.map((n) => `删除 ${n}`),
+			...ch.added.map((n) => t("新增 {name}", { name: n })), ...ch.modified.map((n) => t("修改 {name}", { name: n })),
+			...ch.renamed.map(([a, b]) => t("改名 {from}→{to}", { from: a, to: b })), ...ch.removed.map((n) => t("删除 {name}", { name: n })),
 		] : [];
 		return (
 			<button type="button" className={`chapter-card ${c?.author === "user" ? "chapter-card-edit" : ""}`} onClick={() => c && onChapter?.(c.id)} disabled={!onChapter}>
-				<span className="chapter-card-kind">{c?.restoredFrom ? "恢复" : c?.author === "user" ? "手改" : "改稿"}</span>
-				<span className="chapter-card-text">{parts.join("、") || msg.text}</span>
+				<span className="chapter-card-kind">{c?.restoredFrom ? t("恢复") : c?.author === "user" ? t("手改") : t("改稿")}</span>
+				<span className="chapter-card-text">{parts.join(t("、")) || msg.text}</span>
 			</button>
 		);
 	}
@@ -722,7 +724,7 @@ export function Bubble({
 		// 插图（agent 经 show_image 交付）：舞台美术，与正文明确区隔（D10 合规：元信息层）
 		return (
 			<figure className="msg-image">
-				<ZoomImg src={msg.src ?? ""} alt={msg.text || "插图"} />
+				<ZoomImg src={msg.src ?? ""} alt={msg.text || t("插图")} />
 				{msg.text && <figcaption>{msg.text}</figcaption>}
 			</figure>
 		);
@@ -732,7 +734,7 @@ export function Bubble({
 		return (
 			<figure className="msg-audio">
 				<audio controls preload="metadata" src={msg.src ?? ""}>
-					你的浏览器不支持音频播放
+					{t("你的浏览器不支持音频播放")}
 				</audio>
 				{msg.text && <figcaption>{msg.text}</figcaption>}
 			</figure>
@@ -743,7 +745,7 @@ export function Bubble({
 		return (
 			<figure className="msg-video">
 				<video controls preload="metadata" playsInline src={msg.src ?? ""}>
-					你的浏览器不支持视频播放
+					{t("你的浏览器不支持视频播放")}
 				</video>
 				{msg.text && <figcaption>{msg.text}</figcaption>}
 			</figure>
@@ -756,7 +758,7 @@ export function Bubble({
 	}
 	if (msg.channel === "authoring") {
 		return <div className="msg msg-authoring">
-			<div className="msg-head"><span className="msg-name">{msg.mode === "agent" ? "agent" : "工作"}</span>{msg.unfinished && <span className="chip chip-unfinished">已停止</span>}</div>
+			<div className="msg-head"><span className="msg-name">{msg.mode === "agent" ? "agent" : t("工作")}</span>{msg.unfinished && <span className="chip chip-unfinished">{t("已停止")}</span>}</div>
 			{msg.segments?.length || msg.timeline?.length ? <TurnTimeline segments={msg.segments ?? msg.timeline!} plain /> : <>{msg.thinking && <ThinkingBlock text={msg.thinking} />}<Paragraphs text={msg.text} /></>}
 		</div>;
 	}
@@ -768,7 +770,7 @@ export function Bubble({
 				<div className="msg-head">
 					<MsgAvatar src={avatarUrl} name={name} kind="char" />
 					<span className="msg-name">{name}</span>
-					<span className="chip chip-backstage">助手</span>
+					<span className="chip chip-backstage">{t("助手")}</span>
 				</div>
 				{msg.thinking && <ThinkingBlock text={msg.thinking} />}
 				<RichContent text={msg.text} skin={skin} />
@@ -779,7 +781,7 @@ export function Bubble({
 	if (msg.channel === "import") {
 		return (
 			<details className="import-block">
-				<summary>导入的聊天记录（点开查看）</summary>
+				<summary>{t("导入的聊天记录（点开查看）")}</summary>
 				<RichContent text={msg.text} skin={skin} />
 			</details>
 		);
@@ -810,14 +812,14 @@ export function Bubble({
 				<div className="msg-head">
 					<MsgAvatar src={avatarUrl} name={name} kind={isUser ? "user" : "char"} />
 					<span className={`msg-name ${isUser ? "" : "msg-name-char"}`}>{name}</span>
-					{msg.mode === "authoring" && <span className="chip">工作</span>}
-					{msg.channel === "greeting" && <span className="chip">开场白</span>}
+					{msg.mode === "authoring" && <span className="chip">{t("工作")}</span>}
+					{msg.channel === "greeting" && <span className="chip">{t("开场白")}</span>}
 					{!isUser && msg.unfinished && (
-						<span className="chip chip-unfinished" title="生成被中断；发送「继续」可接着写">
-							未完成
+						<span className="chip chip-unfinished" title={t("生成被中断；发送「继续」可接着写")}>
+							{t("未完成")}
 						</span>
 					)}
-					{editing && <span className="chip chip-edit">编辑中</span>}
+					{editing && <span className="chip chip-edit">{t("编辑中")}</span>}
 					{floor !== undefined && <span className="floor">#{floor}</span>}
 				</div>
 			)}
@@ -842,16 +844,16 @@ export function Bubble({
 					/>
 					<div className="msg-edit-actions">
 						<button type="button" className="drawer-btn" onClick={edit.onCancel}>
-							放弃
+							{t("放弃")}
 						</button>
 						<button
 							type="button"
 							className="drawer-btn save-btn"
 							disabled={!edit.draft.trim()}
 							onClick={edit.onSubmit}
-							title={edit.submitLabel ?? "确认修改"}
+							title={edit.submitLabel ?? t("确认修改")}
 						>
-							重新生成
+							{t("重新生成")}
 						</button>
 					</div>
 				</div>
@@ -886,25 +888,25 @@ export function Bubble({
 						<div className="msg-actions">
 							{/* 开场白快速切换：不进详情页 */}
 							{greetingSwitch && (
-								<span className="msg-variant-switch msg-greeting-switch" title="切换备选开场白（无需打开角色卡详情）">
+								<span className="msg-variant-switch msg-greeting-switch" title={t("切换备选开场白（无需打开角色卡详情）")}>
 									<button
 										type="button"
 										className="msg-variant-btn"
 										onClick={greetingSwitch.onPrev}
 										disabled={greetingSwitch.total <= 1}
-										aria-label="上一条开场白"
+										aria-label={t("上一条开场白")}
 									>
 										<IconChevronLeft size={16} />
 									</button>
 									<span className="msg-variant-idx">
-										开场 {greetingSwitch.index + 1}/{greetingSwitch.total}
+										{t("开场 {i}/{n}", { i: greetingSwitch.index + 1, n: greetingSwitch.total })}
 									</span>
 									<button
 										type="button"
 										className="msg-variant-btn"
 										onClick={greetingSwitch.onNext}
 										disabled={greetingSwitch.total <= 1}
-										aria-label="下一条开场白"
+										aria-label={t("下一条开场白")}
 									>
 										<IconChevronRight size={16} />
 									</button>
@@ -912,13 +914,13 @@ export function Bubble({
 							)}
 							{/* ST 式回复变体：‹ n/m ›；末条点右 = 再生成，旧变体保留，仅当前进上下文，不写世界线 */}
 							{swipe && (
-								<span className="msg-variant-switch msg-swipe-switch" title="回复变体：仅当前选中进入模型；点右在末条时再生成">
+								<span className="msg-variant-switch msg-swipe-switch" title={t("回复变体：仅当前选中进入模型；点右在末条时再生成")}>
 									<button
 										type="button"
 										className="msg-variant-btn"
 										onClick={swipe.onPrev}
 										disabled={swipe.total > 0 && swipe.index <= 0}
-										aria-label="上一条变体"
+										aria-label={t("上一条变体")}
 									>
 										<IconChevronLeft size={16} />
 									</button>
@@ -931,13 +933,13 @@ export function Bubble({
 										onClick={swipe.onNext}
 										aria-label={
 											swipe.total === 0 || swipe.index >= swipe.total - 1
-												? "生成新变体"
-												: "下一条变体"
+												? t("生成新变体")
+												: t("下一条变体")
 										}
 										title={
 											swipe.total === 0 || swipe.index >= swipe.total - 1
-												? "生成新回复（原回复保留为变体）"
-												: "下一条变体"
+												? t("生成新回复（原回复保留为变体）")
+												: t("下一条变体")
 										}
 									>
 										<IconChevronRight size={16} />
@@ -945,33 +947,33 @@ export function Bubble({
 								</span>
 							)}
 							{onRewind && (
-								<button className="act" onClick={onRewind} title="回退到此条之前（之后的剧情进会话树旁支）">
-									<IconUndo size={13} /> 回退
+								<button className="act" onClick={onRewind} title={t("回退到此条之前（之后的剧情进会话树旁支）")}>
+									<IconUndo size={13} /> {t("回退")}
 								</button>
 							)}
 							{onReroll && (
-								<button className="act" onClick={onReroll} title="再生成一条变体（原回复保留；等同末条点右箭头）">
-									<IconRedo size={13} /> 生成
+								<button className="act" onClick={onReroll} title={t("再生成一条变体（原回复保留；等同末条点右箭头）")}>
+									<IconRedo size={13} /> {t("生成")}
 								</button>
 							)}
 							{onEdit && (
-								<button className="act" onClick={onEdit} title="在本条内修改文案">
-									<IconEdit size={13} /> 修改
+								<button className="act" onClick={onEdit} title={t("在本条内修改文案")}>
+									<IconEdit size={13} /> {t("修改")}
 								</button>
 							)}
 							{onDelete && (
-								<button className="act" onClick={onDelete} title="删除本轮或最后角色回复">
-									<IconTrash size={13} /> 删除
+								<button className="act" onClick={onDelete} title={t("删除本轮或最后角色回复")}>
+									<IconTrash size={13} /> {t("删除")}
 								</button>
 							)}
 							{onCopy && (
-								<button className="act" onClick={() => onCopy(msg.text)} title="复制正文">
-									<IconCopy size={13} /> 复制
+								<button className="act" onClick={() => onCopy(msg.text)} title={t("复制正文")}>
+									<IconCopy size={13} /> {t("复制")}
 								</button>
 							)}
 							{onStore && (
-								<button className="act" onClick={onStore} title="在当前剧情点存档（世界线节点）">
-									<IconPin size={13} /> 存档
+								<button className="act" onClick={onStore} title={t("在当前剧情点存档（世界线节点）")}>
+									<IconPin size={13} /> {t("存档")}
 								</button>
 							)}
 							{onTts && (
@@ -979,9 +981,9 @@ export function Bubble({
 									className="act"
 									disabled={ttsBusy || !msg.text.trim()}
 									onClick={() => onTts(msg.text)}
-									title="文生音：为这段正文生成语音并显示播放器"
+									title={t("文生音：为这段正文生成语音并显示播放器")}
 								>
-									<IconSpeaker size={13} /> {ttsBusy ? "配音中…" : "配音"}
+									<IconSpeaker size={13} /> {ttsBusy ? t("配音中…") : t("配音")}
 								</button>
 							)}
 						</div>

@@ -9,6 +9,7 @@ import { apiPut, type StatePatchResult } from "../api.ts";
 import type { WireStats, WorldState } from "../wire.ts";
 import { IconChevronDown, IconPencil, IconTrash } from "./icons.tsx";
 import { ConfirmButton, useAction } from "./kit.tsx";
+import { t } from "../i18n/index.ts";
 
 /** 行内编辑：点击铅笔→输入框（回车保存 / Esc 取消） */
 export function Editable({
@@ -34,8 +35,8 @@ export function Editable({
 	if (!editing) {
 		return (
 			<span className="editable">
-				<span className={value ? "" : "editable-empty"}>{value || placeholder || "（未记录）"}</span>
-				<button type="button" className="act edit-pen" title="编辑" aria-label="编辑" onClick={() => setEditing(true)}>
+				<span className={value ? "" : "editable-empty"}>{value || placeholder || t("（未记录）")}</span>
+				<button type="button" className="act edit-pen" title={t("编辑")} aria-label={t("编辑")} onClick={() => setEditing(true)}>
 					<IconPencil size={12} />
 				</button>
 			</span>
@@ -101,19 +102,19 @@ export function SessionStatsBar({ stats }: { stats: WireStats | null }) {
 	const ctxLabel =
 		stats.contextPercent !== null
 			? win
-				? `上下文 ${Math.round(stats.contextPercent)}%（${used != null ? fmtK(used) : "?"} / ${fmtK(win)}）`
-				: `上下文 ${Math.round(stats.contextPercent)}%`
+				? t("上下文 {pct}%（{used} / {win}）", { pct: Math.round(stats.contextPercent), used: used != null ? fmtK(used) : "?", win: fmtK(win) })
+				: t("上下文 {pct}%", { pct: Math.round(stats.contextPercent) })
 			: null;
 	const parts = [
-		`${msgs} 条消息`,
-		`累计 ${fmtK(stats.totalTokens)}`,
+		t("{n} 条消息", { n: msgs }),
+		t("累计 {tokens}", { tokens: fmtK(stats.totalTokens) }),
 		ctxLabel,
 	].filter(Boolean);
 	const title = [
-		"累计：本会话各轮请求 token 相加（每轮重发 system+历史，数字会远大于单次上下文）",
+		t("累计：本会话各轮请求 token 相加（每轮重发 system+历史，数字会远大于单次上下文）"),
 		win
-			? `上下文：上一轮装进模型窗口的 prompt 量 / 窗口 ${fmtK(win)}（不含回复输出；连接面板可改窗口）`
-			: "上下文：当前窗口占用",
+			? t("上下文：上一轮装进模型窗口的 prompt 量 / 窗口 {win}（不含回复输出；连接面板可改窗口）", { win: fmtK(win) })
+			: t("上下文：当前窗口占用"),
 	].join("\n");
 	return (
 		<div className="session-stats-bar" title={title}>
@@ -150,8 +151,8 @@ export function StatusStrip({
 
 	const empty = !state || isEmptyState(state);
 	const summary = empty
-		? "世界状态（随对话自动记录）"
-		: [state.time, state.location].filter(Boolean).join(" · ") || "世界状态";
+		? t("世界状态（随对话自动记录）")
+		: [state.time, state.location].filter(Boolean).join(" · ") || t("世界状态");
 
 	const isOpen = onOpenPanel ? active : open;
 	const handleClick = () => {
@@ -171,13 +172,13 @@ export function StatusStrip({
 			{!onOpenPanel && open && (
 				<div className="status-card">
 					<div className="kv">
-						<span className="kv-k">时间</span>
+						<span className="kv-k">{t("时间")}</span>
 						<span className="kv-v">
 							<Editable value={state?.time ?? ""} onSave={(v) => patch({ time: v })} />
 						</span>
 					</div>
 					<div className="kv">
-						<span className="kv-k">地点</span>
+						<span className="kv-k">{t("地点")}</span>
 						<span className="kv-v">
 							<Editable value={state?.location ?? ""} onSave={(v) => patch({ location: v })} />
 						</span>
@@ -187,16 +188,16 @@ export function StatusStrip({
 							<div className="sp-char-head">
 								<span className="sp-char-name">{name}</span>
 								<span className="sp-affinity">
-									好感{" "}
+									{t("好感")}{" "}
 									<Editable
 										value={String(c.affinity)}
 										onSave={(v) => patch({ characters: { [name]: { affinity: num(v, c.affinity) } } })}
 									/>
 								</span>
 								<ConfirmButton
-									title={`移除「${name}」的状态记录`}
-									aria-label="移除角色记录"
-									confirmText="确认移除"
+									title={t("移除「{name}」的状态记录", { name })}
+									aria-label={t("移除角色记录")}
+									confirmText={t("确认移除")}
 									onConfirm={() => patch({ characters: { [name]: null } })}
 								>
 									<IconTrash size={12} />
@@ -214,26 +215,26 @@ export function StatusStrip({
 								/>
 							</div>
 							<div className="sp-char-line">
-								<Editable value={c.status} placeholder="（状态）" onSave={(v) => patch({ characters: { [name]: { status: v } } })} />
+								<Editable value={c.status} placeholder={t("（状态）")} onSave={(v) => patch({ characters: { [name]: { status: v } } })} />
 							</div>
 							<div className="sp-char-line">
 								<Editable
 									value={c.at ?? ""}
-									placeholder="（所在地）"
+									placeholder={t("（所在地）")}
 									onSave={(v) => patch({ characters: { [name]: { at: v } } })}
 								/>
 							</div>
 							<div className="sp-char-line sp-notes">
-								<Editable value={c.notes} placeholder="（备注）" onSave={(v) => patch({ characters: { [name]: { notes: v } } })} />
+								<Editable value={c.notes} placeholder={t("（备注）")} onSave={(v) => patch({ characters: { [name]: { notes: v } } })} />
 							</div>
 						</div>
 					))}
 					<div className="kv">
-						<span className="kv-k">物品</span>
+						<span className="kv-k">{t("物品")}</span>
 						<span className="kv-v">
 							<Editable
 								value={(state?.inventory ?? []).join("、")}
-								placeholder="（空）"
+								placeholder={t("（空）")}
 								onSave={(v) => patch({ inventory: v.split(/[、,，]/).map((s) => s.trim()).filter(Boolean) })}
 							/>
 						</span>
@@ -243,22 +244,22 @@ export function StatusStrip({
 							<span className="kv-k">{k}</span>
 							<span className="kv-v">
 								<Editable value={v} onSave={(nv) => patch({ flags: { [k]: nv } })} />
-								<ConfirmButton title={`删除标记「${k}」`} aria-label="删除标记" confirmText="确认" onConfirm={() => patch({ flags: { [k]: null } })}>
+								<ConfirmButton title={t("删除标记「{k}」", { k })} aria-label={t("删除标记")} confirmText={t("确认")} onConfirm={() => patch({ flags: { [k]: null } })}>
 									<IconTrash size={12} />
 								</ConfirmButton>
 							</span>
 						</div>
 					))}
 					<div className="sp-threads">
-						<div className="kv-k">剧情线</div>
+						<div className="kv-k">{t("剧情线")}</div>
 						<Editable
 							multiline
 							value={(state?.plot_threads ?? []).join("\n")}
-							placeholder="（每行一条）"
+							placeholder={t("（每行一条）")}
 							onSave={(v) => patch({ plot_threads: v.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) })}
 						/>
 					</div>
-					<div className="field-hint">点铅笔可直接改；你的账本你说了算，改动随剧情分支走（回退会跟着回退）。登场名录已独立成面板（输入框工具区「名录」）。</div>
+					<div className="field-hint">{t("点铅笔可直接改；你的账本你说了算，改动随剧情分支走（回退会跟着回退）。登场名录已独立成面板（输入框工具区「名录」）。")}</div>
 				</div>
 			)}
 		</div>

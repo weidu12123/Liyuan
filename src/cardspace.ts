@@ -20,6 +20,8 @@ import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
+import { t } from "./i18n/index.ts";
+
 import { copyPathSafe } from "./fs-copy.ts";
 import { readJsonFile } from "./jsonio.ts";
 import { buildZipBuffer, extractZipFile } from "./ziplite.ts";
@@ -178,7 +180,7 @@ export function createCardSpace(
 			rmSync(cardFileAbs, { force: true });
 		}
 	} else if (opts?.copy) opts.copy(cardFileAbs, dest);
-	else throw new Error("createCardSpace：要么 move，要么给 copy");
+	else throw new Error("createCardSpace：要么 move，要么给 copy"); // i18n-ignore：程序员错误，不是给用户看的
 	return { folder, dir: dirAbs, cardFile: dest };
 }
 
@@ -211,16 +213,16 @@ export function writeChatMeta(cardDir: string, chatId: string, meta: ChatMeta): 
 /** 改子项目显示名：只动 name，createdAt 原样保留；子项目不存在时报错 */
 export function renameChat(cardDir: string, chatId: string, name: string): void {
 	const old = readChatMeta(cardDir, chatId);
-	if (!old) throw new Error(`子项目不存在：${chatId}`);
+	if (!old) throw new Error(t("子项目不存在：{id}", { id: chatId }));
 	const clean = name.replace(/[\r\n]+/g, " ").trim();
-	if (!clean) throw new Error("名字不能为空");
+	if (!clean) throw new Error(t("名字不能为空"));
 	writeChatMeta(cardDir, chatId, { ...old, name: clean });
 }
 
 /** 删除整个子项目（`对话/<id>/` 整棵，含全部会话与世界状态）；不存在时报错 */
 export function deleteChat(cardDir: string, chatId: string): void {
 	const dirAbs = chatDirOf(cardDir, chatId);
-	if (!existsSync(dirAbs)) throw new Error(`子项目不存在：${chatId}`);
+	if (!existsSync(dirAbs)) throw new Error(t("子项目不存在：{id}", { id: chatId }));
 	rmSync(dirAbs, { recursive: true, force: true });
 }
 
@@ -249,9 +251,9 @@ function collectFiles(rootAbs: string, rel = ""): Array<{ name: string; abs: str
  */
 export function exportChatZip(cardDir: string, chatId: string): { data: Buffer; fileCount: number; fileName: string } {
 	const dirAbs = chatDirOf(cardDir, chatId);
-	if (!existsSync(dirAbs)) throw new Error(`子项目不存在：${chatId}`);
+	if (!existsSync(dirAbs)) throw new Error(t("子项目不存在：{id}", { id: chatId }));
 	const files = collectFiles(dirAbs);
-	if (!files.length) throw new Error("子项目是空的，没有可导出的内容");
+	if (!files.length) throw new Error(t("子项目是空的，没有可导出的内容"));
 	const manifest = Buffer.from(
 		JSON.stringify({ format: "liyuan-chat", version: 1, chatId, exportedAt: new Date().toISOString() }, null, "\t"),
 		"utf8",
@@ -296,7 +298,7 @@ export function importChatZip(cardDir: string, zip: Buffer, currentCardRef: stri
 			}
 		}
 		if (!existsSync(join(root, CHAT_SESSIONS_DIR)) && !existsSync(join(root, CHAT_META_FILE))) {
-			throw new Error("不是子项目包（找不到 会话/ 或 对话.json）");
+			throw new Error(t("不是子项目包（找不到 会话/ 或 对话.json）"));
 		}
 		let chatId = newChatId();
 		while (existsSync(join(chatsRoot(cardDir), chatId))) chatId = newChatId();

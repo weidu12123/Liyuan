@@ -10,6 +10,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { apiPut } from "../api.ts";
+import { t } from "../i18n/index.ts";
 import { fillPanelTemplate } from "../../../src/panelTemplate.ts";
 import type { RpPanel } from "../wire.ts";
 
@@ -100,13 +101,13 @@ export function ArtifactPanel({
 	return (
 		<div className="artifact-root">
 			<div className="artifact-toolbar">
-				<span className="artifact-kind-chip" title="面板类型">
+				<span className="artifact-kind-chip" title={t("面板类型")}>
 					{editing ? (
 						<select
 							className="artifact-kind-select"
 							value={kind}
 							onChange={(e) => setKind(e.target.value as PanelKind)}
-							aria-label="面板类型"
+							aria-label={t("面板类型")}
 						>
 							{KINDS.map((k) => (
 								<option key={k} value={k}>
@@ -119,27 +120,27 @@ export function ArtifactPanel({
 					)}
 				</span>
 				<span className="artifact-toolbar-hint">
-					{editing ? "编辑源码 · 保存后 agent 下轮可见" : "agent 维护 · 可手改"}
+					{editing ? t("编辑源码 · 保存后 agent 下轮可见") : t("agent 维护 · 可手改")}
 				</span>
 				<span className="artifact-toolbar-actions">
 					{editing ? (
 						<>
 							<button type="button" className="drawer-btn" disabled={saving} onClick={cancel}>
-								取消
+								{t("取消")}
 							</button>
 							<button
 								type="button"
 								className="drawer-btn save-btn"
 								disabled={saving || !draft.trim()}
 								onClick={() => void save()}
-								title={dirty ? "保存修改" : "内容未改，仍可保存刷新时间"}
+								title={dirty ? t("保存修改") : t("内容未改，仍可保存刷新时间")}
 							>
-								{saving ? "保存中…" : "保存"}
+								{saving ? t("保存中…") : t("保存")}
 							</button>
 						</>
 					) : (
 						<button type="button" className="drawer-btn" onClick={startEdit}>
-							编辑
+							{t("编辑")}
 						</button>
 					)}
 				</span>
@@ -151,13 +152,13 @@ export function ArtifactPanel({
 					value={draft}
 					onChange={(e) => setDraft(e.target.value)}
 					spellCheck={false}
-					aria-label={`编辑面板 ${panel.name}`}
+					aria-label={t("编辑面板 {name}", { name: panel.name })}
 					placeholder={
 						kind === "markdown"
-							? "Markdown 正文…"
+							? t("Markdown 正文…")
 							: kind === "svg"
 								? "<svg viewBox=\"0 0 …\">…</svg>"
-								: "HTML 片段…"
+								: t("HTML 片段…")
 					}
 				/>
 			) : panel.kind === "markdown" ? (

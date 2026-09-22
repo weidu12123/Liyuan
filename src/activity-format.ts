@@ -3,6 +3,8 @@
  * 目标是 RP agent 化——像导演笔记，而不是 JSON / 运维日志。
  */
 
+import { t } from "./i18n/index.ts";
+
 function str(v: unknown): string {
 	if (typeof v === "string") return v.trim();
 	if (typeof v === "number" || typeof v === "boolean") return String(v);
@@ -40,84 +42,84 @@ export function formatToolStartDetail(toolName: string, args: unknown): string {
 	switch (name) {
 		case "lorebook_search": {
 			const q = str(a.query) || str(a.q) || str(a.keyword) || str(a.keywords);
-			return q ? `检索设定：${clip(q, 60)}` : "检索世界书";
+			return q ? t("检索设定：{q}", { q: clip(q, 60) }) : t("检索世界书");
 		}
 		case "lorebook_write": {
 			const title = str(a.comment) || str(a.title) || str(a.name) || str(a.key);
 			const body = str(a.content) || str(a.text) || str(a.entry);
-			if (title && body) return `写入设定「${clip(title, 40)}」：${firstLine(body, 50)}`;
-			if (title) return `写入设定「${clip(title, 48)}」`;
-			if (body) return `写入新设定：${firstLine(body, 60)}`;
-			return "写入补充设定";
+			if (title && body) return t("写入设定「{title}」：{body}", { title: clip(title, 40), body: firstLine(body, 50) });
+			if (title) return t("写入设定「{title}」", { title: clip(title, 48) });
+			if (body) return t("写入新设定：{body}", { body: firstLine(body, 60) });
+			return t("写入补充设定");
 		}
 		case "world_state_get":
-			return "核对当前账本事实";
+			return t("核对当前账本事实");
 		case "world_state_update": {
 			const patch = a.patch ?? a.updates ?? a.state ?? a.changes;
 			if (patch && typeof patch === "object") {
 				const keys = Object.keys(patch as object).slice(0, 4);
-				if (keys.length) return `记账：${keys.join("、")}${Object.keys(patch as object).length > 4 ? "…" : ""}`;
+				if (keys.length) return t("记账：{keys}{more}", { keys: keys.join(t("、")), more: Object.keys(patch as object).length > 4 ? "…" : "" });
 			}
 			const summary = str(a.summary) || str(a.note) || str(a.reason);
-			return summary ? `记账：${clip(summary, 60)}` : "更新世界状态账本";
+			return summary ? t("记账：{summary}", { summary: clip(summary, 60) }) : t("更新世界状态账本");
 		}
 		case "ask_director":
 		case "ask": {
 			const q = str(a.question) || str(a.title) || str(a.prompt);
-			return q ? clip(q, 100) : "请用户定夺剧情走向";
+			return q ? clip(q, 100) : t("请用户定夺剧情走向");
 		}
 		case "panel_write": {
 			const n = str(a.name) || str(a.title) || str(a.id);
 			const kind = str(a.kind);
-			if (n && kind) return `更新面板「${clip(n, 32)}」（${kind}）`;
-			if (n) return `更新面板「${clip(n, 40)}」`;
-			return "更新侧栏面板";
+			if (n && kind) return t("更新面板「{name}」（{kind}）", { name: clip(n, 32), kind });
+			if (n) return t("更新面板「{name}」", { name: clip(n, 40) });
+			return t("更新侧栏面板");
 		}
 		case "panel_read": {
 			const n = str(a.name) || str(a.title) || str(a.id);
-			return n ? `查看面板「${clip(n, 40)}」` : "查看侧栏面板";
+			return n ? t("查看面板「{name}」", { name: clip(n, 40) }) : t("查看侧栏面板");
 		}
 		case "panel_close": {
 			const n = str(a.name) || str(a.title) || str(a.id);
-			return n ? `收起面板「${clip(n, 40)}」` : "收起面板";
+			return n ? t("收起面板「{name}」", { name: clip(n, 40) }) : t("收起面板");
 		}
 		case "show_image":
 		case "show_audio":
 		case "show_video": {
 			const cap = str(a.caption) || str(a.title);
-			const kind = name === "show_image" ? "插图" : name === "show_audio" ? "音频" : "视频";
-			return cap ? `展示${kind}：${clip(cap, 48)}` : `展示${kind}`;
+			const kind = name === "show_image" ? t("插图") : name === "show_audio" ? t("音频") : t("视频");
+			return cap ? t("展示{kind}：{cap}", { kind, cap: clip(cap, 48) }) : t("展示{kind}", { kind });
 		}
 		case "show_html": {
 			const cap = str(a.caption) || str(a.title);
-			return cap ? `嵌入界面：${clip(cap, 48)}` : "嵌入 HTML 界面";
+			return cap ? t("嵌入界面：{cap}", { cap: clip(cap, 48) }) : t("嵌入 HTML 界面");
 		}
 		case "tts": {
-			const t = str(a.text) || str(a.content);
-			return t ? `配音：${firstLine(t, 48)}` : "合成语音";
+			const text = str(a.text) || str(a.content);
+			return text ? t("配音：{text}", { text: firstLine(text, 48) }) : t("合成语音");
 		}
 		case "read": {
 			const p = str(a.path) || str(a.file) || str(a.target);
-			return p ? `查阅 ${clip(p, 56)}` : "读取文件";
+			return p ? t("查阅 {path}", { path: clip(p, 56) }) : t("读取文件");
 		}
 		case "write":
 		case "edit": {
 			const p = str(a.path) || str(a.file) || str(a.target);
-			const verb = name === "edit" ? "改写" : "写入";
-			return p ? `${verb} ${clip(p, 56)}` : `${verb}文件`;
+			if (name === "edit") return p ? t("改写 {path}", { path: clip(p, 56) }) : t("改写文件");
+			return p ? t("写入 {path}", { path: clip(p, 56) }) : t("写入文件");
 		}
 		case "bash": {
 			const cmd = str(a.command) || str(a.cmd);
-			return cmd ? `执行：${clip(cmd, 56)}` : "执行命令";
+			return cmd ? t("执行：{cmd}", { cmd: clip(cmd, 56) }) : t("执行命令");
 		}
 		case "grep": {
 			const q = str(a.pattern) || str(a.query);
-			return q ? `在文件中搜：${clip(q, 48)}` : "检索文件内容";
+			return q ? t("在文件中搜：{q}", { q: clip(q, 48) }) : t("检索文件内容");
 		}
 		case "find":
 		case "ls": {
 			const p = str(a.path) || str(a.directory) || str(a.dir);
-			return p ? `浏览 ${clip(p, 56)}` : name === "ls" ? "列目录" : "查找文件";
+			return p ? t("浏览 {path}", { path: clip(p, 56) }) : name === "ls" ? t("列目录") : t("查找文件");
 		}
 		default: {
 			// 通用：优先常见「意图」字段，避免整包 JSON

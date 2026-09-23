@@ -135,6 +135,7 @@ export const rest: Record<string, string> = {
 	"当前角色卡已切换": "The current character card has changed",
 	"没有待换封面": "No pending cover",
 	"预览回报格式不对": "Malformed preview report",
+	"截图回报格式不对": "Malformed screenshot report",
 	"预览": "Preview",
 	"当前角色卡已切换，请重新打开创作稿": "The current character card has changed; reopen the draft",
 	"需要 greetings[] 或 index+text": "greetings[] or index+text is required",

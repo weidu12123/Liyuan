@@ -163,6 +163,7 @@ export const messages: Record<string, string> = {
 	"历史": "History",
 	"目录": "Contents",
 	"稿子还是空的。在右边讨论，agent 会把定稿写成文件放进来。": "The manuscript is empty. Discuss on the right; the agent writes finished text into files here.",
+	"没有可截的稿子": "No story text to screenshot",
 	"新增": "Added",
 	"改名": "Renamed",
 	// 稿纸面板

@@ -1072,7 +1072,7 @@ export default function App() {
 					case "screenshot":
 						void (async () => {
 							const shot = await captureStoryPng(frame.file);
-							try { await apiPost("/api/screenshot/report", { id: frame.id, png: shot?.png ?? "", width: shot?.width ?? 0, height: shot?.height ?? 0, ...(shot ? {} : { note: "没有可截的稿子" }) }); } catch { /* 回报失败：服务端按超时处理 */ }
+							try { await apiPost("/api/screenshot/report", { id: frame.id, png: shot?.png ?? "", width: shot?.width ?? 0, height: shot?.height ?? 0, ...(shot ? {} : { note: t("没有可截的稿子") }) }); } catch { /* 回报失败：服务端按超时处理 */ }
 						})();
 						break;
 				case "update": {

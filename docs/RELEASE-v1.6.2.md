@@ -8,14 +8,14 @@
 
 | Coding Agent | agent 模式 |
 |---|---|
-| 项目文件夹（Workspace） | 稿子目录 |
+| 项目文件夹（Workspace） | 正文目录 |
 | 代码（Code） | 剧情正文 |
-| 读文件（Read） | 读稿（read） |
+| 读文件（Read） | 读正文（read） |
 | 代码检索（Grep） | 文本检索（grep） |
-| 局部修改（Edit） | 局部改稿（edit） |
+| 局部修改（Edit） | 局部改动（edit） |
 | 版本回退（Checkpoint） | 检查点 |
 | 上下文压缩（Compact） | 讨论压缩 |
-| 运行预览（Screenshot） | 稿子截图（screenshot） |
+| 运行预览（Screenshot） | 正文截图（screenshot） |
 
 ## 修复
 

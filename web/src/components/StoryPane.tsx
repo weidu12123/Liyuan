@@ -71,7 +71,7 @@ function HistoryList({ checkpoints, busy, loadDiff, onRestore }: {
 		void loadDiff(openId).then((files) => { if (live) setDiff({ id: openId, files }); }).catch(() => { if (live) setDiff({ id: openId, files: [] }); });
 		return () => { live = false; };
 	}, [openId, loadDiff]);
-	if (!checkpoints.length) return <div className="story-empty">{t("还没有检查点。每一轮改过稿子，梨园就保存一次。")}</div>;
+	if (!checkpoints.length) return <div className="story-empty">{t("还没有检查点。每一轮改过正文，梨园就保存一次。")}</div>;
 	const latest = checkpoints[checkpoints.length - 1]!;
 	return (
 		<ol className="story-history">
@@ -175,7 +175,7 @@ export function StoryPane({
 				<button type="button" className="story-back" onClick={onBack} aria-label={t("回到讨论")}>
 					{t("讨论")}
 				</button>
-				<span className="story-title">{t("稿子")}</span>
+				<span className="story-title">{t("正文")}</span>
 				<span className="story-meta">{files ? t("{n} 个文件 · {chars} 字", { n: files.length, chars: total }) : t("读取中…")}</span>
 				<span className="story-tabs" role="tablist">
 					<button type="button" role="tab" aria-selected={tab === "text"} className={`story-tab ${tab === "text" ? "story-tab-on" : ""}`} onClick={() => setTab("text")}>{t("正文")}</button>
@@ -210,7 +210,7 @@ export function StoryPane({
 					)}
 					<div className="story-body">
 						{files && files.length === 0 && (
-							<div className="story-empty">{t("稿子还是空的。在右边讨论，agent 会把定稿写成文件放进来。")}</div>
+							<div className="story-empty">{t("正文还是空的。在右边讨论，agent 会把定稿写入文件。")}</div>
 						)}
 						{files?.map((f, i) => (
 							<article key={f.name} id={fileId(f.name)} className="story-chapter">

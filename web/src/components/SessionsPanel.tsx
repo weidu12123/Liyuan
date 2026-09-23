@@ -147,7 +147,7 @@ export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy
 					}}
 				/>
 				<div className="spv2-modal-modes" role="radiogroup" aria-label={t("项目形态")}>
-					{([["roleplay", t("扮演"), t("你是故事里的人，回复就是正文")], ["agent", "agent", t("正文是稿子里的章，对话是讨论；agent 用工具写入")]] as const).map(([m, label, hint]) => (
+					{([["roleplay", t("扮演"), t("你是故事里的人，回复就是正文")], ["agent", "agent", t("正文是独立文件，对话是讨论；agent 用工具写入")]] as const).map(([m, label, hint]) => (
 						<button key={m} type="button" role="radio" aria-checked={mode === m} className={`spv2-modal-mode ${mode === m ? "on" : ""}`} onClick={() => setMode(m)}>
 							<span className="spv2-modal-mode-label">{label}</span>
 							<span className="spv2-modal-mode-hint">{hint}</span>
@@ -156,8 +156,8 @@ export function NewProjectBox({ initial, busy, onDone }: { initial: string; busy
 				</div>
 				{mode === "agent" && greetings && greetings.length > 0 && (
 					<div className="spv2-modal-greetings" role="radiogroup" aria-label={t("开场白")}>
-						<div className="spv2-modal-greetings-title">{t("开场白落成稿子的第一个文件（000-开场.md）")}</div>
-						{[{ index: -1, label: t("不落，空稿子开始"), text: "" }, ...greetings].map((g) => (
+						<div className="spv2-modal-greetings-title">{t("开场白落成正文的第一个文件（000-开场.md）")}</div>
+						{[{ index: -1, label: t("不落，从空白正文开始"), text: "" }, ...greetings].map((g) => (
 							<button key={g.index} type="button" role="radio" aria-checked={greeting === g.index} className={`spv2-modal-greeting ${greeting === g.index ? "on" : ""}`} onClick={() => setGreeting(g.index)}>
 								<span className="spv2-modal-greeting-label">{g.label}</span>
 								{g.text && <span className="spv2-modal-greeting-hint">{g.text.replace(/\s+/g, " ").slice(0, 60)}</span>}
@@ -319,7 +319,7 @@ function ChatGroup({
 					<button type="button" className="spv2-chatname" onClick={openLatest} disabled={list.length === 0}>
 						<IconFolder size={15} />
 						<span className="spv2-chatname-text">{chatLabel(chat)}</span>
-						{chat.mode === "agent" && <span className="spv2-chat-mode" title={t("agent 模式：正文是稿子里的章")}>agent</span>}
+						{chat.mode === "agent" && <span className="spv2-chat-mode" title={t("agent 模式：正文是独立文件")}>agent</span>}
 					</button>
 				)}
 				{!renaming && (

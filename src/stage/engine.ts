@@ -1471,8 +1471,8 @@ export class StageEngine {
 						const file = typeof input.file === "string" && input.file.trim() ? input.file.trim() : undefined;
 						const shot = await this.#deps.screenshot(file, signal);
 						if (!shot) return { content: [{ type: "text", text: "没有截到画面：没有打开的页面，或页面没有在限时内回报。请让用户在浏览器里打开梨园后重试。" }], isError: true };
-						ev.onActivity?.(`截图${file ? `「${file}」` : "（整页稿子）"} · ${shot.width}×${shot.height}`);
-						return { content: [{ type: "text", text: `已截取${file ? `「${file}」` : "整页稿子"}的当前画面（${shot.width}×${shot.height}）。` }, { type: "image", data: shot.png, mimeType: "image/png" }] };
+						ev.onActivity?.(`截图${file ? `「${file}」` : "（整页正文）"} · ${shot.width}×${shot.height}`);
+						return { content: [{ type: "text", text: `已截取${file ? `「${file}」` : "整页正文"}的当前画面（${shot.width}×${shot.height}）。` }, { type: "image", data: shot.png, mimeType: "image/png" }] };
 					}
 					if (mcpNames.has(name)) {
 						const result = await runMcpStageTool(this.#deps.mcp!, name, input, signal);

@@ -1731,6 +1731,26 @@ html[data-theme="dark"] .msg-md-code {
 	letter-spacing: 0.04em;
 }
 
+.empty-hint-action {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 6px;
+	padding: 6px 16px;
+	border: 1px solid var(--accent);
+	border-radius: 999px;
+	background: var(--accent-wash);
+	color: var(--accent);
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+	text-decoration: none;
+	transition: background 0.15s, transform 0.15s;
+}
+.empty-hint-action:active {
+	transform: scale(0.97);
+}
+
 /* 思维链:纯文本折叠(模型原始输出,与正文区隔) */
 .thinking {
 	margin: 0 0 10px;
@@ -3867,7 +3887,7 @@ input.panel-search.num {
 	.stage-col-right .stage-col-body {
 		padding: 14px 16px 24px;
 	}
-	/* agent 模式：面板盖稿子那一页，但输入栏始终露在最下方 */
+	/* agent 模式：面板盖正文那一页，但输入栏始终露在最下方 */
 	.agent-pages-on > .story-pane > .stage-col-right {
 		position: fixed !important;
 		inset: auto !important;
@@ -8238,7 +8258,7 @@ label.drawer-btn {
 	}
 }
 
-/* ── agent 模式（docs/PLAN-AGENT-MODE.md §5.6）：稿子在中间（60%），讨论在右（40%）；手机上是两个页签 ── */
+/* ── agent 模式（docs/PLAN-AGENT-MODE.md §5.6）：正文在中间（60%），讨论在右（40%）；手机上是两个页签 ── */
 .story-pane {
 	display: flex;
 	flex-direction: column;
@@ -8591,7 +8611,7 @@ label.drawer-btn {
 		opacity: 1;
 	}
 }
-/* 顶栏副标题里的形态标记（agent 子项目没有扮演｜工作开关）；手机上兼作稿子页签入口 */
+/* 顶栏副标题里的形态标记（agent 子项目没有扮演｜工作开关）；手机上兼作正文页签入口 */
 .tb-sub-mode-agent {
 	padding: 1px 9px;
 	font-size: 12px;
@@ -8614,7 +8634,7 @@ label.drawer-btn {
 		display: inline;
 	}
 }
-/* 讨论区的检查点卡片：一轮的稿子改动留痕，点击到稿子视图的历史里看 diff */
+/* 讨论区的检查点卡片：一轮的正文改动留痕，点击到稿子视图的历史里看 diff */
 .chapter-card {
 	display: flex;
 	align-items: center;
@@ -8795,7 +8815,7 @@ label.drawer-btn {
 	color: var(--text);
 }
 @media (min-width: 1000px) {
-	/* 桌面：稿子 | 分隔条 | 讨论，比例由 --story-frac 定（默认 0.6，可拖，双击复位） */
+	/* 桌面：正文 | 分隔条 | 讨论，比例由 --story-frac 定（默认 0.6，可拖，双击复位） */
 	.agent-pages.agent-pages-on {
 		display: flex;
 		flex: 1 1 auto;
@@ -8848,7 +8868,7 @@ label.drawer-btn {
 	.story-chat-toggle {
 		display: inline-flex;
 	}
-	/* 讨论收起：稿子铺满，分隔条与讨论都不占位 */
+	/* 讨论收起：正文铺满，分隔条与讨论都不占位 */
 	.agent-pages-chat-collapsed .story-pane {
 		flex: 1 1 auto;
 		width: auto;
@@ -8860,7 +8880,7 @@ label.drawer-btn {
 	}
 	/*
 	 * agent 模式：登场名录这类面板不新开一栏（会把稿子和讨论挤成三列），
-	 * 盖在中间的稿子栏上，讨论栏不动。手机上底部停在输入栏之上（--agent-composer-h 由 JS 量）。
+	 * 盖在中间的正文栏上，讨论栏不动。手机上底部停在输入栏之上（--agent-composer-h 由 JS 量）。
 	 */
 	.center-agent-split .stage-wrap.agent-panel-cover {
 		position: static;
@@ -8871,7 +8891,7 @@ label.drawer-btn {
 		max-width: none !important;
 		border-right: none !important;
 	}
-	/* 面板从讨论栏里摘出来，盖到中间的稿子栏上；讨论栏保持原样 */
+	/* 面板从讨论栏里摘出来，盖到中间的正文栏上；讨论栏保持原样 */
 	.agent-pages-on > .story-pane > .stage-col-right {
 		position: absolute;
 		inset: 0;
@@ -8881,7 +8901,7 @@ label.drawer-btn {
 		z-index: 6;
 		animation: none;
 	}
-	/* 讨论收起后，稿子右侧留一条竖向入口把它拉回来 */
+	/* 讨论收起后，正文右侧留一条竖向入口把它拉回来 */
 	.agent-chat-reopen {
 		position: absolute;
 		right: 0;
@@ -8910,7 +8930,7 @@ label.drawer-btn {
 	}
 }
 @media (max-width: 999px) {
-	/* 手机：稿子与讨论是横向两页，手指左右滑（scroll-snap），也可点按钮跳页 */
+	/* 手机：正文与讨论是横向两页，手指左右滑（scroll-snap），也可点按钮跳页 */
 	.agent-pages.agent-pages-on {
 		display: flex;
 		flex: 1 1 auto;
@@ -8919,6 +8939,12 @@ label.drawer-btn {
 		overflow-x: auto;
 		overflow-y: hidden;
 		scroll-snap-type: x mandatory;
+	/* 保证聊天列表与正文列表允许横向手势穿透到外层两页滑动容器 */
+	.agent-pages.agent-pages-on .list,
+	.agent-pages.agent-pages-on .story-body {
+		touch-action: pan-y;
+		overscroll-behavior-x: auto;
+	}
 		overscroll-behavior-x: contain;
 		scrollbar-width: none;
 	}
@@ -8940,7 +8966,7 @@ label.drawer-btn {
 	.agent-chat-reopen {
 		display: none;
 	}
-	/* agent 讨论页保留短标题行，让“稿子”按钮可见；普通聊天仍隐藏冗余标头 */
+	/* agent 讨论页保留短标题行，让“正文”按钮可见；普通聊天仍隐藏冗余标头 */
 	.center.center-agent-split .stage-col-left .stage-col-head {
 		display: flex !important;
 		height: 38px;

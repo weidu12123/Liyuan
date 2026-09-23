@@ -557,7 +557,7 @@ export default function App() {
 		let live = true;
 		void apiGet<{ files: StoryFileView[] }>("/api/story", { bypassCache: true })
 			.then((r) => { if (live) setStoryFiles(r.files); })
-			.catch((e) => { if (live) pushToast("warning", t("读取稿子失败：{err}", { err: e instanceof Error ? e.message : String(e) })); });
+			.catch((e) => { if (live) pushToast("warning", t("读取正文失败：{err}", { err: e instanceof Error ? e.message : String(e) })); });
 		return () => { live = false; };
 	}, [storyKey, pushToast]);
 
@@ -1072,7 +1072,7 @@ export default function App() {
 					case "screenshot":
 						void (async () => {
 							const shot = await captureStoryPng(frame.file);
-							try { await apiPost("/api/screenshot/report", { id: frame.id, png: shot?.png ?? "", width: shot?.width ?? 0, height: shot?.height ?? 0, ...(shot ? {} : { note: t("没有可截的稿子") }) }); } catch { /* 回报失败：服务端按超时处理 */ }
+							try { await apiPost("/api/screenshot/report", { id: frame.id, png: shot?.png ?? "", width: shot?.width ?? 0, height: shot?.height ?? 0, ...(shot ? {} : { note: t("没有可截的正文") }) }); } catch { /* 回报失败：服务端按超时处理 */ }
 						})();
 						break;
 				case "update": {
@@ -1919,12 +1919,13 @@ export default function App() {
 	/** agent 子项目的分栏：主页与写卡平台打开时让位（写卡平台占同一块中间区域） */
 	const agentSplit = conversationMode === "agent" && !welcome && !studioOpen;
 
-	// 手机：两页是一个横向 scroll-snap 容器，页签值与滚动位置双向对齐——
-	// 点按钮 → 滚过去；手指滑过去停稳（150ms 无滚动）→ 页签值跟上，效果里再滚一次把没吸到位的补到位。
+	// 手机：两页横滑切换。
+	// 双轨保障：原生 scroll-snap 滚动 + 触摸滑移手势识别。
+	// 用户手指按住拖动期间绝不执行任何自动吸附回滚；抬手时水平位移主导即顺畅切页。
 	const storyTabRef = useRef(storyTab);
 	storyTabRef.current = storyTab;
-	/** 程序发起的平滑滚动的目标位置：没到之前不按当前位置反推页签（否则慢机器上半路会被判成另一页滚回去） */
 	const pendingLeftRef = useRef<number | null>(null);
+	const touchingRef = useRef(false);
 	useEffect(() => {
 		const el = pagesRef.current;
 		if (!agentSplit || !el || !mobileRef.current) return;
@@ -1939,8 +1940,11 @@ export default function App() {
 		if (!agentSplit || !el) return;
 		if (mobileRef.current) el.scrollLeft = storyTabRef.current === "story" ? 0 : el.clientWidth;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let startX = 0;
+		let startY = 0;
+
 		const settle = () => {
-			if (!mobileRef.current || el.clientWidth === 0) return;
+			if (!mobileRef.current || el.clientWidth === 0 || touchingRef.current) return;
 			const pending = pendingLeftRef.current;
 			if (pending !== null) {
 				if (Math.abs(el.scrollLeft - pending) > 1) { el.scrollTo({ left: pending, behavior: "smooth" }); return; }
@@ -1955,16 +1959,50 @@ export default function App() {
 		};
 		const onScroll = () => {
 			if (timer) clearTimeout(timer);
-			timer = setTimeout(settle, 150);
+			timer = setTimeout(settle, 100);
 		};
+		const onTouchStart = (e: TouchEvent) => {
+			touchingRef.current = true;
+			pendingLeftRef.current = null;
+			const t0 = e.touches[0];
+			if (t0) { startX = t0.clientX; startY = t0.clientY; }
+		};
+		const onTouchEnd = (e: TouchEvent) => {
+			touchingRef.current = false;
+			const t0 = e.changedTouches[0];
+			if (t0 && mobileRef.current) {
+				const dx = t0.clientX - startX;
+				const dy = t0.clientY - startY;
+				if (Math.abs(dx) > 35 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+					if (dx > 0 && storyTabRef.current === "chat") {
+						setStoryTab("story");
+						return;
+					}
+					if (dx < 0 && storyTabRef.current === "story") {
+						setStoryTab("chat");
+						return;
+					}
+				}
+			}
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(settle, 60);
+		};
+		const onTouchCancel = () => {
+			touchingRef.current = false;
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(settle, 60);
+		};
+
 		el.addEventListener("scroll", onScroll, { passive: true });
-		// 手指一碰就放弃程序目标，让位给用户的滑动
-		const onTouch = () => { pendingLeftRef.current = null; };
-		el.addEventListener("touchstart", onTouch, { passive: true });
+		el.addEventListener("touchstart", onTouchStart, { passive: true });
+		el.addEventListener("touchend", onTouchEnd, { passive: true });
+		el.addEventListener("touchcancel", onTouchCancel, { passive: true });
 		return () => {
 			if (timer) clearTimeout(timer);
 			el.removeEventListener("scroll", onScroll);
-			el.removeEventListener("touchstart", onTouch);
+			el.removeEventListener("touchstart", onTouchStart);
+			el.removeEventListener("touchend", onTouchEnd);
+			el.removeEventListener("touchcancel", onTouchCancel);
 		};
 	}, [agentSplit]);
 	useEffect(() => {
@@ -2147,8 +2185,8 @@ export default function App() {
 					</span>
 					<span className="tb-title-sub">
 						{conversationMode === "agent" ? (
-							<button type="button" className="tb-sub-mode tb-sub-mode-agent" title={t("agent 模式：正文是稿子里的章，这里的对话是讨论；手机上点它看稿子")} onClick={() => setStoryTab("story")}>
-								agent<span className="tb-sub-mode-agent-story">{storyOutline?.length ? t("· 稿子 {n} 章", { n: storyOutline.length }) : t("· 稿子")}</span>
+							<button type="button" className="tb-sub-mode tb-sub-mode-agent" title={t("agent 模式：正文是独立章节文件，这里的对话是讨论；手机上点它看正文")} onClick={() => setStoryTab("story")}>
+								agent<span className="tb-sub-mode-agent-story">{storyOutline?.length ? t("· 正文 {n} 章", { n: storyOutline.length }) : t("· 正文")}</span>
 							</button>
 						) : (
 						<div className="tb-sub-mode" role="radiogroup" aria-label={t("对话模式")} title={t("扮演：演剧情；工作：改卡、写前端/脚本、任何要动代码与文件的任务")}>
@@ -2247,7 +2285,7 @@ export default function App() {
 						style={agentSplit ? ({ "--story-frac": storyFrac } as React.CSSProperties) : undefined}
 					>
 					{agentSplit && (
-						<aside className={`story-pane ${storyTab === "story" ? "story-pane-active" : ""}`} aria-label={t("稿子")}>
+						<aside className={`story-pane ${storyTab === "story" ? "story-pane-active" : ""}`} aria-label={t("正文")}>
 							<StoryPane
 								files={storyFiles}
 								checkpoints={storyCheckpoints}
@@ -2269,7 +2307,7 @@ export default function App() {
 								onRestore={(cp, scope) => {
 									const q = scope === "both"
 										? t("文件和对话一起回到「{msg}」这轮输入之前？之后的讨论会从当前会话里截掉。", { msg: cp.message })
-										: t("把稿子恢复到「{msg}」之后的样子？讨论不变，恢复本身也会记成一条检查点。", { msg: cp.message });
+										: t("把正文恢复到「{msg}」之后的样子？讨论不变，恢复本身也会记成一条检查点。", { msg: cp.message });
 									if (window.confirm(q)) ws.send({ type: "story_restore", checkpointId: cp.id, scope });
 								}}
 							/>
@@ -2280,7 +2318,7 @@ export default function App() {
 							className="agent-splitter"
 							role="separator"
 							aria-orientation="vertical"
-							aria-label={t("拖动调整稿子与讨论的比例")}
+							aria-label={t("拖动调整正文与讨论的比例")}
 							title={t("拖动调整比例，双击恢复默认")}
 							onPointerDown={onSplitterDown}
 							onDoubleClick={() => setStoryFrac(0.6)}
@@ -2297,7 +2335,7 @@ export default function App() {
 								</span>
 								{agentSplit && (
 									<button type="button" className="story-tab-btn" onClick={() => setStoryTab("story")}>
-										{storyOutline?.length ? t("稿子（{n} 章）", { n: storyOutline.length }) : t("稿子")}
+										{storyOutline?.length ? t("正文（{n} 章）", { n: storyOutline.length }) : t("正文")}
 									</button>
 								)}
 							</div>
@@ -2332,7 +2370,20 @@ export default function App() {
 												<BrandLogo className="empty-logo" size={96} />
 												<span className="empty-title">{t("梨园")}</span>
 											</div>
-											<div className="empty-hint">{conn === "open" ? t("新的会话，开始对话吧。") : t("连接后台中…")}</div>
+											<div className="empty-hint">
+													{conn === "open"
+														? (agentSplit && mobileRef.current ? (
+															<button
+																type="button"
+																className="empty-hint-action"
+																onClick={() => setStoryTab("story")}
+																title={t("右划进入正文页面")}
+															>
+																{t("右划进入正文页面")} ›
+															</button>
+														) : t("新的会话，开始对话吧。"))
+														: t("连接后台中…")}
+												</div>
 										</div>
 									)}
 									{blocks.map((b, bi) =>
@@ -2679,7 +2730,7 @@ export default function App() {
 							<textarea
 								ref={inputRef}
 								value={input}
-								placeholder={conn === "open" ? (conversationMode === "authoring" ? t("描述要做的事：改卡、写前端或脚本、整理文件…") : conversationMode === "agent" ? t("讨论剧情、下达写作指令；正文由 agent 写进稿子…") : userName ? t("以「{name}」的身份发言…", { name: userName }) : t("输入消息…")) : t("等待连接…")}
+								placeholder={conn === "open" ? (conversationMode === "authoring" ? t("描述要做的事：改卡、写前端或脚本、整理文件…") : conversationMode === "agent" ? t("讨论剧情、下达写作指令；正文由 agent 写入文件…") : userName ? t("以「{name}」的身份发言…", { name: userName }) : t("输入消息…")) : t("等待连接…")}
 								rows={1}
 								onFocus={() => {
 									setComposerTools(false);

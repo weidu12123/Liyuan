@@ -51,16 +51,16 @@ export function chapterTitle(name: string): string {
 	return stripped && /[^\d.\-_ ]/.test(stripped) ? stripped : stem;
 }
 
-/** 项目状态块里的【稿子目录】：数据，不带正文，不带指令。 */
+/** 项目状态块里的【正文目录】：数据，不带正文，不带指令。 */
 export function formatStoryIndex(files: StoryFile[]): string {
-	if (!files.length) return `【稿子目录】${CHAT_STORY_DIR}/ 尚无文件。`;
+	if (!files.length) return `【正文目录】${CHAT_STORY_DIR}/ 尚无文件。`;
 	const total = files.reduce((n, f) => n + f.chars, 0);
 	const fmt = (ms: number) => {
 		const d = new Date(ms);
 		const p = (n: number) => String(n).padStart(2, "0");
 		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 	};
-	return [`【稿子目录】${CHAT_STORY_DIR}/ 共 ${files.length} 个文件 ${total} 字（按文件名排序）`, ...files.map((f) => `${f.name}　${f.chars} 字　${fmt(f.mtime)}`)].join("\n");
+	return [`【正文目录】${CHAT_STORY_DIR}/ 共 ${files.length} 个文件 ${total} 字（按文件名排序）`, ...files.map((f) => `${f.name}　${f.chars} 字　${fmt(f.mtime)}`)].join("\n");
 }
 
 // ---------------- 快照仓 ----------------

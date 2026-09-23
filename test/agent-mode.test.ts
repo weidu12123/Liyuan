@@ -110,7 +110,7 @@ test("沙箱：正文/ 对原生写开放；历史/ 与 会话/ 拒绝；状态�
 
 		writeFileSync(join(chat.dir, "正文", "001-初雪.md"), "第一章正文。");
 		const block = buildAgentStateBlock({ state: defaultState(), files: listStoryFiles(join(chat.dir, "正文")) });
-		assert.match(block, /【稿子目录】正文\/ 共 1 个文件 6 字/);
+		assert.match(block, /【正文目录】正文\/ 共 1 个文件 6 字/);
 		assert.match(block, /001-初雪\.md　6 字/);
 		assert.doesNotMatch(block, /第一章正文/, "状态块不带正文");
 		const history = [{ role: "user", content: [{ type: "text", text: "继续" }] }];

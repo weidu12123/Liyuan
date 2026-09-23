@@ -54,7 +54,7 @@ export const AGENT_ASK_TOOL: StageTool = {
  */
 export const AGENT_SCREENSHOT_TOOL: StageTool = {
 	name: "screenshot", mode: "read",
-	description: "截取用户此刻屏幕上渲染出来的稿子画面（含卡皮肤、图表、排版），回执里会附上这张图，你能直接看到。写完或改完一章后用它核对实际显示效果，而不是只看文件原文。file 给章文件名就只截那一章，不给就截整页稿子。",
+	description: "截取用户此刻屏幕上渲染出来的正文画面（含卡皮肤、图表、排版），回执里会附上这张图，你能直接看到。写完或改完一章后用它核对实际显示效果，而不是只看文件原文。file 给章文件名就只截那一章，不给就截整页正文。",
 	parameters: {
 		type: "object",
 		properties: { file: { type: "string", description: "只截这一章的文件名（如 001-初雪.md）；省略＝整页稿子" } },

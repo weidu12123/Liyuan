@@ -15,7 +15,7 @@ export const app: Record<string, string> = {
 
 	// 通知 / 提示
 	"存档 {date} {time}": "Save {date} {time}",
-	"读取稿子失败：{err}": "Failed to read the manuscript: {err}",
+	"读取正文失败：{err}": "Failed to read story text: {err}",
 	"配音已生成": "Voice-over generated",
 	"（正文未流出，见思维链）": "(No story text was produced; see the thinking.)",
 	"面板「{name}」已更新": "Panel “{name}” updated",
@@ -52,9 +52,9 @@ export const app: Record<string, string> = {
 	"新的一层，起名后建": "A new layer; name it to create",
 	"在当前项目里再开一个": "Start another in the current project",
 	"新对话": "New chat",
-	"agent 模式：正文是稿子里的章，这里的对话是讨论；手机上点它看稿子": "Agent mode: the story lives in the manuscript chapters and this chat is the discussion; on mobile, tap to open the manuscript",
-	"· 稿子 {n} 章": "· manuscript, {n} chapter|· manuscript, {n} chapters",
-	"· 稿子": "· manuscript",
+	"agent 模式：正文是独立章节文件，这里的对话是讨论；手机上点它看正文": "Agent mode: the story text lives in standalone chapter files and this chat is the discussion; on mobile, tap to view the text",
+	"· 正文 {n} 章": "· text, {n} chapter|· text, {n} chapters",
+	"· 正文": "· text",
 	"对话模式": "Chat mode",
 	"扮演：演剧情；工作：改卡、写前端/脚本、任何要动代码与文件的任务": "Roleplay: play the story. Work: edit the card, write front-ends or scripts, anything that touches code and files",
 	"生成中": "Generating",
@@ -69,9 +69,10 @@ export const app: Record<string, string> = {
 
 	// 舞台 / 稿子
 	"文件和对话一起回到「{msg}」这轮输入之前？之后的讨论会从当前会话里截掉。": "Restore files and chat to just before the input “{msg}”? Later discussion is cut from the current session.",
-	"把稿子恢复到「{msg}」之后的样子？讨论不变，恢复本身也会记成一条检查点。": "Restore the manuscript to how it was after “{msg}”? The discussion stays; the restore itself is recorded as a checkpoint.",
+	"把正文恢复到「{msg}」之后的样子？讨论不变，恢复本身也会记成一条检查点。": "Restore the story text to how it was after “{msg}”? The discussion stays; the restore itself is recorded as a checkpoint.",
 	"剧情推演": "Story",
-	"稿子（{n} 章）": "Manuscript ({n} chapter)|Manuscript ({n} chapters)",
+	"正文（{n} 章）": "Story text ({n} chapter)|Story text ({n} chapters)",
+	"右划进入正文页面": "Swipe right to open story text",
 	"新的会话，开始对话吧。": "A new session. Start the conversation.",
 	"连接后台中…": "Connecting to the server…",
 	"按修改后的输入重新生成": "Regenerate from the edited input",
@@ -90,7 +91,7 @@ export const app: Record<string, string> = {
 	"上传图片或文件": "Upload an image or file",
 	"上传": "Upload",
 	"描述要做的事：改卡、写前端或脚本、整理文件…": "Describe the task: edit the card, write a front-end or script, organize files…",
-	"讨论剧情、下达写作指令；正文由 agent 写进稿子…": "Discuss the story or give writing instructions; the agent writes the text into the manuscript…",
+	"讨论剧情、下达写作指令；正文由 agent 写入文件…": "Discuss the story or give writing instructions; the agent writes text into files…",
 	"以「{name}」的身份发言…": "Speak as “{name}”…",
 	"输入消息…": "Type a message…",
 	"等待连接…": "Waiting for connection…",

@@ -16,7 +16,7 @@ import { PreviousDraftEditor } from "./previous-draft.ts";
 import { projectToolContext } from "./context.ts";
 import { authoringHistory, authoringRequestIds, contextText, conversationMode, CONVERSATION_MODE_TYPE, CONVERSATION_PROCESS_TYPE, isConversationMode, roleplayHistory, type ConversationMode, type ContextMessage } from "../conversation-mode.ts";
 import { authoringTools, authoringSystemPrompt, runAuthoringTool, AUTHORING_NATIVE_TOOLS, CONVERSATION_MODE_TOOL } from "./authoring.ts";
-import { AGENT_ASK_TOOL, agentSystemPrompt, buildAgentStateBlock } from "./agent.ts";
+import { AGENT_ASK_TOOL, AGENT_SCREENSHOT_TOOL, agentSystemPrompt, buildAgentStateBlock } from "./agent.ts";
 import { describeChange, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, storyDirectory, type ChangeSet } from "./story-history.ts";
 import { agentHistory, buildDiscussionSummaryPrompt, DISCUSSION_SUMMARY_TYPE, planDiscussionCompaction } from "./discussion.ts";
 import { readFileSync } from "node:fs";
@@ -379,6 +379,11 @@ export interface StageEngineDeps {
 	 * 未注入 = 台上无 ask 工具（依赖缺失的工具不上清单）。
 	 */
 	askUser?: (question: string, options: string[], signal?: AbortSignal) => Promise<string | undefined>;
+	/**
+	 * 截图（agent 模式）：请连接中的页面把当前稿子画面截成 PNG，返回 base64。
+	 * null = 没有连接的页面或超时。未注入 = 不上 screenshot 工具。
+	 */
+	screenshot?: (file: string | undefined, signal?: AbortSignal) => Promise<{ png: string; width: number; height: number } | null>;
 	/** 仅供场记/压缩旁路使用；主模型由 pi 调用。 */
 	sideStreamFn: StageStreamFn;
 	events?: StageEvents;
@@ -901,6 +906,7 @@ export class StageEngine {
 			...stageTools(config.language, readDeps).filter((t) => !t.name.startsWith("worldline_")),
 			...(skillList.length ? [skillReadTool(config.language, skillList)] : []),
 			...(askEnabled ? [AGENT_ASK_TOOL] : []),
+			...(this.#deps.screenshot ? [AGENT_SCREENSHOT_TOOL] : []),
 			...mediaTools, ...mcpTools,
 			...authoringTools(config.language, cardDeps),
 		] : [];
@@ -1460,6 +1466,13 @@ export class StageEngine {
 						}
 						ev.onActivity?.(`ask「${question.slice(0, 24)}」· 用户作答`);
 						return { content: [{ type: "text", text: `用户已作答：「${answer}」。` }] };
+					}
+					if (agentTurn && name === "screenshot" && this.#deps.screenshot) {
+						const file = typeof input.file === "string" && input.file.trim() ? input.file.trim() : undefined;
+						const shot = await this.#deps.screenshot(file, signal);
+						if (!shot) return { content: [{ type: "text", text: "没有截到画面：没有打开的页面，或页面没有在限时内回报。请让用户在浏览器里打开梨园后重试。" }], isError: true };
+						ev.onActivity?.(`截图${file ? `「${file}」` : "（整页稿子）"} · ${shot.width}×${shot.height}`);
+						return { content: [{ type: "text", text: `已截取${file ? `「${file}」` : "整页稿子"}的当前画面（${shot.width}×${shot.height}）。` }, { type: "image", data: shot.png, mimeType: "image/png" }] };
 					}
 					if (mcpNames.has(name)) {
 						const result = await runMcpStageTool(this.#deps.mcp!, name, input, signal);

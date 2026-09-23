@@ -320,6 +320,8 @@ export type ServerFrame =
 	| { type: "choice_resolved"; id: string; answer?: string; stopped?: boolean }
 	/** agent 请求页面渲染当前创作稿并回报（POST /api/card/authoring/preview-report） */
 	| { type: "card_preview"; id: string; data: CardProjectPreview; message: string; variables: Record<string, unknown>; wait: number }
+	/** agent 请求页面把当前稿子画面截成图并回报（POST /api/screenshot/report） */
+	| { type: "screenshot"; id: string; file?: string }
 	/** 在线更新状态变化（发现新版/下载进度/就绪）：全量状态推送 */
 	| { type: "update"; update: UpdateWire }
 	| { type: "error"; text: string };

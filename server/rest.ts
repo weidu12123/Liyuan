@@ -166,6 +166,7 @@ import { cardAgentsPath, projectCardToAgents } from "../src/card-agents.ts";
 import { formatEntry, lorebookSourceSuffix, stripEntriesWhere, uniqueEntryName } from "../src/prompt-entries.ts";
 import { cardProjectOperation, inspectCardProject, previewCardProject, readCardCover } from "../src/card-authoring.ts";
 import type { CardPreviewReport } from "./card-preview.ts";
+import type { ScreenshotReport } from "./screenshot.ts";
 import { readDeclaration, removeDeclaration, writeDeclarationFromDetection } from "../src/lorebook-declare.ts";
 import { constantLoreOf, loadStageMaterials } from "../src/stage/materials.ts";
 import {
@@ -271,6 +272,8 @@ export interface RestHost {
 	softRefreshConfig(opts?: { reprocessPreset?: boolean }): Promise<void>;
 	/** 页面回报 agent 预览结果；未决请求不存在时返回 false */
 	settleCardPreview(report: CardPreviewReport): boolean;
+	/** 页面回报截图；未决请求不存在时返回 false */
+	settleScreenshot(report: ScreenshotReport): boolean;
 	/** 与写卡工具同一条预览通道（REST 侧供面板与验证用） */
 	runCardPreview(args: Record<string, unknown>): Promise<unknown>;
 	/** config.card 已写盘后调用：切到该卡最近会话，无则新建 */
@@ -3831,6 +3834,13 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 					!!e && typeof e === "object" && typeof (e as { level?: unknown }).level === "string" && typeof (e as { message?: unknown }).message === "string")
 					.slice(0, 200).map((e) => ({ level: e.level, source: typeof e.source === "string" ? e.source : t("预览"), message: e.message.slice(0, 8000) }));
 				sendJson(res, 200, { accepted: host.settleCardPreview({ id: body.id, ready: body.ready === true, events }) });
+				return true;
+			}
+			// 页面回报截图：PNG 的 base64
+			case "POST /api/screenshot/report": {
+				const body = JSON.parse(await readBody(req)) as Partial<ScreenshotReport>;
+				if (typeof body.id !== "string" || typeof body.png !== "string") throw new Error(t("截图回报格式不对"));
+				sendJson(res, 200, { accepted: host.settleScreenshot({ id: body.id, png: body.png, width: Number(body.width) || 0, height: Number(body.height) || 0, ...(typeof body.note === "string" ? { note: body.note.slice(0, 200) } : {}) }) });
 				return true;
 			}
 			case "POST /api/card/authoring":

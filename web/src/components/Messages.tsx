@@ -16,6 +16,7 @@ import type { WireActivity, WireChoice, WireMsg } from "../wire.ts";
 import { lineDiff } from "../diff.ts";
 import { estimateTokens, formatTokenCount, type TurnSegment } from "../timeline.ts";
 import { HtmlFrame } from "./HtmlFrame.tsx";
+import { MermaidBlock } from "./MermaidBlock.tsx";
 import { t } from "../i18n/index.ts";
 
 /** 一档卡皮肤：显示向规则 + 宏名（Task 7 由 App 注入） */
@@ -158,6 +159,7 @@ export function Paragraphs({ text }: { text: string }) {
 		<>
 			{parts.map((p, i) => {
 				if (p.kind === "code") {
+					if (p.lang.toLowerCase() === "mermaid") return <MermaidBlock key={i} code={p.code} />;
 					return (
 						<pre key={i} className="msg-md-code" data-lang={p.lang || undefined}>
 							<code>{p.code}</code>

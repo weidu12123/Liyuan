@@ -50,6 +50,7 @@ import { StageEngine, type AssistantMsgLike, type StageModelLike, type StageStre
 import { displayConversationBranch, storyBranch, messageMode, isConversationMode } from "../src/conversation-mode.ts";
 import { cardProjectOperation, previewCardProject } from "../src/card-authoring.ts";
 import { buildCardPreviewRequest, CardPreviewHub } from "./card-preview.ts";
+import { ScreenshotHub, type ScreenshotReport } from "./screenshot.ts";
 import { stateFromBranch, type BranchEntryLike } from "../src/stage/assemble.ts";
 import {
 	activePanels,
@@ -385,6 +386,11 @@ const broadcast = (frame: ServerFrame) => {
 const cardPreviews = new CardPreviewHub((request) => {
 	const frame = { type: "card_preview" as const, ...request };
 	broadcast(frame);
+	return [...clients].filter((ws) => ws.readyState === ws.OPEN).length;
+});
+/** agent 截图：广播请求，页面把渲染好的稿子截成 PNG 回报 */
+const screenshots = new ScreenshotHub((request) => {
+	broadcast({ type: "screenshot", ...request });
 	return [...clients].filter((ws) => ws.readyState === ws.OPEN).length;
 });
 
@@ -1528,6 +1534,7 @@ const restHost: RestHost = {
 	cwd,
 	isStreaming: () => session.isStreaming,
 	settleCardPreview: (report) => cardPreviews.settle(report),
+	settleScreenshot: (report) => screenshots.settle(report),
 	runCardPreview: (args) => {
 		const config = loadConfig(cwd);
 		const data = previewCardProject(cwd, currentCardPath(cwd, config), config.userName);
@@ -2536,6 +2543,12 @@ stage = new StageEngine({
 	// P7 剧情决策门禁（ask 工具）：复用 Phase 4 柱 1 的选择卡通道——
 	// 弹卡 → 用户作答（选项原文/自由输入）回喂模型重拟计划；停止 → 本拍收束，笔还给用户。
 	askUser: (question, options, signal) => askChoice(question, options, undefined, signal),
+	// 截图（agent 模式）：请连接中的页面截当前稿子画面。无页面或超时返回 null。
+	screenshot: async (file, signal) => {
+		const report = await screenshots.run({ id: screenshots.nextId(), ...(file ? { file } : {}) });
+		if (signal?.aborted) return null;
+		return report && report.png ? { png: report.png, width: report.width, height: report.height } : null;
+	},
 	// 媒体交付（8/06 重接）：show_image/audio/video/html + tts。
 	// 与 MCP 同源的断链——wire.ts 的消费端一直健在，缺的只是台上生产端。
 	media: true,
@@ -3168,6 +3181,7 @@ wss.on("connection", (ws, req) => {
 	// 断线重连 / 新端接入：补发当前挂起的决策询问（未决卡不随 hello 历史走）
 	for (const [id, p] of pendingChoices) ws.send(JSON.stringify(choiceFrame(id, p)));
 	for (const request of cardPreviews.pending()) ws.send(JSON.stringify({ type: "card_preview", ...request }));
+	for (const request of screenshots.pending()) ws.send(JSON.stringify({ type: "screenshot", ...request }));
 
 	ws.on("message", (data) => {
 		wsAlive.set(ws, true); // 任何入站帧都算活着——前端 20s 应用层 ping 覆盖 pong 迟到的情况

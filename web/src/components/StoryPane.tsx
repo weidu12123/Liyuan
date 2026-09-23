@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { WireCheckpoint, WireStoryFile } from "../wire.ts";
 import { RichContent, type SkinProp } from "./Messages.tsx";
+import { IconChevronLeft, IconChevronRight } from "./icons.tsx";
 import { t } from "../i18n/index.ts";
 
 /** text＝原文（编辑框用）；display＝服务端按扮演同一条链上过皮肤的上屏正文 */
@@ -120,6 +121,8 @@ export function StoryPane({
 	focus,
 	busy,
 	onBack,
+	chatCollapsed,
+	onToggleChat,
 	onEdit,
 	loadDiff,
 	onRestore,
@@ -133,8 +136,11 @@ export function StoryPane({
 	focus: { file?: string; checkpointId?: string; tick: number } | null;
 	/** 生成中：编辑/恢复不可用 */
 	busy: boolean;
-	/** 手机页签：回到讨论 */
+	/** 手机：滑回讨论那一页 */
 	onBack: () => void;
+	/** 桌面：讨论栏收起/展开 */
+	chatCollapsed: boolean;
+	onToggleChat: () => void;
 	/** 用户直接改稿（写文件并落检查点）；抛错＝失败提示 */
 	onEdit: (file: StoryFileView, text: string) => Promise<void>;
 	loadDiff: (id: string) => Promise<StoryDiffFile[]>;
@@ -175,6 +181,16 @@ export function StoryPane({
 					<button type="button" role="tab" aria-selected={tab === "text"} className={`story-tab ${tab === "text" ? "story-tab-on" : ""}`} onClick={() => setTab("text")}>{t("正文")}</button>
 					<button type="button" role="tab" aria-selected={tab === "history"} className={`story-tab ${tab === "history" ? "story-tab-on" : ""}`} onClick={() => setTab("history")}>{t("历史")}{checkpoints.length ? ` ${checkpoints.length}` : ""}</button>
 				</span>
+				<button
+					type="button"
+					className="story-chat-toggle"
+					onClick={onToggleChat}
+					aria-expanded={!chatCollapsed}
+					title={chatCollapsed ? t("展开讨论") : t("收起讨论")}
+					aria-label={chatCollapsed ? t("展开讨论") : t("收起讨论")}
+				>
+					{chatCollapsed ? <IconChevronLeft size={15} /> : <IconChevronRight size={15} />}
+				</button>
 			</div>
 			{tab === "history" ? (
 				<div className="story-body">

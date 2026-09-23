@@ -47,3 +47,16 @@ export const AGENT_ASK_TOOL: StageTool = {
 		required: ["question", "options"],
 	},
 };
+
+/**
+ * 截取用户此刻看到的稿子画面，回执里带图。只在有页面连接时上清单
+ * （this.#deps.screenshot 注入与否由宿主决定）。file 缺省截整页稿子。
+ */
+export const AGENT_SCREENSHOT_TOOL: StageTool = {
+	name: "screenshot", mode: "read",
+	description: "截取用户此刻屏幕上渲染出来的稿子画面（含卡皮肤、图表、排版），回执里会附上这张图，你能直接看到。写完或改完一章后用它核对实际显示效果，而不是只看文件原文。file 给章文件名就只截那一章，不给就截整页稿子。",
+	parameters: {
+		type: "object",
+		properties: { file: { type: "string", description: "只截这一章的文件名（如 001-初雪.md）；省略＝整页稿子" } },
+	},
+};

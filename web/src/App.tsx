@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { createPortal } from "react-dom";
 import {
 	apiGet,
 	apiGetCacheClear,
@@ -52,6 +53,7 @@ import {
 	IconBell,
 	IconCard,
 	IconChevronDown,
+	IconChevronLeft,
 	IconClose,
 	IconDock,
 	IconEdit,
@@ -111,6 +113,7 @@ import { SessionStatsBar, StatusStrip } from "./components/StatusStrip.tsx";
 import { UploadsPanel } from "./components/UploadsPanel.tsx";
 import { StoreModal, WorldlinePanel } from "./components/WorldlinePanel.tsx";
 import { StoryPane, type StoryDiffFile, type StoryFileView } from "./components/StoryPane.tsx";
+import { captureStoryPng } from "./captureStory.ts";
 import { useWire, type ConnState } from "./ws.ts";
 import type {
 	AuthorScript,
@@ -272,8 +275,20 @@ export default function App() {
 	const [storyOutline, setStoryOutline] = useState<WireStoryFile[] | null>(null);
 	const [storyCheckpoints, setStoryCheckpoints] = useState<WireCheckpoint[]>([]);
 	const [storyFiles, setStoryFiles] = useState<StoryFileView[] | null>(null);
-	/** 手机：稿子与讨论是两个页签 */
+	/** 手机：稿子与讨论是左右两页，横滑切换；这个值是当前停在哪一页 */
 	const [storyTab, setStoryTab] = useState<"story" | "chat">("chat");
+	/** 桌面：稿子占分栏的比例（可拖）与讨论栏是否收起，都记在本浏览器 */
+	const [storyFrac, setStoryFrac] = useState(() => {
+		try {
+			const v = Number(localStorage.getItem("liyuan.storyFrac"));
+			return v >= 0.2 && v <= 0.85 ? v : 0.6;
+		} catch { return 0.6; }
+	});
+	const [chatCollapsed, setChatCollapsed] = useState(() => {
+		try { return localStorage.getItem("liyuan.agentChatCollapsed") === "1"; } catch { return false; }
+	});
+	const pagesRef = useRef<HTMLDivElement | null>(null);
+	const storyDragRef = useRef(false);
 	/** 讨论区检查点卡片点击 → 稿子视图历史里展开它 */
 	const [storyFocus, setStoryFocus] = useState<{ file?: string; checkpointId?: string; tick: number } | null>(null);
 	const [toolNote, setToolNote] = useState<string | null>(null);
@@ -1054,6 +1069,12 @@ export default function App() {
 				case "card_preview":
 					setPreviewRequest({ id: frame.id, data: frame.data, message: frame.message, variables: frame.variables, wait: frame.wait });
 					break;
+					case "screenshot":
+						void (async () => {
+							const shot = await captureStoryPng(frame.file);
+							try { await apiPost("/api/screenshot/report", { id: frame.id, png: shot?.png ?? "", width: shot?.width ?? 0, height: shot?.height ?? 0, ...(shot ? {} : { note: "没有可截的稿子" }) }); } catch { /* 回报失败：服务端按超时处理 */ }
+						})();
+						break;
 				case "update": {
 					const prevErr = updateErrRef.current;
 					updateErrRef.current = frame.update.error ?? null;
@@ -1207,10 +1228,17 @@ export default function App() {
 		if (greetingOnly || messages.some((m) => m.channel === "greeting")) void refreshGreetingMeta();
 	}, [greetingOnly, messages, refreshGreetingMeta]);
 
-	// 跟随滚动：仅当用户本就在底部
+	// 跟随滚动：仅当用户本就在底部。
+	// 打开对话时消息一次全到，但卡皮肤的帧是落定后才把高度撑开的——只在 messages 变化时滚一次会滚在撑开之前，停在开头。
+	// 所以在「本就在底部」期间盯着列表高度，变高就补滚到底；用户一旦往上翻，atBottomRef 转 false，不再打扰。
 	useEffect(() => {
 		const el = listRef.current;
-		if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
+		if (!el) return;
+		const follow = () => { if (atBottomRef.current) el.scrollTop = el.scrollHeight; };
+		follow();
+		const ro = new ResizeObserver(follow);
+		for (const child of el.children) ro.observe(child);
+		return () => ro.disconnect();
 	}, [messages, streamText, streamThinking, thinkingLive, toolNote, liveActs, liveSegs, activeChoice]);
 
 	const onScroll = () => {
@@ -1891,6 +1919,96 @@ export default function App() {
 	/** agent 子项目的分栏：主页与写卡平台打开时让位（写卡平台占同一块中间区域） */
 	const agentSplit = conversationMode === "agent" && !welcome && !studioOpen;
 
+	// 手机：两页是一个横向 scroll-snap 容器，页签值与滚动位置双向对齐——
+	// 点按钮 → 滚过去；手指滑过去停稳（150ms 无滚动）→ 页签值跟上，效果里再滚一次把没吸到位的补到位。
+	const storyTabRef = useRef(storyTab);
+	storyTabRef.current = storyTab;
+	/** 程序发起的平滑滚动的目标位置：没到之前不按当前位置反推页签（否则慢机器上半路会被判成另一页滚回去） */
+	const pendingLeftRef = useRef<number | null>(null);
+	useEffect(() => {
+		const el = pagesRef.current;
+		if (!agentSplit || !el || !mobileRef.current) return;
+		const left = storyTab === "story" ? 0 : el.clientWidth;
+		if (Math.abs(el.scrollLeft - left) > 1) {
+			pendingLeftRef.current = left;
+			el.scrollTo({ left, behavior: "smooth" });
+		}
+	}, [agentSplit, storyTab]);
+	useEffect(() => {
+		const el = pagesRef.current;
+		if (!agentSplit || !el) return;
+		if (mobileRef.current) el.scrollLeft = storyTabRef.current === "story" ? 0 : el.clientWidth;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const settle = () => {
+			if (!mobileRef.current || el.clientWidth === 0) return;
+			const pending = pendingLeftRef.current;
+			if (pending !== null) {
+				if (Math.abs(el.scrollLeft - pending) > 1) { el.scrollTo({ left: pending, behavior: "smooth" }); return; }
+				pendingLeftRef.current = null;
+			}
+			const page = el.scrollLeft / el.clientWidth < 0.5 ? "story" : "chat";
+			if (page !== storyTabRef.current) setStoryTab(page);
+			else {
+				const left = page === "story" ? 0 : el.clientWidth;
+				if (Math.abs(el.scrollLeft - left) > 1) el.scrollTo({ left, behavior: "smooth" });
+			}
+		};
+		const onScroll = () => {
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(settle, 150);
+		};
+		el.addEventListener("scroll", onScroll, { passive: true });
+		// 手指一碰就放弃程序目标，让位给用户的滑动
+		const onTouch = () => { pendingLeftRef.current = null; };
+		el.addEventListener("touchstart", onTouch, { passive: true });
+		return () => {
+			if (timer) clearTimeout(timer);
+			el.removeEventListener("scroll", onScroll);
+			el.removeEventListener("touchstart", onTouch);
+		};
+	}, [agentSplit]);
+	useEffect(() => {
+		try { localStorage.setItem("liyuan.storyFrac", String(storyFrac)); } catch { /* 隐私模式等 */ }
+	}, [storyFrac]);
+	useEffect(() => {
+		try { localStorage.setItem("liyuan.agentChatCollapsed", chatCollapsed ? "1" : "0"); } catch { /* 同上 */ }
+	}, [chatCollapsed]);
+	// agent 模式手机：面板盖稿子页时底部停在输入栏之上，高度随输入栏（多行、键盘）实测
+	useEffect(() => {
+		if (!agentSplit) return;
+		const el = document.querySelector<HTMLElement>(".center-agent-split .composer");
+		if (!el) return;
+		const sync = () => document.documentElement.style.setProperty("--agent-composer-h", `${Math.round(el.getBoundingClientRect().height)}px`);
+		sync();
+		const ro = new ResizeObserver(sync);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [agentSplit]);
+	/** 桌面分隔条：按住拖动改稿子占比；双击回到 60%。拖动期间给容器挂 dragging，让卡皮肤 iframe 不吃指针 */
+	const onSplitterDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+		const box = pagesRef.current;
+		if (!box) return;
+		e.preventDefault();
+		e.currentTarget.setPointerCapture(e.pointerId);
+		storyDragRef.current = true;
+		box.classList.add("agent-pages-dragging");
+		const rect = box.getBoundingClientRect();
+		const move = (ev: PointerEvent) => {
+			if (!storyDragRef.current || rect.width === 0) return;
+			setStoryFrac(Math.min(0.85, Math.max(0.2, (ev.clientX - rect.left) / rect.width)));
+		};
+		const up = () => {
+			storyDragRef.current = false;
+			box.classList.remove("agent-pages-dragging");
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", up);
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", up);
+	}, []);
+
 	return (
 		<PanelRefreshContext.Provider value={agentTick}>
 		<div className="app">
@@ -2122,7 +2240,12 @@ export default function App() {
 			</header>
 
 				<div className="layout">
-					{/* agent 模式：稿子在中间（桌面 60%），讨论在右（40%）；手机上两者是页签（story-pane 覆盖式） */}
+					{/* agent 模式：稿子在左、讨论在右。桌面是可拖比例的分栏（讨论可收起）；手机是横滑的两页（scroll-snap） */}
+					<div
+						ref={pagesRef}
+						className={`agent-pages ${agentSplit ? "agent-pages-on" : ""} ${agentSplit && chatCollapsed ? "agent-pages-chat-collapsed" : ""}`}
+						style={agentSplit ? ({ "--story-frac": storyFrac } as React.CSSProperties) : undefined}
+					>
 					{agentSplit && (
 						<aside className={`story-pane ${storyTab === "story" ? "story-pane-active" : ""}`} aria-label={t("稿子")}>
 							<StoryPane
@@ -2132,6 +2255,8 @@ export default function App() {
 								focus={storyFocus}
 								busy={busy}
 								onBack={() => setStoryTab("chat")}
+								chatCollapsed={chatCollapsed}
+								onToggleChat={() => setChatCollapsed((v) => !v)}
 								onEdit={async (f, text) => {
 									try {
 										await apiPost("/api/story/edit", { name: f.name, text });
@@ -2150,8 +2275,19 @@ export default function App() {
 							/>
 						</aside>
 					)}
+					{agentSplit && (
+						<div
+							className="agent-splitter"
+							role="separator"
+							aria-orientation="vertical"
+							aria-label={t("拖动调整稿子与讨论的比例")}
+							title={t("拖动调整比例，双击恢复默认")}
+							onPointerDown={onSplitterDown}
+							onDoubleClick={() => setStoryFrac(0.6)}
+						/>
+					)}
 					<main className={`center ${welcome && sessions !== null && !homeHasHistory ? "center-home-empty" : ""} ${welcome && homeHasHistory ? "center-home-filled" : ""} ${studioOpen ? "center-studio-split" : ""} ${agentSplit ? "center-agent-split" : ""}`}>
-					<div className={`stage-wrap ${rightPanel ? "split-active" : ""}`}>
+					<div className={`stage-wrap ${rightPanel ? "split-active" : ""} ${agentSplit && rightPanel ? "agent-panel-cover" : ""}`}>
 					<div className="stage-col stage-col-left">
 						{(rightPanel || studioOpen || agentSplit) && (
 							<div className="stage-col-head">
@@ -2374,37 +2510,42 @@ export default function App() {
 						</button>
 					)}
 					</div>
-					{rightPanel && (
-						<aside className="stage-col stage-col-right" aria-label={panelLabel(rightPanel) || t("状态栏")}>
-							<div className="stage-col-head">
-								<span className="stage-col-title">
-									{(() => {
-										const isAg = rightPanel.startsWith("agent:");
-										const ag = isAg ? agentPanels.find((p) => agentId(p.name) === rightPanel) : undefined;
-										const Icon = ag ? IconDock : PANEL_ICON[rightPanel as PanelId] || IconStatus;
-										return (
-											<>
-												<Icon size={14} />
-												<span>{ag ? ag.name : panelLabel(rightPanel) || t("状态栏")}</span>
-											</>
-										);
-									})()}
-								</span>
-								<button
-									type="button"
-									className="icon-btn"
-									onClick={() => openRight(null)}
-									title={t("收起")}
-									aria-label={t("收起状态栏")}
-								>
-									<IconClose size={15} />
-								</button>
-							</div>
-							<div className="stage-col-body">
-								{renderPanel(rightPanel as PanelId)}
-							</div>
-						</aside>
-					)}
+					{rightPanel && (() => {
+						const pane = (
+							<aside className="stage-col stage-col-right" aria-label={panelLabel(rightPanel) || t("状态栏")}>
+								<div className="stage-col-head">
+									<span className="stage-col-title">
+										{(() => {
+											const isAg = rightPanel.startsWith("agent:");
+											const ag = isAg ? agentPanels.find((p) => agentId(p.name) === rightPanel) : undefined;
+											const Icon = ag ? IconDock : PANEL_ICON[rightPanel as PanelId] || IconStatus;
+											return (
+												<>
+													<Icon size={14} />
+													<span>{ag ? ag.name : panelLabel(rightPanel) || t("状态栏")}</span>
+												</>
+											);
+										})()}
+									</span>
+									<button
+										type="button"
+										className="icon-btn"
+										onClick={() => openRight(null)}
+										title={t("收起")}
+										aria-label={t("收起状态栏")}
+									>
+										<IconClose size={15} />
+									</button>
+								</div>
+								<div className="stage-col-body">
+									{renderPanel(rightPanel as PanelId)}
+								</div>
+							</aside>
+						);
+						// agent 模式：面板盖在中间的稿子栏上，不占讨论栏的位置
+						const host = agentSplit ? pagesRef.current?.querySelector(".story-pane") : null;
+						return host ? createPortal(pane, host) : pane;
+					})()}
 					</div>
 					<footer
 						className="composer"
@@ -2652,6 +2793,19 @@ export default function App() {
 						)}
 					</footer>
 				</main>
+				</div>
+				{agentSplit && chatCollapsed && (
+					<button
+						type="button"
+						className="agent-chat-reopen"
+						onClick={() => setChatCollapsed(false)}
+						title={t("展开讨论")}
+						aria-label={t("展开讨论")}
+					>
+						<IconChevronLeft size={15} />
+						<span>{t("讨论")}</span>
+					</button>
+				)}
 				{studioOpen && (
 					<aside className="studio-split-pane" aria-label={t("写卡平台")}>
 						<CardStudio

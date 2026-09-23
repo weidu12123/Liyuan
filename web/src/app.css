@@ -1400,6 +1400,24 @@ html[data-theme="dark"] .msg-md-code {
 	color: color-mix(in srgb, #8eb4e8 70%, var(--text, #e8e4df));
 }
 
+/* mermaid 图表：渲染前先按代码块占位，渲染后居中自适应 */
+.msg-mermaid-pending {
+	opacity: 0.55;
+}
+.msg-mermaid {
+	margin: 0.65em 0 0.85em;
+	padding: 12px;
+	overflow-x: auto;
+	text-align: center;
+	background: var(--surface);
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius);
+}
+.msg-mermaid svg {
+	max-width: 100%;
+	height: auto;
+}
+
 /* markdown 管道表格：预设「角色表」等（纯预设会话裸奔主凶）；列多时横向滚动 */
 .msg-md-tablewrap {
 	margin: 0.65em 0 0.85em;
@@ -3848,6 +3866,18 @@ input.panel-search.num {
 	}
 	.stage-col-right .stage-col-body {
 		padding: 14px 16px 24px;
+	}
+	/* agent 模式：面板盖稿子那一页，但输入栏始终露在最下方 */
+	.agent-pages-on > .story-pane > .stage-col-right {
+		position: fixed !important;
+		inset: auto !important;
+		top: calc(var(--topbar-h, 48px) + env(safe-area-inset-top, 0px)) !important;
+		left: 0 !important;
+		right: 0 !important;
+		bottom: var(--agent-composer-h, 0px) !important;
+		width: auto !important;
+		height: auto !important;
+		border-right: none !important;
 	}
 
 	/* 顶栏：自适应布局，避免窄屏下图标溢出与挤压 */
@@ -8215,6 +8245,7 @@ label.drawer-btn {
 	min-width: 0;
 	overflow: hidden;
 	background: var(--bg);
+	position: relative;
 }
 .story-pane-inner {
 	display: flex;
@@ -8742,17 +8773,70 @@ label.drawer-btn {
 	font-weight: 600;
 	line-height: 16px;
 }
+/* 非 agent 模式：包装层不参与布局，.center 仍是 .layout 的直接 flex 项 */
+.agent-pages {
+	display: contents;
+}
+.story-chat-toggle {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	margin-left: 6px;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-soft);
+	cursor: pointer;
+}
+.story-chat-toggle:hover {
+	border-color: var(--hairline-strong);
+	color: var(--text);
+}
 @media (min-width: 1000px) {
+	/* 桌面：稿子 | 分隔条 | 讨论，比例由 --story-frac 定（默认 0.6，可拖，双击复位） */
+	.agent-pages.agent-pages-on {
+		display: flex;
+		flex: 1 1 auto;
+		min-width: 0;
+		height: 100%;
+		position: relative;
+	}
+	.agent-pages.agent-pages-dragging {
+		cursor: col-resize;
+		user-select: none;
+	}
+	.agent-pages.agent-pages-dragging iframe {
+		pointer-events: none;
+	}
 	.story-pane {
-		flex: 0 0 60%;
-		width: 60%;
-		max-width: 60%;
-		border-right: 1px solid var(--hairline);
+		flex: 0 0 calc(var(--story-frac, 0.6) * 100%);
+		width: calc(var(--story-frac, 0.6) * 100%);
+		max-width: calc(var(--story-frac, 0.6) * 100%);
+		min-width: 0;
+	}
+	.agent-splitter {
+		flex: 0 0 9px;
+		width: 9px;
+		margin: 0;
+		cursor: col-resize;
+		background: var(--hairline);
+		border-left: 4px solid var(--bg);
+		border-right: 4px solid var(--bg);
+		background-clip: content-box;
+		z-index: 2;
+		touch-action: none;
+	}
+	.agent-splitter:hover,
+	.agent-pages-dragging .agent-splitter {
+		background: var(--accent);
+		background-clip: content-box;
 	}
 	.center.center-agent-split {
-		flex: 0 0 40% !important;
-		width: 40% !important;
-		max-width: 40% !important;
+		flex: 1 1 0 !important;
+		width: auto !important;
+		max-width: none !important;
 		min-width: 0 !important;
 	}
 	.center.center-agent-split .stage-wrap .stage-col-left .list {
@@ -8761,18 +8845,106 @@ label.drawer-btn {
 	.center.center-agent-split .composer {
 		padding: 8px 12px 12px;
 	}
+	.story-chat-toggle {
+		display: inline-flex;
+	}
+	/* 讨论收起：稿子铺满，分隔条与讨论都不占位 */
+	.agent-pages-chat-collapsed .story-pane {
+		flex: 1 1 auto;
+		width: auto;
+		max-width: none;
+	}
+	.agent-pages-chat-collapsed .agent-splitter,
+	.agent-pages-chat-collapsed .center.center-agent-split {
+		display: none !important;
+	}
+	/*
+	 * agent 模式：登场名录这类面板不新开一栏（会把稿子和讨论挤成三列），
+	 * 盖在中间的稿子栏上，讨论栏不动。手机上底部停在输入栏之上（--agent-composer-h 由 JS 量）。
+	 */
+	.center-agent-split .stage-wrap.agent-panel-cover {
+		position: static;
+	}
+	.center-agent-split .stage-wrap.agent-panel-cover .stage-col-left {
+		flex: 1 1 auto !important;
+		width: auto !important;
+		max-width: none !important;
+		border-right: none !important;
+	}
+	/* 面板从讨论栏里摘出来，盖到中间的稿子栏上；讨论栏保持原样 */
+	.agent-pages-on > .story-pane > .stage-col-right {
+		position: absolute;
+		inset: 0;
+		width: auto;
+		max-width: none;
+		height: auto;
+		z-index: 6;
+		animation: none;
+	}
+	/* 讨论收起后，稿子右侧留一条竖向入口把它拉回来 */
+	.agent-chat-reopen {
+		position: absolute;
+		right: 0;
+		top: 50%;
+		transform: translateY(-50%);
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
+		height: 72px;
+		padding: 0 4px 0 6px;
+		border: 1px solid var(--hairline-strong);
+		border-right: none;
+		border-radius: 8px 0 0 8px;
+		background: var(--surface);
+		color: var(--text);
+		font-size: 12px;
+		writing-mode: vertical-rl;
+		letter-spacing: 0.15em;
+		cursor: pointer;
+		z-index: 4;
+		box-shadow: -2px 0 8px rgba(0, 0, 0, 0.06);
+	}
+	.agent-chat-reopen:hover {
+		color: var(--accent);
+		border-color: var(--accent);
+	}
 }
 @media (max-width: 999px) {
-	.story-pane {
+	/* 手机：稿子与讨论是横向两页，手指左右滑（scroll-snap），也可点按钮跳页 */
+	.agent-pages.agent-pages-on {
+		display: flex;
+		flex: 1 1 auto;
+		min-width: 0;
+		height: 100%;
+		overflow-x: auto;
+		overflow-y: hidden;
+		scroll-snap-type: x mandatory;
+		overscroll-behavior-x: contain;
+		scrollbar-width: none;
+	}
+	.agent-pages.agent-pages-on::-webkit-scrollbar {
 		display: none;
 	}
-	.story-pane.story-pane-active {
-		display: flex;
-		position: fixed;
-		inset: 0;
-		width: 100vw;
-		height: 100dvh;
-		z-index: 500;
+	.agent-pages.agent-pages-on > .story-pane,
+	.agent-pages.agent-pages-on > .center {
+		flex: 0 0 100%;
+		width: 100%;
+		max-width: 100%;
+		height: 100%;
+		scroll-snap-align: start;
+		scroll-snap-stop: always;
+	}
+	.agent-splitter {
+		display: none;
+	}
+	.agent-chat-reopen {
+		display: none;
+	}
+	/* agent 讨论页保留短标题行，让“稿子”按钮可见；普通聊天仍隐藏冗余标头 */
+	.center.center-agent-split .stage-col-left .stage-col-head {
+		display: flex !important;
+		height: 38px;
+		padding: 0 16px;
 	}
 	.story-back,
 	.story-tab-btn {

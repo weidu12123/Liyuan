@@ -92,7 +92,7 @@
 
 **pi 的会话存储本来就按 cwd 编码**（`packages/coding-agent/src/core/session-manager.ts:439`
 `getDefaultSessionDirPath(cwd, agentDir)`：`<agentDir>/sessions/--<cwd 转义>--/`）。本机实测目录名形如
-`--C--Users-jsw_0-AppData-Local-Temp-lynew-Liyuan--`。
+`--C--Users-<用户>-AppData-Local-Temp-lynew-Liyuan--`。
 
 ⇒ **卡一旦成为独立 cwd，会话按卡分家是白送的**，`sameCardPath` 那套事后过滤**整体消失**，不是"重写"。
 

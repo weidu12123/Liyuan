@@ -1,6 +1,6 @@
 # 卡＝工作空间：布局定案（B · 两层）
 
-> 2026-09-06 用户定案。执行主档是 `C:\Users\jsw_0\.claude\plans\rp-agent-claude-code-pi-skill-pi-claude-bubbly-spindle.md`（§3.1 起按此更新）。
+> 2026-09-06 用户定案。执行主档是计划文件 `rp-agent-claude-code-pi-skill-pi-claude-bubbly-spindle.md`（§3.1 起按此更新）。
 > 本文只写**形状**与**已完成进度**，不动手实现——实现分刀走 git 提交。
 
 ## 一 用户定的形状（原话大意，不得改写）

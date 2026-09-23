@@ -8,7 +8,7 @@
 ## 0. 会话文件位置
 
 ```
-C:\Users\jsw_0\.liyuan\agent\sessions\--E--silly-agent-Liyuan-dev--\*.jsonl
+~/.liyuan/agent/sessions/<工作区>/*.jsonl
 ```
 
 每个文件 = 一个会话。文件名 `2026-08-08T11-37-40-681Z_<sessionId>.jsonl` 里
@@ -68,8 +68,7 @@ for s in tl:
 
 ## 4. 读完整时间线的最小脚本
 
-已存于 `C:\Users\jsw_0\AppData\Local\Temp\opencode\dump-tl2.py`（按上面 §3 正确
-字段实现）。用法：改脚本里的文件名 → 运行 → 得到「思考→工具→正文段」全链。
+按上面 §3 的字段写一个脚本即可（改脚本里的文件名 → 运行 → 得到「思考→工具→正文段」全链）。
 
 ## 5. 汇报时的纪律
 

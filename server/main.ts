@@ -40,7 +40,13 @@ import {
 	verifyToken,
 	type AccessData,
 } from "../src/access.ts";
-import { findModelEntry, loadAgentConfig, normalizeAgentConfig, syncAgentConfigToRuntime } from "../src/agent-config.ts";
+import {
+	applyEntryThinkingMap,
+	findModelEntry,
+	loadAgentConfig,
+	normalizeAgentConfig,
+	syncAgentConfigToRuntime,
+} from "../src/agent-config.ts";
 import { loadCardFile, readCardRawJson, updateCardFields } from "../src/card.ts";
 import { applyMacros } from "../src/card-macros.ts";
 import { prepareDisplayText } from "../src/postprocess.ts";
@@ -1466,9 +1472,12 @@ const sideEntryOf = (): { model: StageModelLike; thinking?: string; label?: stri
 		const agent = loadAgentConfig(cwd).config;
 		const entry = findModelEntry(agent.providers?.[sel.provider]?.models, sel.entry);
 		if (!entry) return warn("不在连接配置里"); // i18n-ignore：终端日志
-		const m = session.modelRuntime.getModel(sel.provider, entry.id);
-		if (!m) return warn(`模型 ${entry.id} 不在可用清单`); // i18n-ignore：终端日志
-		if (!session.modelRuntime.hasConfiguredAuth(m.provider)) return warn("缺少 API key"); // i18n-ignore：终端日志
+		const base = session.modelRuntime.getModel(sel.provider, entry.id);
+		if (!base) return warn(`模型 ${entry.id} 不在可用清单`); // i18n-ignore：终端日志
+		if (!session.modelRuntime.hasConfiguredAuth(base.provider)) return warn("缺少 API key"); // i18n-ignore：终端日志
+		// 条目自己的 thinkingLevelMap 盖回运行时模型：同 id 多条目时，投影按 id 只留第一条，
+		// 后几条上的 map（典型 `{"off": "none"}`）会丢；不补回来就关不掉思考（见 applyEntryThinkingMap）
+		const m = applyEntryThinkingMap(base, entry);
 		if (warnedSideEntry) warnedSideEntry = "";
 		const thinking = thinkingLevelOfEntry(agent, sel.provider, sel.entry);
 		return { model: m as never, ...(thinking ? { thinking } : {}), label: sel.entry };

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import {
+	applyEntryThinkingMap,
 	enableProfile,
 	findModelEntry,
 	type LiyuanAgentConfig,
@@ -258,4 +259,33 @@ test("syncAgentConfigToRuntime：写进 models.json 的清单已按 id 收敛，
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
+});
+
+test("旁路条目：thinkingLevelMap 盖回运行时模型（同 id 多条被投影收干净的情形）", () => {
+	// 真实故障形状：同 id 两条，map 挂在第二条；modelsForRuntime 按 id 只留第一条 → map 丢
+	const models = [
+		{ id: "qwen3.8-27b", thinkingLevel: "medium" },
+		{ id: "qwen3.8-27b", label: "qwen3.8-27b-nothinking", thinkingLevel: "off", thinkingLevelMap: { off: "none" }, reasoning: true },
+	];
+	const runtimeModels = modelsForRuntime(models);
+	assert.equal(runtimeModels.length, 1, "投影按 id 收敛");
+	assert.equal(runtimeModels[0]!.thinkingLevelMap, undefined, "第一条本来没有 map——这就是故障来源");
+
+	const entry = findModelEntry(models, "qwen3.8-27b-nothinking")!;
+	const patched = applyEntryThinkingMap(runtimeModels[0] as { thinkingLevelMap?: Record<string, unknown> }, entry);
+	assert.deepEqual(patched.thinkingLevelMap, { off: "none" }, "旁路条目自己的 map 必须补回来，否则 reasoning:off 折成 undefined、请求不带 reasoning_effort");
+	assert.equal((runtimeModels[0] as { thinkingLevelMap?: unknown }).thinkingLevelMap, undefined, "纯函数：不改入参");
+});
+
+test("旁路条目：无 map 时原样返回同一个对象（不改动旧行为）", () => {
+	const base = { id: "m", thinkingLevelMap: { low: "low" } };
+	assert.equal(applyEntryThinkingMap(base, { id: "m" }), base);
+	assert.equal(applyEntryThinkingMap(base, null), base);
+	assert.equal(applyEntryThinkingMap(base, { id: "m", thinkingLevelMap: "bogus" as unknown as Record<string, unknown> }), base, "脏值当没有");
+});
+
+test("旁路条目：条目 map 与运行时已有 map 合并，条目优先", () => {
+	const base = { id: "m", thinkingLevelMap: { off: "minimal", high: "high" } };
+	const out = applyEntryThinkingMap(base, { id: "m", thinkingLevelMap: { off: "none" } });
+	assert.deepEqual(out.thinkingLevelMap, { off: "none", high: "high" });
 });

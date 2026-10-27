@@ -227,6 +227,29 @@ export function modelsForRuntime(models: AgentModelEntry[]): AgentModelEntry[] {
 }
 
 /**
+ * 旁路条目 → 运行时模型：把**条目自己**的 thinkingLevelMap 盖到运行时模型上。
+ *
+ * 为什么需要这一层：`modelsForRuntime` 按 id 收敛（同 id 多条只留第一条），而
+ * 「同 id、不同思考档」的各条目恰恰把差异（`thinkingLevelMap: {"off": "none"}`）
+ * 写在后几条上——投影后全丢了。运行时拿到的是第一条的裸模型，`reasoning: "off"`
+ * 到底层会被折成 undefined（packages/ai/src/api/openai-completions.ts:747），
+ * 于是请求里连 reasoning_effort 都不发，服务端按自己的默认继续思考。
+ *
+ * 纯函数：不动入参，没有 map 时原样返回同一个对象。
+ */
+export function applyEntryThinkingMap<M extends { thinkingLevelMap?: Record<string, unknown> }>(
+	base: M,
+	entry?: AgentModelEntry | null,
+): M {
+	const map = entry?.thinkingLevelMap;
+	if (!map || typeof map !== "object" || Array.isArray(map)) return base;
+	return {
+		...base,
+		thinkingLevelMap: { ...(base.thinkingLevelMap ?? {}), ...(map as Record<string, unknown>) },
+	};
+}
+
+/**
  * 把梨园 Agent 配置投影到 runtime 读取的文件（实现细节）。
  * - providers → agentDir/models.json（模型清单按 id 收敛，见 modelsForRuntime）
  * - 默认模型/思考/shell/skills → 项目 .liyuan/settings.json（合并）

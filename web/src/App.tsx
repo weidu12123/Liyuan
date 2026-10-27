@@ -3231,7 +3231,31 @@ export default function App() {
 									</button>
 								</div>
 								<div className="stage-col-body">
-									{renderPanel(rightPanel as PanelId)}
+									{(() => {
+										/* agent 自建面板：renderPanel 的 switch 只认内置 PanelId，掉进去返回 undefined＝空白列（2026-10-26 实测）。
+										   照 sidePanel() 的 agent 分支用 ArtifactPanel 渲染，数据与保存回调同一套。 */
+										if (rightPanel.startsWith("agent:")) {
+											const ag = agentPanels.find((p) => agentId(p.name) === rightPanel);
+											if (!ag) return null;
+											return (
+												<ArtifactPanel
+													panel={ag}
+													data={worldState?.panelData?.[ag.name]}
+													onSaved={(p) => {
+														// 乐观更新；随后 WS panels 帧会再对齐
+														setAgentPanels((list) =>
+															list.map((x) =>
+																x.name === p.name
+																	? { ...x, kind: p.kind as typeof x.kind, content: p.content, updatedAt: p.updatedAt }
+																	: x,
+															),
+														);
+													}}
+												/>
+											);
+										}
+										return renderPanel(rightPanel as PanelId);
+									})()}
 								</div>
 							</aside>
 						);

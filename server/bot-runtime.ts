@@ -248,7 +248,7 @@ export async function runBotSession(o: BotSessionRun, deps: BotRuntimeDeps): Pro
 		const reserve = output + fixed + tokensOfText(view.text) + 128;
 		const settingsManager = SettingsManager.inMemory({
 			compaction: { enabled: true, reserveTokens: reserve, keepRecentTokens: Math.max(128, Math.min(12000, Math.floor((window - reserve) / 3))) },
-			retry: { enabled: true, maxRetries: 2, baseDelayMs: 1000 },
+			retry: { enabled: true, maxRetries: 5, baseDelayMs: 1000 },
 		});
 		const loader = new DefaultResourceLoader({
 			cwd: o.cwd, agentDir: deps.agentDir, settingsManager,
@@ -328,6 +328,16 @@ export async function runBotSession(o: BotSessionRun, deps: BotRuntimeDeps): Pro
 					lastText = textOf(e.message);
 					failure = e.message.stopReason === "error" ? e.message.errorMessage || t("模型请求失败") : undefined;
 				}
+			}
+			if (e.type === "auto_retry_start") {
+				lastText = "";
+				failure = undefined;
+				const retryText = t("模型请求失败，自动重试 {attempt}/{max}…", { attempt: e.attempt, max: e.maxAttempts });
+				o.onActivity?.(retryText);
+				notify({ error: retryText });
+			}
+			if (e.type === "auto_retry_end" && e.success) {
+				notify({});
 			}
 			if (e.type === "compaction_start") { status = "compacting"; notify(); }
 			if (e.type === "compaction_end") {

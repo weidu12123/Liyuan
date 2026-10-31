@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import {
+	applyEntryThinkingMap,
 	enableProfile,
 	findModelEntry,
 	type LiyuanAgentConfig,
@@ -258,4 +259,27 @@ test("syncAgentConfigToRuntime：写进 models.json 的清单已按 id 收敛，
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
+});
+
+test("同 id 多条条目：modelsForRuntime 与 applyEntryThinkingMap 保留后一条的 thinkingLevelMap 与思考标记", () => {
+	const models = [
+		{ id: "qwen3.8-27b" },
+		{ id: "qwen3.8-27b", label: "qwen3.8-27b-nothinking", thinkingLevel: "off", thinkingLevelMap: { off: "none" }, reasoning: true },
+	];
+	const runtimeModels = modelsForRuntime(models);
+	assert.equal(runtimeModels.length, 1);
+	assert.deepEqual(runtimeModels[0]!.thinkingLevelMap, { off: "none" });
+	assert.equal(runtimeModels[0]!.thinkingLevel, "off");
+	assert.equal(runtimeModels[0]!.reasoning, true);
+
+	const entry = findModelEntry(models, "qwen3.8-27b-nothinking")!;
+	const bareBase = { id: "qwen3.8-27b", reasoning: false } as {
+		id: string;
+		reasoning?: boolean;
+		thinkingLevelMap?: Record<string, unknown>;
+	};
+	const patched = applyEntryThinkingMap(bareBase, entry);
+	assert.deepEqual(patched.thinkingLevelMap, { off: "none" });
+	assert.equal(patched.reasoning, true);
+	assert.equal(bareBase.thinkingLevelMap, undefined);
 });

@@ -146,3 +146,19 @@ test("buildSrcDoc: 高度垫片插在最后一个 </body>，不进脚本模板",
 	assert.ok(!mid.includes("liyuanFrameHeight"), "不得插入脚本模板内部");
 });
 
+test("escapeScriptEndTags: 脚本含正则字面量 /'/g 时不得吞掉真实 </script> 导致后续 <script> 报 SyntaxError", () => {
+	const html = `<!doctype html><html><body>
+<script>
+const safeName = newName.replace(/'/g, "\\\\'");
+const cmd = \`_.assign('角色', '\${safeName}')\`;
+</script>
+<script>
+loadBasicInfo();
+</script>
+</body></html>`;
+	const out = escapeScriptEndTags(html);
+	assert.equal((out.match(/<\/script>/gi) || []).length, 2, "两个真实 </script> 闭合标签都必须保留，不得被转义为 <\\/script>");
+	assert.ok(!out.includes("<\\/script>"));
+});
+
+

@@ -40,7 +40,13 @@ import {
 	verifyToken,
 	type AccessData,
 } from "../src/access.ts";
-import { findModelEntry, loadAgentConfig, normalizeAgentConfig, syncAgentConfigToRuntime } from "../src/agent-config.ts";
+import {
+	applyEntryThinkingMap,
+	findModelEntry,
+	loadAgentConfig,
+	normalizeAgentConfig,
+	syncAgentConfigToRuntime,
+} from "../src/agent-config.ts";
 import { loadCardFile, readCardRawJson, updateCardFields } from "../src/card.ts";
 import { applyMacros } from "../src/card-macros.ts";
 import { prepareDisplayText } from "../src/postprocess.ts";
@@ -1005,8 +1011,9 @@ const resolveBotModel = (selection?: BotModelSelection) => {
 	const config = loadAgentConfig(cwd).config;
 	const entry = findModelEntry(config.providers?.[selection.provider]?.models, selection.entry);
 	if (!entry) throw new Error(t("副编剧指定的模型条目已不存在"));
-	const model = session.modelRuntime.getModel(selection.provider, entry.id);
-	if (!model || !session.modelRuntime.hasConfiguredAuth(model.provider)) throw new Error(t("副编剧指定的模型不可用或缺少鉴权"));
+	const base = session.modelRuntime.getModel(selection.provider, entry.id);
+	if (!base || !session.modelRuntime.hasConfiguredAuth(base.provider)) throw new Error(t("副编剧指定的模型不可用或缺少鉴权"));
+	const model = applyEntryThinkingMap(base, entry);
 	return { model, thinking: selection.thinking ?? thinkingLevelOfEntry(config, selection.provider, selection.entry), label: `${selection.provider}/${selection.entry}` };
 };
 const manageBot = async (request: BotSessionAction) => {
@@ -1466,9 +1473,10 @@ const sideEntryOf = (): { model: StageModelLike; thinking?: string; label?: stri
 		const agent = loadAgentConfig(cwd).config;
 		const entry = findModelEntry(agent.providers?.[sel.provider]?.models, sel.entry);
 		if (!entry) return warn("不在连接配置里"); // i18n-ignore：终端日志
-		const m = session.modelRuntime.getModel(sel.provider, entry.id);
-		if (!m) return warn(`模型 ${entry.id} 不在可用清单`); // i18n-ignore：终端日志
-		if (!session.modelRuntime.hasConfiguredAuth(m.provider)) return warn("缺少 API key"); // i18n-ignore：终端日志
+		const base = session.modelRuntime.getModel(sel.provider, entry.id);
+		if (!base) return warn(`模型 ${entry.id} 不在可用清单`); // i18n-ignore：终端日志
+		if (!session.modelRuntime.hasConfiguredAuth(base.provider)) return warn("缺少 API key"); // i18n-ignore：终端日志
+		const m = applyEntryThinkingMap(base, entry);
 		if (warnedSideEntry) warnedSideEntry = "";
 		const thinking = thinkingLevelOfEntry(agent, sel.provider, sel.entry);
 		return { model: m as never, ...(thinking ? { thinking } : {}), label: sel.entry };
@@ -1611,8 +1619,8 @@ const bindSession = async () => {
 
 	unsubscribe?.();
 	unsubscribe = session.subscribe((event) => {
-		// RP 增量与落树由拍级回调交付；原生工具起止事件供过程栏和资产缓存失效使用。
-		if (stage?.isStreaming && event.type !== "tool_execution_start" && event.type !== "tool_execution_end") return;
+		// RP 增量与落树由拍级回调交付；原生工具起止事件与自动重试供过程栏和状态通知使用。
+		if (stage?.isStreaming && event.type !== "tool_execution_start" && event.type !== "tool_execution_end" && event.type !== "auto_retry_start") return;
 		switch (event.type) {
 			case "agent_start":
 				broadcast({ type: "agent", state: "start" });
@@ -1723,9 +1731,13 @@ const bindSession = async () => {
 				broadcast({ type: "compaction", state: "end", ok: !event.aborted && !event.errorMessage });
 				resyncAll();
 				break;
-			case "auto_retry_start":
-				broadcast({ type: "notify", level: "warning", text: t("模型请求失败，自动重试 {attempt}/{max}…", { attempt: event.attempt, max: event.maxAttempts }) });
+			case "auto_retry_start": {
+				const retryText = t("模型请求失败，自动重试 {attempt}/{max}…", { attempt: event.attempt, max: event.maxAttempts });
+				cli?.out(`[retry] ${retryText} (${event.errorMessage})`);
+				broadcast({ type: "activity", activity: { kind: "note", name: "retry", detail: retryText } });
+				broadcast({ type: "notify", level: "warning", text: retryText });
 				break;
+			}
 			default:
 				break;
 		}
@@ -1913,10 +1925,6 @@ const restHost: RestHost = {
 		void syncPresetNow();
 		// 清卡缓存：换卡后列表必须按新 cardPath 重读 rp-card
 		cardCache.clear();
-		if (opts?.switchSession === false) {
-			broadcast(await listSessions());
-			return "switched";
-		}
 		const frame = await listSessions();
 		const list = (frame as { type: "sessions"; list: Array<{ path: string; current: boolean; card?: string }> }).list;
 		// 只在本卡会话里挑「最近非当前」；没有则新建（不把其它卡的 current 误当目标）

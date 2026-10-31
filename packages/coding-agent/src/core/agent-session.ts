@@ -674,47 +674,49 @@ export class AgentSession {
 			}
 		}
 
+		const willRetry = event.type === "agent_end" ? this._willRetryAfterAgentEnd(event) : false;
 		// Transient provider/tool messages belong to this run, not the next one.
-		// Keep event.messages intact so agent_end can reduce the completed work.
-		if (event.type === "agent_end") this._discardTransientMessages();
+		// Keep event.messages intact so agent_end can reduce the completed work,
+		// and keep prior transient tool exchanges in agent.state.messages while retrying.
+		if (event.type === "agent_end" && !willRetry) this._discardTransientMessages();
 
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
 
 		// Notify all listeners
-		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
-		if (event.type === "agent_end") this._transientMessages.clear();
+		this._emit(event.type === "agent_end" ? { ...event, willRetry } : event);
+		if (event.type === "agent_end" && !willRetry) this._transientMessages.clear();
 
 		// Handle session persistence
 		if (event.type === "message_end") {
-			if (this._transientMessages.has(event.message)) {
-				if (event.message.role === "assistant") this._lastAssistantMessage = undefined;
-				return;
-			}
-			// Check if this is a custom message from extensions
-			if (event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
-				);
-			} else if (
-				event.message.role === "user" ||
-				event.message.role === "assistant" ||
-				event.message.role === "toolResult"
-			) {
-				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+			const isTransient = this._transientMessages.has(event.message);
+			if (!isTransient) {
+				// Check if this is a custom message from extensions
+				if (event.message.role === "custom") {
+					// Persist as CustomMessageEntry
+					this.sessionManager.appendCustomMessageEntry(
+						event.message.customType,
+						event.message.content,
+						event.message.display,
+						event.message.details,
+					);
+				} else if (
+					event.message.role === "user" ||
+					event.message.role === "assistant" ||
+					event.message.role === "toolResult"
+				) {
+					// Regular LLM message - persist as SessionMessageEntry
+					this.sessionManager.appendMessage(event.message);
+				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-			// Track assistant message for auto-compaction (checked on agent_end)
+			// Track assistant message for retry and auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
-				this._lastAssistantMessage = event.message;
-
 				const assistantMsg = event.message as AssistantMessage;
+				this._lastAssistantMessage =
+					isTransient && assistantMsg.stopReason !== "error" ? undefined : assistantMsg;
+
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
 					this._overflowRecoveryAttempted = false;
 				}
@@ -751,7 +753,6 @@ export class AgentSession {
 		for (let i = event.messages.length - 1; i >= 0; i--) {
 			const message = event.messages[i];
 			if (message.role === "assistant") {
-				if (this._transientMessages.has(message)) return false;
 				return this._isRetryableError(message as AssistantMessage);
 			}
 		}
@@ -792,7 +793,11 @@ export class AgentSession {
 			this._turnIndex = 0;
 			await this._extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
-			await this._extensionRunner.emit({ type: "agent_end", messages: event.messages });
+			await this._extensionRunner.emit({
+				type: "agent_end",
+				messages: event.messages,
+				willRetry: this._willRetryAfterAgentEnd(event),
+			});
 		} else if (event.type === "turn_start") {
 			const extensionEvent: TurnStartEvent = {
 				type: "turn_start",
@@ -1154,6 +1159,7 @@ export class AgentSession {
 		if (!msg) {
 			return false;
 		}
+		const isTransient = this._transientMessages.has(msg);
 
 		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
 			return true;
@@ -1169,7 +1175,7 @@ export class AgentSession {
 			this._retryAttempt = 0;
 		}
 
-		if (await this._checkCompaction(msg)) {
+		if (!isTransient && (await this._checkCompaction(msg))) {
 			return true;
 		}
 
@@ -2984,6 +2990,7 @@ export class AgentSession {
 		// Remove error message from agent state (keep in session for history)
 		const messages = this.agent.state.messages;
 		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+			this._transientMessages.delete(messages[messages.length - 1]);
 			this.agent.state.messages = messages.slice(0, -1);
 		}
 

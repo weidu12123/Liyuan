@@ -1274,11 +1274,14 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		if (stageToolErrors.delete(event.toolCallId)) return { isError: true };
 	});
 	pi.on("turn_end", () => activeStage?.turnEnd(() => pi.setActiveTools([])));
-	pi.on("agent_end", () => activeStage?.end());
+	pi.on("agent_end", (event) => activeStage?.end((event as { willRetry?: boolean }).willRetry));
 	pi.on("session_before_compact", () => activeStage ? { cancel: true } : undefined);
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", async (event) => {
 		unpublishStage?.();
 		unpublishStage = undefined;
+		if ((event as { reason?: string } | undefined)?.reason === "quit") {
+			await getMcpHub(appCwd).closeAll();
+		}
 	});
 
 

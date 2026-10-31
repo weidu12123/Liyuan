@@ -369,7 +369,19 @@ try{
     };
   }
   if(typeof g.getAllVariables!=="function"){
-    g.getAllVariables=function(){var v=g.__liyuanVariables||null;return v&&typeof v==="object"?v:{stat_data:{}};};
+    g.getAllVariables=function(){
+      var v=g.__liyuanVariables||null;
+      if(!v){
+        try{
+          var p=(g.parent&&g.parent!==g)?g.parent:null;
+          if(p&&p.__liyuanVariables&&typeof p.__liyuanVariables==="object"){
+            v=p.__liyuanVariables;
+            g.__liyuanVariables=v;
+          }
+        }catch(e){}
+      }
+      return v&&typeof v==="object"?v:{stat_data:{}};
+    };
   }
   // 父页把梨园账本的 MVU 树 postMessage 进来 → 写 window.__liyuanVariables（getAllVariables 的数据源）。
   // 卡脚本多用 setInterval 轮询 getAllVariables 自行重画（实测有卡是 1.5s 一轮），故收到即生效、无需重载；
@@ -472,8 +484,14 @@ try{
   if(typeof g.getLastMessageId!=="function"){
     g.getLastMessageId=function(){return 0;};
   }
+  if(typeof g.getCurrentMessageId!=="function"){
+    g.getCurrentMessageId=function(){return 0;};
+  }
   if(typeof g.getChatMessages!=="function"){
-    g.getChatMessages=function(){return [];};
+    g.getChatMessages=function(){
+      var d=g.getAllVariables();
+      return [{message_id:0,message:"",mes:"",data:d,variables:d}];
+    };
   }
   if(!g.Mvu){
     g.Mvu={
@@ -483,7 +501,19 @@ try{
         VARIABLE_UPDATE_ENDED:"VARIABLE_UPDATE_ENDED",
         VARIABLE_UPDATE_FAILED:"VARIABLE_UPDATE_FAILED"
       },
-      state:{}
+      state:{},
+      getMvuData:function(){return g.getAllVariables();},
+      setMvuVariable:function(mvuData,path,val){
+        try{if(mvuData&&mvuData.stat_data&&g._)g._.set(mvuData.stat_data,path,val);}catch(e){}
+        return Promise.resolve(true);
+      },
+      replaceMvuData:function(data){
+        if(data&&typeof data==="object")g.__liyuanVariables=data;
+        return Promise.resolve(data);
+      },
+      parseMessage:function(_cmd,oldData){
+        return Promise.resolve(oldData||g.getAllVariables());
+      }
     };
   }
   if(typeof g.waitGlobalInitialized!=="function"){

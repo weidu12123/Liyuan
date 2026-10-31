@@ -164,10 +164,10 @@ export function HtmlFrame({
 			}
 			const raw = Math.ceil(d.liyuanFrameHeight);
 			// 内容流帧（seamless 非接管型）高度上限：大方放行，蠕变靠下方 ratchet 防护。
-			// 旧值 min(2400, 92%vh) 在 1080p 只有 ~828px，某卡等长欢迎消息被裁半截。
+			// 旧值 min(2400, 92%vh) 在 1080p 只有 ~828px，4x 视口（~3700px）仍会截断 3000+ 字的长开场白（~5000px）。
 			const hardCap = typeof window !== "undefined"
-				? Math.max(2400, Math.floor(window.innerHeight * 4))
-				: 10000;
+				? Math.max(20000, Math.floor(window.innerHeight * 20))
+				: 20000;
 			const next = Math.max(minHeight, Math.min(hardCap, raw));
 			setHeight((prev) => {
 				if (Math.abs(prev - next) < 2) return prev;

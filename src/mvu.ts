@@ -144,7 +144,32 @@ export function stripMvuRuleEntries<T extends { comment?: string; content?: stri
  *
  * 缩进敏感：靠前导空格数定父子。制表符按 1 空格计（实卡未见 tab，防御性）。
  */
+/** 递归剥除 MVU JSON 的 `$meta` 元数据节点 */
+function stripMvuMeta(node: unknown): unknown {
+	if (Array.isArray(node)) return node.map(stripMvuMeta);
+	if (node && typeof node === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+			if (k === "$meta") continue;
+			out[k] = stripMvuMeta(v);
+		}
+		return out;
+	}
+	return node;
+}
+
 export function parseInitVarYaml(src: string): MvuTree {
+	const rawTrim = src.trim();
+	if (rawTrim.startsWith("{")) {
+		try {
+			const parsed = JSON.parse(rawTrim);
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				return stripMvuMeta(parsed) as MvuTree;
+			}
+		} catch {
+			// 非合法 JSON 则继续尝试缩进 YAML
+		}
+	}
 	const root: MvuTree = {};
 	const stack: Array<{ indent: number; obj: MvuTree }> = [{ indent: -1, obj: root }];
 	for (const rawLine of src.split(/\r?\n/)) {
@@ -523,7 +548,19 @@ export function applyMvuPatch(tree: MvuTree, patch: Record<string, unknown>): Mv
 			warnings.push(`${path} 下钻失败已跳过`);
 			continue;
 		}
-		cursor[segs[segs.length - 1]!] = value;
+		const leafKey = segs[segs.length - 1]!;
+		const prevLeaf = cursor[leafKey];
+		if (
+			Array.isArray(prevLeaf) &&
+			prevLeaf.length === 2 &&
+			typeof prevLeaf[1] === "string" &&
+			!Array.isArray(value) &&
+			(value === null || typeof value !== "object")
+		) {
+			cursor[leafKey] = [value, prevLeaf[1]];
+		} else {
+			cursor[leafKey] = value;
+		}
 		applied.push(`${path} = ${summarizeValue(value)}`);
 	}
 	return { tree: next, applied, warnings };
@@ -582,8 +619,8 @@ export function formatMvuTree(tree: MvuTree, maxLines = 200): string {
 /** 递归把树里所有字符串值的 {{user}}/{{char}} 宏换成实名（[initvar] 里 `姓名: "{{user}}"` 很常见） */
 function substituteMacros(node: unknown, userName: string, charName: string): unknown {
 	if (typeof node === "string") {
-		return node.replace(/\{\{\s*(user|char)\s*\}\}/gi, (_m, which: string) =>
-			which.toLowerCase() === "user" ? userName : charName,
+		return node.replace(/(?:\{\{\s*(user|char)\s*\}\}|<\s*(user|char)\s*>)/gi, (_m, a?: string, b?: string) =>
+			(a ?? b ?? "").toLowerCase() === "user" ? userName : charName,
 		);
 	}
 	if (Array.isArray(node)) return node.map((v) => substituteMacros(v, userName, charName));
@@ -593,6 +630,12 @@ function substituteMacros(node: unknown, userName: string, charName: string): un
 		return out;
 	}
 	return node;
+}
+
+/** 检测旧版把 JSON 按单行冒号误拆出的损坏树（如 `"\"世界\"": "{"`） */
+function isCorruptedJsonMvu(mvu: Record<string, unknown>): boolean {
+	const keys = Object.keys(mvu);
+	return keys.length > 0 && keys.every((k) => k.startsWith('"')) && keys.some((k) => mvu[k] === "{" || mvu[k] === "[");
 }
 
 /**
@@ -619,7 +662,7 @@ export function seedMvuIfNeeded(
 	charName: string,
 	authorScripts: Array<{ content?: string }> = [],
 ): typeof state {
-	if (state.mvu && typeof state.mvu === "object") return state; // 已有树（含空树 {}）→ 不覆盖
+	if (state.mvu && typeof state.mvu === "object" && !isCorruptedJsonMvu(state.mvu)) return state; // 已有树（含空树 {}）→ 不覆盖
 	const tree = findInitVar(bookEntries) ?? findSchemaDefaults(authorScripts);
 	if (!tree) return state; // 非 MVU 卡 / 无可解初值
 	const seeded = substituteMacros(tree, userName, charName) as Record<string, unknown>;

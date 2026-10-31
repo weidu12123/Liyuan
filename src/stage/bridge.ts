@@ -25,7 +25,7 @@ export interface StageHooks {
 	toolCall(name: string, input: Record<string, unknown>): (GateInput & { blockReason?: string }) | Promise<GateInput & { blockReason?: string }>;
 	toolResult(name: string, content: Array<{ type: string; text?: string }>): void;
 	turnEnd(withdrawTools: () => void): void;
-	end(): Promise<void>;
+	end(willRetry?: boolean): Promise<void>;
 	execute(name: string, id: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<StageToolResult>;
 }
 

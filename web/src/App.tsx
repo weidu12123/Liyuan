@@ -214,10 +214,10 @@ const RIGHT_OPENABLE: PanelId[] = ["sessions", "status", "worldline", "roster"];
  */
 const FLOAT_PANELS = new Set<PanelId>([]);
 /**
- * 悬浮窗形态判据。
+ * 悬浮窗形态判据：agent 自建面板走可拖拽、可缩放的 FloatWindow。
  */
 const isFloatPanel = (id: PanelId | AgentPanelId | null): id is PanelId | AgentPanelId =>
-	id != null && FLOAT_PANELS.has(id as PanelId);
+	id != null && (FLOAT_PANELS.has(id as PanelId) || id.startsWith("agent:"));
 
 // 面板名表：用时经 t() 翻（locale 运行时可切）
 const PANEL_LABEL: Record<PanelId, string> = {
@@ -473,8 +473,12 @@ export default function App() {
 		}
 		setLeftPanel(next);
 	}, [restoreSidebarFromStudio]);
-	/** 开右栏：收起中间展开面板，避免四栏挤压 */
+	/** 开右栏：收起中间展开面板，避免四栏挤压；悬浮形态面板改道 FloatWindow */
 	const openRight = useCallback((next: PanelId | AgentPanelId | null) => {
+		if (isFloatPanel(next)) {
+			setFloatPanel(next);
+			return;
+		}
 		if (next !== null) {
 			restoreSidebarFromStudio();
 			setLeftPanel(null);
@@ -485,6 +489,10 @@ export default function App() {
 	/** 切换右栏面板（点同钮收起，点异钮切换） */
 	const toggleRight = useCallback(
 		(id: PanelId | AgentPanelId) => {
+			if (isFloatPanel(id)) {
+				setFloatPanel((cur) => (cur === id ? null : id));
+				return;
+			}
 			openRight(rightPanelRef.current === id ? null : id);
 		},
 		[openRight],
@@ -564,6 +572,7 @@ export default function App() {
 	/** 用户已按停止：忽略迟到 delta，避免 UI 解锁后还在刷字 */
 	const abortingRef = useRef(false);
 	const rightPanelRef = useRef<PanelId | AgentPanelId | null>(initialPanels.right);
+	const floatPanelRef = useRef<PanelId | AgentPanelId | null>(null);
 	// onFrame 闭包内读最新面板/左栏选择（useCallback 依赖冻结，走 ref 防陈旧）
 	const agentPanelsRef = useRef<RpPanel[]>([]);
 	const leftPanelRef = useRef<PanelId | AgentPanelId | null>(initialPanels.left);
@@ -611,6 +620,10 @@ export default function App() {
 	useEffect(() => {
 		rightPanelRef.current = rightPanel;
 	}, [rightPanel]);
+
+	useEffect(() => {
+		floatPanelRef.current = floatPanel;
+	}, [floatPanel]);
 
 	/**
 	 * MVU 变量投递（唯一通道）：把账本里的 MVU 树（worldState.mvu）送进所有脚本 iframe 的
@@ -934,10 +947,18 @@ export default function App() {
 					}
 					agentPanelsRef.current = frame.panels ?? [];
 					setAgentPanels(agentPanelsRef.current);
-					// 恢复/切换后左栏若停在已不存在的 agent 面板上：收起
+					// 恢复/切换后若停在已不存在的 agent 面板上：收起
 					const sel = leftPanelRef.current;
 					if (sel?.startsWith("agent:") && !agentPanelsRef.current.some((p) => agentId(p.name) === sel)) {
 						setLeftPanel(null);
+					}
+					const rSel = rightPanelRef.current;
+					if (rSel?.startsWith("agent:") && !agentPanelsRef.current.some((p) => agentId(p.name) === rSel)) {
+						setRightPanel(null);
+					}
+					const fSel = floatPanelRef.current;
+					if (fSel?.startsWith("agent:") && !agentPanelsRef.current.some((p) => agentId(p.name) === fSel)) {
+						setFloatPanel(null);
 					}
 					clearStream();
 					resetSegs();
@@ -1134,13 +1155,15 @@ export default function App() {
 					setWorldState(frame.state);
 					break;
 				case "panels": {
-					// agent 自建面板（柱 2）：新面板自动展开到左栏（agent 持有前端，建了就给用户看）；
+					// agent 自建面板（柱 2）：新面板自动以可拖动悬浮窗打开（agent 持有前端，建了就给用户看）；
 					// 已开面板的更新自然重渲染；未开面板的更新只提示；被收起的面板若正开着则回落。
 					const prev = agentPanelsRef.current;
 					const next = frame.panels;
 					agentPanelsRef.current = next;
 					setAgentPanels(next);
 					const sel = leftPanelRef.current;
+					const rSel = rightPanelRef.current;
+					const fSel = floatPanelRef.current;
 					const fresh = next.find((p) => !prev.some((q) => q.name === p.name));
 					if (fresh) {
 						openRight(agentId(fresh.name));
@@ -1149,10 +1172,21 @@ export default function App() {
 							const q = prev.find((x) => x.name === p.name);
 							return q && q.updatedAt !== p.updatedAt;
 						});
-						if (updated && sel !== agentId(updated.name)) pushToast("info", t("面板「{name}」已更新", { name: updated.name }));
+						if (updated) {
+							const uid = agentId(updated.name);
+							if (sel !== uid && rSel !== uid && fSel !== uid) {
+								pushToast("info", t("面板「{name}」已更新", { name: updated.name }));
+							}
+						}
 					}
 					if (sel?.startsWith("agent:") && !next.some((p) => agentId(p.name) === sel)) {
 						setLeftPanel(null);
+					}
+					if (rSel?.startsWith("agent:") && !next.some((p) => agentId(p.name) === rSel)) {
+						setRightPanel(null);
+					}
+					if (fSel?.startsWith("agent:") && !next.some((p) => agentId(p.name) === fSel)) {
+						setFloatPanel(null);
 					}
 					break;
 				}
@@ -3231,7 +3265,29 @@ export default function App() {
 									</button>
 								</div>
 								<div className="stage-col-body">
-									{renderPanel(rightPanel as PanelId)}
+									{(() => {
+										if (rightPanel.startsWith("agent:")) {
+											const ag = agentPanels.find((p) => agentId(p.name) === rightPanel);
+											if (!ag) return null;
+											return (
+												<ArtifactPanel
+													key={ag.name}
+													panel={ag}
+													data={worldState?.panelData?.[ag.name]}
+													onSaved={(p) => {
+														setAgentPanels((list) =>
+															list.map((x) =>
+																x.name === p.name
+																	? { ...x, kind: p.kind as typeof x.kind, content: p.content, updatedAt: p.updatedAt }
+																	: x,
+															),
+														);
+													}}
+												/>
+											);
+										}
+										return renderPanel(rightPanel as PanelId);
+									})()}
 								</div>
 							</aside>
 						);
@@ -4099,6 +4155,7 @@ export default function App() {
 						>
 							{ag ? (
 								<ArtifactPanel
+									key={ag.name}
 									panel={ag}
 									data={worldState?.panelData?.[ag.name]}
 									onSaved={(p) => {
@@ -4146,7 +4203,7 @@ export default function App() {
 						id: agentId(p.name),
 						label: p.name,
 						icon: <IconDock size={14} />,
-						active: rightPanel === agentId(p.name),
+						active: floatPanel === agentId(p.name) || rightPanel === agentId(p.name),
 					})),
 				]}
 				onPick={(id) => {

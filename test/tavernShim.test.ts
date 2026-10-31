@@ -168,6 +168,9 @@ test("酒馆全局垫片：jQuery/lodash/变量系统/Mvu/waitGlobalInitialized 
 	assert.ok(headBlock.includes("jQuery v3.7.1"), "jQuery 进入 head");
 	assert.ok(headBlock.includes("g.Mvu"), "Mvu 壳进入 head");
 	assert.ok(headBlock.includes("getAllVariables"), "变量系统垫片进入 head");
+	assert.ok(headBlock.includes("getCurrentMessageId"), "getCurrentMessageId 进入 head");
+	assert.ok(headBlock.includes("getMvuData"), "Mvu.getMvuData 进入 head");
 	// 卡脚本本身完整（未被截断）
 	assert.ok(full.includes("switchTab"), "卡脚本原文在场");
 });
+

@@ -1764,3 +1764,42 @@ test("上一拍·发布守卫：落稿后切走分支，不把回执写到别的
 		assert.equal(sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-draft-revision").length, 1);
 	} finally { reg.unregister(); rmSync(cwd, { recursive: true, force: true }); }
 });
+
+test("pi：瞬时错误自动重试（默认 5 次上限），半截断流清理后落树纯净正文", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		let clears = 0;
+		let end: any = null;
+		const engine = await makePiEngine({
+			...piDeps(cwd, sm, reg.getModel("faux-rp")),
+			events: {
+				onStreamClear: () => clears++,
+				onTurnEnd: (info) => (end = info),
+			},
+		});
+		const session = sessionByEngine.get(engine)!;
+		assert.equal(session.settingsManager.getRetrySettings().maxRetries, 5, "默认重试上限为 5 次");
+		session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 5, baseDelayMs: 1 } });
+
+		reg.setResponses([
+			fauxAssistantMessage("半截残句不应保留", { stopReason: "error", errorMessage: "502 Bad Gateway" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			...directBeat("云散月明，她推窗望向山道。"),
+		] as never);
+
+		await engine.performTurn("推窗。");
+		assert.ok(end && !end.error && end.entryId, "重试成功后应正常落树");
+		assert.ok(clears >= 2, "每次报错重试前应清理前端半截流式缓冲");
+		const msgEntries = sm.getBranch().filter((e) => e.type === "message" || (e.type === "custom" && e.customType === CONVERSATION_PROCESS_TYPE));
+		const replies = sm.getBranch().filter((e) => e.type === "message" && e.message.role === "assistant") as any[];
+		assert.equal(replies.length, 1);
+		assert.equal(replies[0].message.content.find((c: any) => c.type === "text")?.text, "云散月明，她推窗望向山道。");
+		assert.ok(!JSON.stringify(msgEntries).includes("半截残句不应保留"), "失败重试的半截残句不得混入定稿、时间线或过程记录");
+		assertSessionAligned(session);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+

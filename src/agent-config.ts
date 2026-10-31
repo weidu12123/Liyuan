@@ -212,18 +212,65 @@ export function saveAgentConfig(cwd: string, config: LiyuanAgentConfig): void {
  * 条目之间思考档的差异不靠这里表达——那是梨园侧调用时自己传的 reasoning。
  */
 export function modelsForRuntime(models: AgentModelEntry[]): AgentModelEntry[] {
-	const seen = new Set<string>();
+	const byId = new Map<string, AgentModelEntry>();
 	const out: AgentModelEntry[] = [];
 	for (const m of models) {
-		if (seen.has(m.id)) continue;
-		seen.add(m.id);
+		const existing = byId.get(m.id);
+		if (existing) {
+			if (!("thinkingLevel" in existing)) {
+				if (typeof m.thinkingLevel === "string") {
+					existing.thinkingLevel = m.thinkingLevel;
+				} else if (Array.isArray(m.thinkingLevels) && m.thinkingLevels.length > 0) {
+					existing.thinkingLevel = m.thinkingLevels.find((lv) => lv !== "off") ?? m.thinkingLevels[0];
+				}
+			}
+			if (m.reasoning === true && existing.reasoning === undefined) {
+				existing.reasoning = true;
+			}
+			if (m.thinkingLevelMap && typeof m.thinkingLevelMap === "object" && !Array.isArray(m.thinkingLevelMap)) {
+				const prevMap =
+					existing.thinkingLevelMap && typeof existing.thinkingLevelMap === "object" && !Array.isArray(existing.thinkingLevelMap)
+						? (existing.thinkingLevelMap as Record<string, unknown>)
+						: {};
+				existing.thinkingLevelMap = { ...(m.thinkingLevelMap as Record<string, unknown>), ...prevMap };
+			}
+			continue;
+		}
 		const copy: AgentModelEntry = { ...m };
 		if (!("thinkingLevel" in copy) && Array.isArray(copy.thinkingLevels) && copy.thinkingLevels.length > 0) {
 			copy.thinkingLevel = copy.thinkingLevels.find((lv) => lv !== "off") ?? copy.thinkingLevels[0];
 		}
+		byId.set(m.id, copy);
 		out.push(copy);
 	}
 	return out;
+}
+
+/**
+ * 条目 → 运行时模型：把条目自身的 thinkingLevelMap 与 reasoning 标记补回运行时模型对象。
+ * 纯函数：不改入参，无差异时原样返回同一引用。
+ */
+export function applyEntryThinkingMap<M extends { reasoning?: boolean; thinkingLevelMap?: Record<string, unknown> }>(
+	base: M,
+	entry?: AgentModelEntry | null,
+): M {
+	if (!entry) return base;
+	const rawMap = entry.thinkingLevelMap;
+	const hasMap = Boolean(rawMap && typeof rawMap === "object" && !Array.isArray(rawMap));
+	const needsReasoning =
+		!base.reasoning &&
+		(entry.reasoning === true ||
+			typeof entry.thinkingLevel === "string" ||
+			(Array.isArray(entry.thinkingLevels) && entry.thinkingLevels.length > 0) ||
+			hasMap);
+	if (!hasMap && !needsReasoning) return base;
+	return {
+		...base,
+		...(needsReasoning ? { reasoning: true } : {}),
+		...(hasMap
+			? { thinkingLevelMap: { ...(base.thinkingLevelMap ?? {}), ...(rawMap as Record<string, unknown>) } }
+			: {}),
+	};
 }
 
 /**
@@ -563,6 +610,13 @@ export function consolidateProviderModels(models: AgentModelEntry[]): { models: 
 			primary.thinkingLevels = [...set];
 			if (!primary.contextWindow && m.contextWindow) primary.contextWindow = m.contextWindow;
 			if (!primary.maxTokens && m.maxTokens) primary.maxTokens = m.maxTokens;
+			if (m.thinkingLevelMap && typeof m.thinkingLevelMap === "object" && !Array.isArray(m.thinkingLevelMap)) {
+				const prevMap =
+					primary.thinkingLevelMap && typeof primary.thinkingLevelMap === "object" && !Array.isArray(primary.thinkingLevelMap)
+						? (primary.thinkingLevelMap as Record<string, unknown>)
+						: {};
+				primary.thinkingLevelMap = { ...(m.thinkingLevelMap as Record<string, unknown>), ...prevMap };
+			}
 			changed = true;
 			continue;
 		}

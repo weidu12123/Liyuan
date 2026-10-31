@@ -160,6 +160,8 @@ export const HEIGHT_REPORTER_SNIPPET =
 	`var oh=el.offsetTop+el.offsetHeight;` +
 	`h=Math.max(h,bottom,oh);` +
 	`}` +
+	`/* 计入 body 下内边距（如为底部 fixed 状态栏预留的 padding-bottom），避免出现内层滚动条 */` +
+	`if(h>0&&typeof getComputedStyle==="function"){try{var pb=Math.ceil(parseFloat(getComputedStyle(b).paddingBottom)||0);if(pb>0)h+=pb;}catch(e){}}` +
 	`/* 无可见子节点时退回 offsetHeight，仍避免 documentElement 的 100vh */` +
 	`if(h<1)h=b.offsetHeight||0;` +
 	`return h;` +
@@ -225,6 +227,12 @@ export function findScriptCloseIndex(html: string, bodyStart: number): number {
 			}
 			if (c === "\\") {
 				escape = true;
+				i++;
+				continue;
+			}
+			// JS 单/双引号字符串不能未转义跨行；若遇换行说明起点实为正则字面量（如 /'/g）或注释，立即归位
+			if ((state === "s" || state === "d") && (c === "\n" || c === "\r")) {
+				state = "code";
 				i++;
 				continue;
 			}

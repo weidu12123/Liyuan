@@ -9,7 +9,11 @@ export function isCardRuntimeSource(source: MessageEventSource | null): source i
 
 /** 推送当前变量并响应正式帧的启动握手，返回 effect 清理函数。 */
 export function syncCardRuntimeVariables(variables: Record<string, unknown>): () => void {
-	const payload = { liyuanVariables: { stat_data: variables } };
+	const wrapped = { stat_data: variables };
+	if (typeof window !== "undefined") {
+		(window as Window & { __liyuanVariables?: { stat_data: Record<string, unknown> } }).__liyuanVariables = wrapped;
+	}
+	const payload = { liyuanVariables: wrapped };
 	const post = (win: Window | null) => {
 		try { win?.postMessage(payload, "*"); } catch { /* 帧已卸载 */ }
 	};

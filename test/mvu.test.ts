@@ -428,3 +428,45 @@ test("实卡：初值只写在 schema prefault 里的卡能被播种", (t) => {
 	assert.ok(flat.length > 500, "解出来的树要有实质内容");
 	assert.ok(!flat.includes("undefined"), "树里不许出现 undefined");
 });
+
+test("JSON 格式 [InitVar]：解析完整对象、剥除 $meta、替换 <user> 宏、二元组更新保描述与坏树自愈", () => {
+	const jsonInit = JSON.stringify({
+		$meta: { extensible: true, required: ["世界", "角色"] },
+		世界: {
+			$meta: { extensible: false },
+			地点: ["<user>的家", "当前地点说明"],
+			时间: ["09:00", "当前时间说明"],
+		},
+		角色: {
+			林若珈: {
+				好感度: [100, "上限100"],
+				当前位置: ["{{user}}的厨房", "位置"],
+			},
+		},
+	});
+	const entries = [{ comment: "[InitVar]变量初始化（不要打开）", content: jsonInit }];
+	const seeded = seedMvuIfNeeded({}, entries, "怀瑾", "林若珈");
+	assert.deepEqual(seeded.mvu, {
+		世界: {
+			地点: ["怀瑾的家", "当前地点说明"],
+			时间: ["09:00", "当前时间说明"],
+		},
+		角色: {
+			林若珈: {
+				好感度: [100, "上限100"],
+				当前位置: ["怀瑾的厨房", "位置"],
+			},
+		},
+	});
+
+	// 场记平铺更新时保留 [value, desc] 二元组结构
+	const patched = applyMvuPatch(seeded.mvu!, { "世界.时间": "10:30", "角色.林若珈.好感度": 95 });
+	assert.deepEqual((patched.tree.世界 as Record<string, unknown>).时间, ["10:30", "当前时间说明"]);
+	assert.deepEqual(((patched.tree.角色 as Record<string, unknown>).林若珈 as Record<string, unknown>).好感度, [95, "上限100"]);
+
+	// 旧版按冒号误拆的坏树可自动重建
+	const corrupted = { '"$meta"': "{", '"世界"': "{", '"地点"': "[" };
+	const healed = seedMvuIfNeeded({ mvu: corrupted }, entries, "怀瑾", "林若珈");
+	assert.deepEqual((healed.mvu?.世界 as Record<string, unknown>)?.地点, ["怀瑾的家", "当前地点说明"]);
+});
+

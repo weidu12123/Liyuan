@@ -7,6 +7,7 @@
 
 import { basename, join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { isRetryableAssistantError } from "@liyuan/ai/compat";
 
 import { applyProjectedSamplers } from "../samplers.ts";
 import { getStageConnection, type StageHooks, type StageToolResult } from "./bridge.ts";
@@ -1294,6 +1295,13 @@ export class StageEngine {
 		};
 		const exchanges: ContextMessage[] = [];
 		const agentMedia: Array<{ toolName: string; toolCallId: string; details: Record<string, unknown>; text: string }> = [];
+		let attemptSnap = {
+			text: "",
+			loopText: "",
+			timelineLen: ws.timeline.length,
+			exchangesLen: 0,
+			final: null as AssistantMsgLike | null,
+		};
 		const requestId = () => ws.userId ??= [...sm.getBranch() as BranchEntryLike[]].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.id;
 		const finishAuthoring = (): StageTurnEndInfo => {
 			const aborted = this.#abort?.signal.aborted === true || final?.stopReason === "aborted";
@@ -1562,6 +1570,11 @@ export class StageEngine {
 			messageEnd: (message) => {
 				if (message.role === "user" && agentTurn) message.details = { ...(message.details as object ?? {}), liyuanMode: "agent" };
 				if (message.role !== "assistant" && message.role !== "toolResult") return undefined;
+				if (message.role === "assistant" && (message as AssistantMsgLike).stopReason === "error") {
+					final = message as AssistantMsgLike;
+					errored = final.errorMessage || "provider error";
+					return { persist: false };
+				}
 				const raw = structuredClone(message) as ContextMessage;
 				exchanges.push(raw);
 				const userId = requestId();
@@ -1569,7 +1582,6 @@ export class StageEngine {
 				if (message.role === "assistant") {
 					final = message as AssistantMsgLike;
 					if (agentTurn) {
-						if (final.stopReason === "error") errored = final.errorMessage || "provider error";
 						return { persist: false };
 					}
 					if (ws.revision) {
@@ -1581,7 +1593,6 @@ export class StageEngine {
 						if (round > 0) loopText += roundText;
 						if (ws.draft) recordSegment(ws, { kind: "text", text: roundText });
 					}
-					if (final.stopReason === "error") errored = final.errorMessage || "provider error";
 					const calls = final.content.filter((block) => block.type === "toolCall");
 					if (!errored && final.stopReason !== "aborted") {
 						if (round >= MAX_ROUNDS && calls.length) {
@@ -1619,7 +1630,11 @@ export class StageEngine {
 				blog("tool_result", `${name}: ${content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("")}`);
 			},
 			turnEnd: (withdrawTools) => {
-				if (agentTurn) return;
+				if (final?.stopReason === "error") return;
+				if (agentTurn) {
+					attemptSnap = { text, loopText, timelineLen: ws.timeline.length, exchangesLen: exchanges.length, final };
+					return;
+				}
 				const calls = final?.content.filter((block) => block.type === "toolCall") ?? [];
 				if (calls.length && final?.stopReason !== "aborted" && !userStopped && !this.#abort?.signal.aborted) {
 					delete ws.preview;
@@ -1639,8 +1654,22 @@ export class StageEngine {
 				roundText = "";
 				round++;
 				if (round >= MAX_ROUNDS) withdrawTools();
+				attemptSnap = { text, loopText, timelineLen: ws.timeline.length, exchangesLen: exchanges.length, final };
 			},
-			end: async () => {
+			end: async (willRetry) => {
+				if (willRetry) {
+					text = attemptSnap.text;
+					loopText = attemptSnap.loopText;
+					ws.timeline.length = attemptSnap.timelineLen;
+					exchanges.length = attemptSnap.exchangesLen;
+					final = attemptSnap.final;
+					roundText = "";
+					errored = undefined;
+					delete ws.preview;
+					ev.onStreamClear?.();
+					checkpoint(true);
+					return;
+				}
 				if (finished) return;
 				finished = true;
 				try {
@@ -1714,6 +1743,7 @@ export class StageEngine {
 		const release = connection.activate(hooks, tools);
 		try {
 			await session.prompt(userText ?? lastUserText, { expandPromptTemplates: false, reuseUserMessage: userText === null });
+			if (!finished) await hooks.end(false);
 			if (!finished || !endInfo) throw new Error("pi 未完成本拍的 RP 收尾。");
 			return endInfo;
 		} finally {
@@ -2389,34 +2419,75 @@ export class StageEngine {
 			this.#deps.events?.onActivity?.(line);
 			console.log(`[stage-side] ${line}`);
 		};
-		try {
-			const s = this.#deps.sideStreamFn(
-				chosen,
-				{
-					systemPrompt,
-					messages: [{ role: "user", content: [{ type: "text", text: userText }], timestamp: Date.now() }],
-				},
-				options,
-			);
-			let final: AssistantMsgLike | null = null;
-			for await (const e of s) {
-				if (e.type === "thinking_delta") thinkChars += (e.delta ?? "").length;
-				else if (e.type === "done") final = e.message ?? null;
-				else if (e.type === "error") {
-					report(0);
-					return { error: e.error?.errorMessage || `stopReason=${e.error?.stopReason ?? "?"}` };
+		const maxRetries = 5;
+		const baseDelayMs = 2000;
+		for (let attempt = 0; ; attempt++) {
+			thinkChars = 0;
+			try {
+				const s = this.#deps.sideStreamFn(
+					chosen,
+					{
+						systemPrompt,
+						messages: [{ role: "user", content: [{ type: "text", text: userText }], timestamp: Date.now() }],
+					},
+					options,
+				);
+				let final: AssistantMsgLike | null = null;
+				let errMsg: string | undefined;
+				for await (const e of s) {
+					if (e.type === "thinking_delta") thinkChars += (e.delta ?? "").length;
+					else if (e.type === "done") final = e.message ?? null;
+					else if (e.type === "error") {
+						errMsg = e.error?.errorMessage || `stopReason=${e.error?.stopReason ?? "?"}`;
+						break;
+					}
 				}
-			}
-			if (!final) {
+				if (errMsg !== undefined) {
+					if (
+						attempt < maxRetries &&
+						!this.#abort?.signal.aborted &&
+						isRetryableAssistantError({ stopReason: "error", errorMessage: errMsg } as never)
+					) {
+						await new Promise<void>((resolve, reject) => {
+							const sig = this.#abort?.signal;
+							if (sig?.aborted) { reject(new Error("aborted")); return; }
+							const timer = setTimeout(resolve, baseDelayMs * 2 ** attempt);
+							sig?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
+						});
+						continue;
+					}
+					report(0);
+					return { error: errMsg };
+				}
+				if (!final) {
+					report(0);
+					return { error: "流未产出最终消息" };
+				}
+				const text = textOfAssistant(final);
+				report(text.length);
+				return text || { error: "最终消息无文本" };
+			} catch (err) {
+				const errMsg = err instanceof Error ? err.message : String(err);
+				if (
+					attempt < maxRetries &&
+					!this.#abort?.signal.aborted &&
+					isRetryableAssistantError({ stopReason: "error", errorMessage: errMsg } as never)
+				) {
+					try {
+						await new Promise<void>((resolve, reject) => {
+							const sig = this.#abort?.signal;
+							if (sig?.aborted) { reject(new Error("aborted")); return; }
+							const timer = setTimeout(resolve, baseDelayMs * 2 ** attempt);
+							sig?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
+						});
+						continue;
+					} catch {
+						// aborted during retry backoff
+					}
+				}
 				report(0);
-				return { error: "流未产出最终消息" };
+				return { error: errMsg };
 			}
-			const text = textOfAssistant(final);
-			report(text.length);
-			return text || { error: "最终消息无文本" };
-		} catch (err) {
-			report(0);
-			return { error: err instanceof Error ? err.message : String(err) };
 		}
 	}
 }

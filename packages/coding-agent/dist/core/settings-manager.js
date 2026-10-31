@@ -592,7 +592,7 @@ export class SettingsManager {
     getRetrySettings() {
         return {
             enabled: this.getRetryEnabled(),
-            maxRetries: this.settings.retry?.maxRetries ?? 3,
+            maxRetries: this.settings.retry?.maxRetries ?? 5,
             baseDelayMs: this.settings.retry?.baseDelayMs ?? 2000,
         };
     }

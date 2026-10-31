@@ -22,7 +22,7 @@ import {
 } from "./preset-assemble.ts";
 import { normalizeRpPreset, SAMPLER_KEYS } from "./preset.ts";
 
-export type PresetKind = "st" | "rp";
+type PresetKind = "st" | "rp";
 
 export interface PresetDoc {
 	kind: PresetKind;
@@ -74,7 +74,7 @@ export interface PresetPatch {
  * 所以 `before`/`after` 不是排版偏好，是**这块什么时候送达**。缺省追加到末尾。
  * 给了 `depth` 则落成 in-chat 深度注入（`injection_position: 1`），位置改由深度决定。
  */
-export interface NewPresetBlock {
+interface NewPresetBlock {
 	/** 块 id；缺省自动生成（与既有 id 冲突时报错，不静默覆盖别人的块） */
 	id?: string;
 	name: string;

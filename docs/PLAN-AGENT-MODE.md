@@ -2,7 +2,7 @@
 
 2026-09-21 用户提出并定案为**第三种模式**，定名「agent 模式」。2026-09-22 用户定为下一版主线，刀 1（后端）已落地，状态见第十一节。文中所有文件:行引用都是 2026-09-21 的快照，实施时以当时代码为准。
 
-前身是 [小说创作模式的延期构想](PLAN-NOVEL-MODE.md)（2026-09-07：把整个上下文当稿纸、每次回复是一个章节、可回到任意章节修改）。本文把那个构想换成更硬的形状。
+前身是 小说创作模式的延期构想（2026-09-07：把整个上下文当稿纸、每次回复是一个章节、可回到任意章节修改）。本文把那个构想换成更硬的形状。
 
 ## 一、用户定案（原话大意，不得改写）
 
@@ -53,7 +53,7 @@ README 那张类比表（代码 ↔ 剧情正文、Edit ↔ 局部改稿、Rewin
 
 **问 2 负责人**：这是一个新机制，不是补丁。负责人有三个，全是既有物或既有物的直接延伸：
 
-- **稿子**（章文件 ＋ 会话树条目）——新建，但形状照抄上一拍修订已经落地的「稿件文件 ＋ 树条目指向 ＋ 写时复制」（[PI-RETURN-PREVIOUS-DRAFT.md](PI-RETURN-PREVIOUS-DRAFT.md) 落点与所有权一节，`src/stage/draft-projection.ts:58 applyDraftRevisions`、`src/stage/previous-draft.ts PreviousDraftEditor`）。
+- **稿子**（章文件 ＋ 会话树条目）——新建，但形状照抄上一拍修订已经落地的「稿件文件 ＋ 树条目指向 ＋ 写时复制」（PI-RETURN-PREVIOUS-DRAFT.md 落点与所有权一节，`src/stage/draft-projection.ts:58 applyDraftRevisions`、`src/stage/previous-draft.ts PreviousDraftEditor`）。
 - **agent 轮**——`engine.ts #turn` 里 `authoringTurn` 那条路已经是「cwd＝卡目录、原始过程回放、沙箱内文件工具」的 pi 会话（`engine.ts:1258-1264`：system prompt / 工具清单 / `authoringHistory` 三处按模式分流）。agent 轮＝这条路 ＋ 稿子工具 ＋ 项目状态块。
 - **旁路链**——`engine.ts:1148-1241`（场记 `runScribeTurn` → 世界线钉档 `storeSave` → 压缩 `#compact`）整段照用，触发信号从「本拍有正文」换成「本轮写入了章」。
 
@@ -120,7 +120,7 @@ agent 轮的送模内容只有这四样，**在此声明为闭合集合**，实�
 3. **剧情向压缩** `#compact`：按章计数。
 4. **卡级记忆**：`syncCardMemory`（`src/card-memory.ts:458`）的触发单位是「一局＝一个子项目」，拍外完成——不变。局复盘的证据收集 `collectChatEvidence` 从分支取正文，改认 `rp-chapter` 条目。
 
-**一轮讨论可以写多章**（模型连续两次 `story_append`），每次各触发一遍；也可以一章不写（纯讨论），什么都不触发。**`story_edit` 不触发任何旁路**——改中间章后账本、摘要、后续章的协调照旧留白（与上一拍修订同一条留白，见 [PLAN-NOVEL-MODE.md](PLAN-NOVEL-MODE.md) 与 PI-RETURN-PREVIOUS-DRAFT.md「工具与边界」末条）。真要跟改，由模型自己决定「我改了这里，后面哪些要跟」并用 `story_edit` 跟——像改函数签名后 grep 调用方，harness 不猜。
+**一轮讨论可以写多章**（模型连续两次 `story_append`），每次各触发一遍；也可以一章不写（纯讨论），什么都不触发。**`story_edit` 不触发任何旁路**——改中间章后账本、摘要、后续章的协调照旧留白（与上一拍修订同一条留白，见 PLAN-NOVEL-MODE.md 与 PI-RETURN-PREVIOUS-DRAFT.md「工具与边界」末条）。真要跟改，由模型自己决定「我改了这里，后面哪些要跟」并用 `story_edit` 跟——像改函数签名后 grep 调用方，harness 不猜。
 
 ### 5.6 前端：中间是稿子，右栏是讨论
 
@@ -199,5 +199,5 @@ agent 轮的送模内容只有这四样，**在此声明为闭合集合**，实�
 - 2026-09-22：**刀 3 已落地**（导出扮演子项目为 agent 子项目仍是可选后续，未做）：用户按章直接编辑（稿子视图「编辑」→ 全文替换 → `POST /api/story/edit` → `replaceChapterText`，与 `story_edit` 同一条修订落点、来源 `user`）；「回退到此章之后」（`story_rewind` 帧 → `chapterRewindTarget` 算出写入该章那一轮的末条 → `navigateTree`，之后的章随分支退掉、文件仍在）；`story_append` 正文流式预览（引擎从 pi `toolcall_*` 增量事件取 `content` 参数 → `story_preview` 帧 → 稿子末尾「写入中」章；⚠ 实测 sonnet 经中转把工具 JSON 整块送达，只出一帧全量预览，在章落盘前约 6 秒可见——逐字生长取决于 provider 是否流工具参数）。浏览器实测三样都过；回退后连用户在其后做的修订也一起退掉（正确：修订是分支上的条目）。
 - 2026-09-22：**刀 2 前端已落地**：新建项目弹窗选「扮演 / agent」（`new` 帧带 `mode`）；agent 子项目桌面端 6:4 反向分栏——`StoryPane`（章目录＋连续阅读＋版本角标）在中间、讨论在右，只有一个输入框；顶栏「扮演｜工作」开关让位给 `agent` 标记（手机上兼作稿子页签入口）；讨论区章卡片（`chapter` 通道，写入/修订留痕，点击定位到章）；手机稿子/讨论双页签；会话列表项目行带 `agent` 角标。数据通道＝`hello.story`（章目录，轻）＋`GET /api/story`（正文，gzip），前端按「chapterId:version」指纹变化才拉。隔离实例浏览器实测：建 agent 项目→写第 1 章→story_edit→卡片/版本角标/手机页签全部对上；扮演项目不受影响。
 - 前置：1.6.1（桌面包漏发 `AUTHORING.md` 的修复已在 `4ff23ad`）。
-- 2026-09-22：用户认定现状粗糙，差距写在 [AGENT-MODE-STATUS.md](AGENT-MODE-STATUS.md)。**下一步改为 agent 模式的 coding agent 化**（一章一个文件、一次操作涉及多个文件）。本文 §十的实弹与发版让位，不在那一步之前做。
+- 2026-09-22：用户认定现状粗糙，差距写在 AGENT-MODE-STATUS.md。**下一步改为 agent 模式的 coding agent 化**（一章一个文件、一次操作涉及多个文件）。本文 §十的实弹与发版让位，不在那一步之前做。
 - 开工条件：用户点名；开工第一步是重答第四节三问并核对本文引用的行号。

@@ -8,9 +8,9 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-export const AGENT_CONFIG_FILE = "liyuan.agent.json";
-export const PROFILES_DIR = "liyuan-profiles";
-export const ACTIVE_META_FILE = "liyuan.agent.meta.json";
+const AGENT_CONFIG_FILE = "liyuan.agent.json";
+const PROFILES_DIR = "liyuan-profiles";
+const ACTIVE_META_FILE = "liyuan.agent.meta.json";
 
 /**
  * 单模型条目：id 必填，其余字段原样保留。
@@ -68,12 +68,12 @@ export interface LiyuanAgentConfig {
 	providers: Record<string, AgentProvider>;
 }
 
-export const EMPTY_AGENT_CONFIG = (): LiyuanAgentConfig => ({
+const EMPTY_AGENT_CONFIG = (): LiyuanAgentConfig => ({
 	version: 1,
 	providers: {},
 });
 
-export function agentConfigPath(cwd: string): string {
+function agentConfigPath(cwd: string): string {
 	return join(cwd, AGENT_CONFIG_FILE);
 }
 
@@ -134,7 +134,7 @@ export function mergeModelEntries(existing: AgentModelEntry[] | undefined, incom
 	});
 }
 
-export function keyMeta(apiKey: unknown): {
+function keyMeta(apiKey: unknown): {
 	hasKey: boolean;
 	keyKind: "none" | "literal" | "env" | "command" | "placeholder";
 } {
@@ -376,7 +376,7 @@ export function seedProviderFromRuntime(input: {
 }
 
 /** 解析 $VAR / ${VAR}；非 $ 开头原样返回 */
-export function resolveEnvApiKey(apiKey: string): string | undefined {
+function resolveEnvApiKey(apiKey: string): string | undefined {
 	const k = apiKey.trim();
 	if (!k || k === "placeholder") return undefined;
 	if (k.startsWith("!")) return undefined;
@@ -408,7 +408,7 @@ export function materializeEnvKeysInConfig(config: LiyuanAgentConfig): boolean {
 
 // ---------- 配置仓库（profiles）----------
 
-export interface AgentProfileRecord {
+interface AgentProfileRecord {
 	/** 仓库 id（文件名 slug） */
 	id: string;
 	/** 显示名 */
@@ -418,7 +418,7 @@ export interface AgentProfileRecord {
 	config: LiyuanAgentConfig;
 }
 
-export interface AgentProfileListItem {
+interface AgentProfileListItem {
 	id: string;
 	name: string;
 	updatedAt: number;
@@ -442,7 +442,7 @@ function activeMetaPath(cwd: string): string {
 	return join(cwd, ACTIVE_META_FILE);
 }
 
-export function loadActiveProfileId(cwd: string): string | null {
+function loadActiveProfileId(cwd: string): string | null {
 	const p = activeMetaPath(cwd);
 	if (!existsSync(p)) return null;
 	try {
@@ -453,12 +453,12 @@ export function loadActiveProfileId(cwd: string): string | null {
 	}
 }
 
-export function saveActiveProfileId(cwd: string, activeId: string | null): void {
+function saveActiveProfileId(cwd: string, activeId: string | null): void {
 	writeJsonBackup(activeMetaPath(cwd), { activeId });
 }
 
 /** 合法 id：字母数字 . - _ */
-export function sanitizeProfileId(raw: string): string {
+function sanitizeProfileId(raw: string): string {
 	const s = raw
 		.trim()
 		.replace(/[\\/:*?"<>|\s]+/g, "-")
@@ -594,7 +594,7 @@ export function enableProfile(cwd: string, agentDir: string, id: string): Liyuan
 /**
  * 合并一个渠道下因旧版切档而拆成多条 `#2` 的同 id 模型条目，将其档位归并进第一条的 `thinkingLevels`。
  */
-export function consolidateProviderModels(models: AgentModelEntry[]): { models: AgentModelEntry[]; changed: boolean } {
+function consolidateProviderModels(models: AgentModelEntry[]): { models: AgentModelEntry[]; changed: boolean } {
 	const out: AgentModelEntry[] = [];
 	let changed = false;
 	for (const m of models) {
@@ -680,47 +680,3 @@ export function mergeProfilesIntoActiveConfig(cwd: string): { merged: boolean; p
 	return { merged: changed, providers: added };
 }
 
-/**
- * 把当前 liyuan.agent.json 拆进仓库（若仓库为空）。
- * 每个 provider 存成一份配置；active = defaultProvider 对应那份。
- */
-export function migrateActiveConfigIntoProfiles(cwd: string): { migrated: boolean; ids: string[] } {
-	if (listProfiles(cwd).length > 0) return { migrated: false, ids: [] };
-	const { exists, config } = loadAgentConfig(cwd);
-	if (!exists || Object.keys(config.providers).length === 0) return { migrated: false, ids: [] };
-
-	const ids: string[] = [];
-	const extras = {
-		shellPath: config.shellPath,
-		skills: config.skills,
-		enableSkillCommands: config.enableSkillCommands,
-	};
-	for (const [pname, provider] of Object.entries(config.providers)) {
-		const id = sanitizeProfileId(pname);
-		const models = normalizeModels(provider.models);
-		const cfg: LiyuanAgentConfig = {
-			version: 1,
-			...extras,
-			defaultProvider: pname,
-			defaultModel: models[0]?.id ?? config.defaultModel,
-			defaultThinkingLevel:
-				(typeof models[0]?.thinkingLevel === "string" && models[0].thinkingLevel) ||
-				config.defaultThinkingLevel,
-			providers: { [pname]: provider },
-		};
-		saveProfile(cwd, id, pname, cfg);
-		ids.push(id);
-	}
-	const active =
-		(config.defaultProvider && ids.includes(sanitizeProfileId(config.defaultProvider))
-			? sanitizeProfileId(config.defaultProvider)
-			: ids[0]) ?? null;
-	if (active) {
-		saveActiveProfileId(cwd, active);
-		const rec = loadProfile(cwd, active);
-		if (rec) {
-			saveAgentConfig(cwd, rec.config);
-		}
-	}
-	return { migrated: true, ids };
-}

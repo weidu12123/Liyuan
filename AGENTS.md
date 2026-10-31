@@ -11,22 +11,17 @@
    timestamp 核对北京时间。
 3. **流程与提示词的最终形态**定义在 `docs/PLAN-ROUND-FLOW.md`——任何提示词/
    引擎改动都要回答「离这个流程近了多少」。
-4. **当前阶段见 `docs/PLAN-RP-AGENT-NEXT.md`（2026-09-12 收尾）**：写卡板块（主会话模式＋资源工程＋
-   角色卡工坊＋结构账本／预览通道／手册成包）已提交至 `23a0baf`；前端 4:6 分栏与顶栏三键已落地（`9441353`）。
-   预设的处理是四步管线（导入原样 → 装载拨开关保存 → 引擎按开关编译 → 梨园声明/过目/分流成逐块
+4. 预设的处理是四步管线（导入原样 → 装载拨开关保存 → 引擎按开关编译 → 梨园声明/过目/分流成逐块
    `（预设）` 条目），条目来源标注（`（预设）` / `（世界书·书名）`）与来源书卸载跟随见
    `docs/PLAN-PRESET-HARNESS-STRIP.md` 状态末条。工坊功能通道（`/api/card/authoring`）不动。
    `docs/PLAN-RP-AGENT-EXEC.md` 与 `docs/PRESET-SPLIT-TAXONOMY.md` 保留为历史计划与研究资料。
 
 ## 快速索引
 
-- `docs/PLAN-RP-AGENT-NEXT.md` — 当前路线、已提交基线与下一窗口交接（优先读）
 - `docs/CARD-AUTHORING-SLICE1.md` — 写卡第一切片的实际能力、验证与下一步边界
-- `docs/CARD-AUTHORING-MODE.md` — 主会话写卡模式、共享记录的可见性与隔离续演验证
-- `docs/PLAN-SANDBOX.md` — 工作模式沙箱：原生文件工具以卡目录为界、卡外走选择卡申请（`src/sandbox.ts`）；**右栏助手已于 2026-09-12 删除**（该文第六节）
+- `docs/PLAN-SANDBOX.md` — 沙箱：原生文件工具以卡目录为界、卡外走选择卡申请（`src/sandbox.ts`）
 - `docs/PLAN-ROUND-FLOW.md` — 分轮演出流程（最终形态 + 落地记录）
 - `docs/READING-THINKING.md` — 读思考记录的**正确方法**（先读这个再碰会话文件）
-- `docs/DRAFT-prompt-rp-agent.md` — 「怎么演这一拍」演出指导草稿（B 版）
 - `src/stage/` — 台上引擎（assemble 提示词 / engine 回合循环 / workspace 稿纸 /
   tools 工具 schema）
 - 测试：`node --test test/*.test.ts`（2026-09-12 最近验证：800 项，796 通过，4 项既有实卡环境失败）

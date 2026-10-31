@@ -14,13 +14,13 @@ export interface CardPreviewRequest {
 	/** 页面就绪后再观察多少毫秒 */
 	wait: number;
 }
-export interface CardPreviewEvent { level: string; source: string; message: string }
+interface CardPreviewEvent { level: string; source: string; message: string }
 export interface CardPreviewReport {
 	id: string;
 	ready: boolean;
 	events: CardPreviewEvent[];
 }
-export interface CardPreviewFrame {
+interface CardPreviewFrame {
 	source: string;
 	text?: string;
 	elements?: number;
@@ -29,7 +29,7 @@ export interface CardPreviewFrame {
 	brokenImages?: number;
 	height?: number;
 }
-export interface CardPreviewResult {
+interface CardPreviewResult {
 	ok: boolean;
 	ready: boolean;
 	message: string;

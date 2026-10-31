@@ -7,7 +7,6 @@ import {
 	lorebookList,
 	lorebookSearch,
 	lorebookToggle,
-	lorebookWrite,
 	type LoreDeps,
 	type LoreHitLike,
 } from "../src/tools/lore.ts";
@@ -32,13 +31,13 @@ const stageDeps = (over: Partial<UnifiedStageDeps> = {}): UnifiedStageDeps => ({
 });
 
 const stageCtx: ToolContext = { surface: "stage", language: "中文" };
-const assistantCtx: ToolContext = { surface: "assistant", language: "中文" };
+const extensionCtx: ToolContext = { surface: "extension", language: "中文" };
 
 // ---------------- 合一的核心验收：同一工具，同一份实现 ----------------
 
 test("跨 surface 产出一致性：同样的命中，正文部分逐字相同（差异只在话术裁剪）", async () => {
 	const s = await lorebookSearch.run({ query: "骨誓" }, deps(), stageCtx);
-	const a = await lorebookSearch.run({ query: "骨誓" }, deps(), assistantCtx);
+	const a = await lorebookSearch.run({ query: "骨誓" }, deps(), extensionCtx);
 	// 命中格式化是共用的：标题+全角关键词+正文，两面必须逐字一致
 	assert.equal(s.text, a.text);
 	assert.equal(s.text, "### 北境骨誓（关键词：骨誓、北境）\n以骨为契的古俗。");
@@ -47,7 +46,7 @@ test("跨 surface 产出一致性：同样的命中，正文部分逐字相同�
 
 test("台上不开 limit（配额固定），助手开 limit 且钳到 [1,20]", async () => {
 	const stageSchema = lorebookSearch.parameters(stageCtx) as { properties: Record<string, unknown> };
-	const asstSchema = lorebookSearch.parameters(assistantCtx) as { properties: Record<string, unknown> };
+	const asstSchema = lorebookSearch.parameters(extensionCtx) as { properties: Record<string, unknown> };
 	assert.ok(!("limit" in stageSchema.properties), "台上一拍检索配额有限，条数固定才好控上下文预算");
 	assert.ok("limit" in asstSchema.properties);
 
@@ -59,10 +58,10 @@ test("台上不开 limit（配额固定），助手开 limit 且钳到 [1,20]", 
 		},
 	});
 	await lorebookSearch.run({ query: "x" }, spy, stageCtx);
-	await lorebookSearch.run({ query: "x" }, spy, assistantCtx);
-	await lorebookSearch.run({ query: "x", limit: 999 }, spy, assistantCtx);
-	await lorebookSearch.run({ query: "x", limit: 0 }, spy, assistantCtx);
-	await lorebookSearch.run({ query: "x", limit: "abc" }, spy, assistantCtx);
+	await lorebookSearch.run({ query: "x" }, spy, extensionCtx);
+	await lorebookSearch.run({ query: "x", limit: 999 }, spy, extensionCtx);
+	await lorebookSearch.run({ query: "x", limit: 0 }, spy, extensionCtx);
+	await lorebookSearch.run({ query: "x", limit: "abc" }, spy, extensionCtx);
 	assert.deepEqual(seen, [3, 5, 20, 1, 5], "台上恒 3；助手默认 5、上钳 20、下钳 1、非法回默认");
 });
 
@@ -76,10 +75,10 @@ test("容错契约：检索抛错/缺参都回可读文本，不抛（一拍不�
 	assert.match(s.text, /索引损坏/);
 	assert.match(s.text, /继续写/, "台上失败也要告诉模型怎么往下走");
 
-	const a = await lorebookSearch.run({ query: "任意" }, boom, assistantCtx);
+	const a = await lorebookSearch.run({ query: "任意" }, boom, extensionCtx);
 	assert.match(a.text, /索引损坏/);
 
-	for (const ctx of [stageCtx, assistantCtx]) {
+	for (const ctx of [stageCtx, extensionCtx]) {
 		assert.match((await lorebookSearch.run({}, deps(), ctx)).text, /缺少 query/);
 		assert.match((await lorebookSearch.run({ query: "   " }, deps(), ctx)).text, /缺少 query/);
 	}
@@ -166,61 +165,6 @@ test("写入门禁：读不到用户原文时宁拦勿写", () => {
 
 // ---------------- M-D2：写侧 / 列举 / 启停 ----------------
 
-test("lorebook_write：门禁拦下时不落盘（服务层根本不该被调到）", async () => {
-	let called = 0;
-	const r = await lorebookWrite.run(
-		{ title: "骨誓", keys: ["骨誓"], content: "以骨为契。" },
-		deps({
-			writeLore: () => {
-				called++;
-				return { comment: "骨誓", keys: ["骨誓"] };
-			},
-			gate: () => ({ lastUserText: "我们继续赶路", creationMode: "ask" }),
-		}),
-		stageCtx,
-	);
-	assert.equal(called, 0, "被拦就不该碰服务层");
-	assert.match(r.text, /需用户明确要求/);
-	assert.match(String(r.activity), /门禁拦下/);
-});
-
-test("lorebook_write：用户明确要求→写入；重复内容→如实回报未写入", async () => {
-	const ok = await lorebookWrite.run(
-		{ title: "北境骨誓", keys: ["骨誓", "北境"], content: "以骨为契。", constant: true },
-		deps({
-			writeLore: (i) => ({ uid: 9, comment: i.title, keys: i.keys, constant: i.constant }),
-			gate: () => ({ lastUserText: "把这条设定记下来", creationMode: "ask" }),
-		}),
-		stageCtx,
-	);
-	assert.match(ok.text, /已固化为正典/);
-	assert.match(ok.text, /骨誓、北境/);
-	assert.match(ok.text, /常驻注入/);
-
-	const dup = await lorebookWrite.run(
-		{ title: "北境骨誓", keys: [], content: "以骨为契。" },
-		deps({ writeLore: () => null, gate: () => ({ lastUserText: "记录一下", creationMode: "ask" }) }),
-		stageCtx,
-	);
-	assert.match(dup.text, /重复/);
-	assert.doesNotMatch(dup.text, /已固化/);
-});
-
-test("lorebook_write：缺参/服务层抛错都回可读文本，不抛", async () => {
-	const d = deps({ writeLore: () => ({ comment: "x" }) });
-	assert.match((await lorebookWrite.run({ title: "只有标题" }, d, stageCtx)).text, /缺少 title 或 content/);
-	const boom = await lorebookWrite.run(
-		{ title: "a", keys: [], content: "b" },
-		deps({
-			writeLore: () => {
-				throw new Error("磁盘只读");
-			},
-		}),
-		stageCtx,
-	);
-	assert.match(boom.text, /磁盘只读/);
-});
-
 test("lorebook_list：给目录不给正文；标出常驻/已停用；带指纹供 toggle 取用", async () => {
 	const d = deps({
 		listLore: () => [
@@ -264,7 +208,6 @@ test("依赖缺失的工具不上清单（工具存在却恒回「不支持」�
 	);
 
 	const full = unifiedStageTools("中文", stageDeps({
-		writeLore: () => null,
 		listLore: () => [],
 		fingerprint: (c) => c,
 		toggleLore: () => 0,
@@ -277,7 +220,6 @@ test("依赖缺失的工具不上清单（工具存在却恒回「不支持」�
 		"lorebook_read",
 		"lorebook_search",
 		"lorebook_toggle",
-		"lorebook_write",
 		"memory_add",
 		"memory_delete",
 		"memory_list",

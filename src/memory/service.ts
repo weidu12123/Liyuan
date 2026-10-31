@@ -28,7 +28,6 @@ import type {
 	MemoryStoreConfig,
 	MemoryStoreStats,
 } from "./types.ts";
-import { DEFAULT_MEMORY_CONFIG } from "./types.ts";
 import { memoryTextVersion } from "../card-memory-tools.ts";
 import type { MemoryDocument, MemorySearchResult } from "../tools/memory.ts";
 
@@ -338,10 +337,6 @@ export async function onNarrativeTurnEnd(
 	}
 }
 
-export function defaultMemoryConfig(): MemoryConfig {
-	return structuredClone(DEFAULT_MEMORY_CONFIG);
-}
-
 /**
  * 压缩归档：被上下文压缩裁掉的早期正文**完整**入剧情库（source=archive）。
  * 与 onNarrativeTurnEnd 的滚动摘要互补——接力摘要管剧情连续性，归档管细节召回：
@@ -428,7 +423,7 @@ export async function probeCloudEmbed(cwd: string): Promise<{ ok: boolean; dim?:
 	}
 }
 
-export type MemoryReembedResult = {
+type MemoryReembedResult = {
 	mode: "local" | "cloud";
 	model: string;
 	stores: Array<{ storeId: string; name: string; total: number; updated: number; skipped: number }>;

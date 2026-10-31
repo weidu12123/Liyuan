@@ -13,13 +13,13 @@
 
 import { cleanAssistantText } from "./postprocess.ts";
 
-export interface StChatMeta {
+interface StChatMeta {
 	userName: string;
 	charName: string;
 	createDate?: string;
 }
 
-export interface StChatMessage {
+interface StChatMessage {
 	role: "user" | "assistant";
 	/** ST 侧的发言者名（群聊时区分角色） */
 	name: string;
@@ -29,7 +29,7 @@ export interface StChatMessage {
 	hidden?: boolean;
 }
 
-export interface ParsedStChat {
+interface ParsedStChat {
 	meta: StChatMeta;
 	messages: StChatMessage[];
 	/** 被 ST 隐藏（is_system）但仍纳入导入的楼层数 */
@@ -97,7 +97,7 @@ export function parseStChat(jsonlText: string): ParsedStChat {
 }
 
 
-export interface CleanRules {
+interface CleanRules {
 	/** 正文提取标签：设置后只保留 <tag>…</tag> 之间的内容（多段拼接）；无命中时回退为策略清洗 */
 	extractTag?: string;
 	/**
@@ -106,9 +106,6 @@ export interface CleanRules {
 	 */
 	stripTags?: string[];
 }
-
-/** @deprecated 策略引擎后默认不再靠名单；保留空数组兼容旧调用 */
-export const DEFAULT_STRIP_TAGS: string[] = [];
 
 const escapeReg = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -143,7 +140,7 @@ export function cleanChat(messages: StChatMessage[], rules: CleanRules = {}): St
 		.filter((m) => m.text.length > 0);
 }
 
-export interface ImportBlockInput {
+interface ImportBlockInput {
 	/** 旧轮次的接力摘要（可为空：短对话无需摘要） */
 	summary: string;
 	/** 原文保留的最近轮次（已清洗） */

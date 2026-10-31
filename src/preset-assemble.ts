@@ -22,7 +22,7 @@ import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import type { RpPreset } from "./preset.ts";
 
 /** 酒馆内置 marker 槽位：identifier → 填什么材料。`chatHistory` 只标位置，不填料。 */
-export const MARKER_SLOTS = {
+const MARKER_SLOTS = {
 	worldInfoBefore: "worldInfoBefore",
 	charDescription: "charDescription",
 	charPersonality: "charPersonality",
@@ -33,7 +33,7 @@ export const MARKER_SLOTS = {
 	chatHistory: "chatHistory",
 } as const;
 
-export type MarkerId = keyof typeof MARKER_SLOTS;
+type MarkerId = keyof typeof MARKER_SLOTS;
 
 /** 梨园侧材料：按酒馆的槽位交货，位置由预设作者的 prompt_order 决定 */
 export type MarkerMaterials = Partial<Record<Exclude<MarkerId, "chatHistory">, string>>;
@@ -61,7 +61,7 @@ export interface DepthPiece extends AssembledPiece {
 	order: number;
 }
 
-export type AssembleAction =
+type AssembleAction =
 	| "历史前"
 	| "历史后"
 	| "深度注入"
@@ -118,7 +118,7 @@ export interface AssemblyEntry {
 	missing?: boolean;
 }
 
-export interface AssembleOptions {
+interface AssembleOptions {
 	materials?: MarkerMaterials;
 	charName?: string;
 	userName?: string;

@@ -64,7 +64,7 @@ export interface CompactPlan {
 	previousSummary?: string;
 }
 
-export interface PlanCompactionOptions {
+interface PlanCompactionOptions {
 	/** 每 N 个叙事拍压缩一次；<=0 关闭 */
 	everyNTurns: number;
 	userName: string;
@@ -213,7 +213,7 @@ export interface CompactRunDeps {
 	onCompaction?: (e: { state: "start" | "end"; ok?: boolean; detail: string }) => void;
 }
 
-export interface CompactRunInput {
+interface CompactRunInput {
 	branch: BranchEntryLike[];
 	state: WorldState;
 	language: string;

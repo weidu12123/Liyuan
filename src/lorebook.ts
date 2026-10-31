@@ -149,13 +149,8 @@ export function setMountedLorebooks<T extends { lorebook?: string; lorebooks?: s
  * 书的标签＝文件名去扩展名——条目来源标注 `（世界书·书名）` 里写的就是它，
  * 与世界书面板列出的名字同一个字串。
  */
-export function bookLabelOf(path: string): string {
+function bookLabelOf(path: string): string {
 	return path.replace(/\\/g, "/").split("/").pop()!.replace(/\.json$/i, "");
-}
-
-/** 当前挂载书的标签集合 */
-export function mountedBookLabels(config: { lorebook?: string; lorebooks?: string[] }): string[] {
-	return [...new Set(mountedLorebookPaths(config).map(bookLabelOf))];
 }
 
 /**
@@ -434,9 +429,6 @@ export function exportStLorebook(name: string, entries: LorebookEntry[]): Record
 	return { name, entries: out };
 }
 
-/** 产品向别名（避免调用方文案绑 ST） */
-export const exportLorebook = exportStLorebook;
-
 // ---------- 补充设定集（agent 经 lorebook_write 固化的新正典；缺省落点，非唯一落点） ----------
 //
 // 8/22：原注写的是「用户原始世界书永远只读」——那条纪律已被用户推翻（agent 现在改得了、
@@ -459,7 +451,7 @@ export function overlayPathFor(cwd: string, cardName: string, configCard?: strin
 	return space ? join(space.dir, CARD_OVERLAY_FILE) : legacy;
 }
 
-export interface OverlayEntryInput {
+interface OverlayEntryInput {
 	title: string;
 	keys: string[];
 	content: string;

@@ -1,7 +1,7 @@
 /**
  * 世界书族工具（PLAN-RP-TOOLING M-D1 垂直切片）。
  *
- * 合一前 `lorebook_search` 有三份实现（stage / assistant / roleplay），底层都调同一个
+ * 合一前 `lorebook_search` 有三份实现（stage / agent / roleplay），底层都调同一个
  * `searchEntries`，**差的是语料与话术**。没有一份是另外两份的超集。
  *
  * 合一取法（2026-08-04 用户裁定）：
@@ -16,11 +16,10 @@
  *     助手要语料规模与命中回声（诊断口径）。二者住同一文件，不会再各自漂移。
  */
 
-import { checkWriteGate } from "./gate.ts";
 import { errText, intArg, strArg, type ToolResult, type ToolSpec } from "./registry.ts";
 
 /** 命中条目的结构子集（不依赖 LorebookEntry 全形，便于离线单测） */
-export interface LoreEntryLike {
+interface LoreEntryLike {
 	uid?: number;
 	comment?: string;
 	keys?: string[];
@@ -55,50 +54,18 @@ export interface LoreDeps {
 	/** 语料规模（助手诊断话术要报「共 N 条」）；未注入则不报 */
 	loreSize?: () => number;
 
-	// ---- 以下为 M-D2 世界书族补全；未注入则该工具不可用（各面按能力注册） ----
+	// ---- 以下未注入则该工具不可用（各面按能力注册） ----
 
-	/** 写一条正典；book 给出则写进那本世界书，缺省写补充设定集。返回 null＝内容重复未写入 */
-	writeLore?: (input: {
-		title: string;
-		keys: string[];
-		content: string;
-		constant?: boolean;
-		book?: string;
-	}) => LoreEntryLike | null;
-	/**
-	 * 改一条条目（按指纹，寻址范围＝书单全部世界书 + 补充设定集）；null = 哪本里都没这条。
-	 * 返回改后的条目、新指纹（改正文即换身份）与**改了哪本**。
-	 * 宿主负责迁移 `config.disabledLore` 里的旧指纹——否则用户关掉的条目会静默复活。
-	 */
-	updateLore?: (
-		fingerprint: string,
-		patch: { title?: string; keys?: string[]; content?: string; constant?: boolean },
-	) => { entry: LoreEntryLike; newFingerprint: string; path?: string } | null;
-	/** 删一条条目（同一寻址）；null = 哪本里都没这条。返回被删条目与所在书 */
-	deleteLore?: (fingerprint: string) => { entry: LoreEntryLike; path?: string } | null;
 	/** 列举全部条目（含停用的——列举的意义正是让 agent 看见能启停什么） */
 	listLore?: () => LoreEntryLike[];
 	/** 书单 + 当前挂载状态（`lorebook_files`） */
 	listBooks?: () => { books: Array<{ path: string; name: string; entryCount: number }>; mounted: string[] };
-	/**
-	 * 新建一本世界书，**连第一条一起写**并挂载；返回路径；null = 同名已存在。
-	 *
-	 * 为什么不给「建一本空书」：空书在本系统里根本不成立——书单按条目数过滤（0 条视为
-	 * 「同目录混进来的卡/预设」而跳过），挂载校验也拒空书。于是空书既列不出也挂不上、
-	 * 连 `writeLore` 的 book 参数都寻址不到它。建书就得建成可用的。
-	 */
-	createBook?: (
-		name: string,
-		first: { title: string; keys: string[]; content: string; constant?: boolean },
-	) => { path: string; mounted: string[] } | null;
 	/** 挂载/卸载一本；返回挂载后的完整列表；抛错 = 路径不是有效世界书 */
 	mountBook?: (path: string, mounted: boolean) => string[];
 	/** 按内容指纹启停；返回实际生效的条数 */
 	toggleLore?: (fingerprints: string[], enabled: boolean) => number;
 	/** 条目内容 → 指纹（启停的持久键；由调用方注入避免 src/tools 依赖 crypto） */
 	fingerprint?: (content: string) => string;
-	/** 本拍用户原文 + 门禁档位（写侧门禁判定用，见 gate.ts） */
-	gate?: () => { lastUserText: string; creationMode?: "ask" | "silent" };
 }
 
 /** 台上默认命中数（一拍封顶 3 次检索，每次 3 条：控上下文预算） */
@@ -127,7 +94,7 @@ export const lorebookSearch: ToolSpec<LoreDeps> = {
 	name: "lorebook_search",
 	domain: "lore",
 	mode: "read",
-	surfaces: ["stage", "assistant", "extension"],
+	surfaces: ["stage", "extension"],
 	label: "检索世界书",
 	description: (ctx) =>
 		ctx.surface === "stage"
@@ -200,7 +167,7 @@ export const lorebookSearch: ToolSpec<LoreDeps> = {
 };
 
 export const lorebookRead: ToolSpec<LoreDeps> = {
-	name: "lorebook_read", domain: "lore", mode: "read", surfaces: ["stage", "assistant"], label: "读取世界书条目",
+	name: "lorebook_read", domain: "lore", mode: "read", surfaces: ["stage"], label: "读取世界书条目",
 	description: () => "按 lorebook_search/list 给出的 ref 或内容指纹读取条目原文与来源。start/end 为从 0 开始的字符偏移，end 不含；省略即全文。",
 	parameters: () => ({ type: "object", properties: { ref: { type: "string" }, start: { type: "integer", minimum: 0 }, end: { type: "integer", minimum: 0 } }, required: ["ref"] }),
 	async run(args, deps) {
@@ -217,215 +184,7 @@ export const lorebookRead: ToolSpec<LoreDeps> = {
 	},
 };
 
-// ---------------- M-D2：写侧 + 列举 + 启停 ----------------
-
-/**
- * 调用情境（D-T3）：用户明确说「把这条记下来/写进设定集」。
- * **不是**模型自己觉得该记就记——那是门禁挡的（gate.ts），也是描述里反复强调的。
- * 剧情进展归封笔后的场记旁路，此工具只收**世界设定**。
- */
-export const lorebookWrite: ToolSpec<LoreDeps> = {
-	name: "lorebook_write",
-	domain: "lore",
-	mode: "write",
-	surfaces: ["stage", "assistant", "extension"],
-	label: "写入设定集",
-	description: () =>
-		"把用户明确要求留存的世界设定（设定/规则/人物志）写进设定集：跨会话保留，此后 lorebook_search 可命中。" +
-		"**仅在用户明确要求记录时调用**——不要自作主张写，也不要反问「要不要写下来」。" +
-		"只收世界设定；剧情进展不归这里（自有去处）。内容重复会被拒绝。" +
-		"缺省落在补充设定集；要写进某一本世界书就给 book（路径从 lorebook_files 取）。",
-	parameters: () => ({
-		type: "object",
-		properties: {
-			title: { type: "string", description: "条目标题，如「北境骨誓风俗」" },
-			keys: {
-				type: "array",
-				items: { type: "string" },
-				description: "检索关键词（中文与任何原文名都放进来，否则日后检索不到）",
-			},
-			content: { type: "string", description: "正典正文（简洁、陈述性、用剧情语言）" },
-			constant: { type: "boolean", description: "true = 常驻注入（仅限全局关键事实，滥用会挤占上下文）" },
-			book: { type: "string", description: "写进哪本世界书（路径从 lorebook_files 取）；缺省写补充设定集" },
-		},
-		required: ["title", "keys", "content"],
-	}),
-	async run(args, deps): Promise<ToolResult> {
-		if (!deps.writeLore) return { text: "设定集未就绪（本会话尚未装载角色卡）。" };
-
-		const title = strArg(args, "title");
-		const content = strArg(args, "content");
-		if (!title || !content) return { text: "缺少 title 或 content 参数。" };
-		const keys = Array.isArray(args.keys)
-			? args.keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
-			: [];
-		const book = strArg(args, "book");
-
-		// 写入门禁（D-T4）：仅在用户本轮明确要求时放行
-		const g = deps.gate?.();
-		if (g) {
-			const verdict = checkWriteGate({
-				toolName: "lorebook_write",
-				lastUserText: g.lastUserText,
-				creationMode: g.creationMode,
-			});
-			if (!verdict.allow) return { text: verdict.reason, activity: "写设定 · 门禁拦下" };
-		}
-
-		let entry: LoreEntryLike | null;
-		try {
-			entry = deps.writeLore({ title, keys, content, constant: args.constant === true, ...(book ? { book } : {}) });
-		} catch (err) {
-			return { text: `写入设定集失败：${errText(err)}` };
-		}
-		if (!entry) return { text: "内容与已有条目重复，未写入。", activity: "写设定 · 重复跳过" };
-
-		return {
-			text:
-				`已固化为正典：【${entry.comment}】关键词 ${entry.keys?.join("、") || "（无）"}` +
-				`${entry.constant ? "（常驻注入）" : ""}${book ? `，写在 ${book}` : ""}。此后检索可命中，跨会话保留。`,
-			activity: `写设定「${entry.comment}」`,
-			details: { uid: entry.uid },
-		};
-	},
-};
-
-/**
- * 调用情境（M-D7）：写下去的那条错了/过时了——用户说「那条改一下」「不是这样的」。
- *
- * 与 `lorebook_toggle` 的分工：toggle 是**开关**，update 是**改内容**。
- * 寻址范围含用户自己的世界书（2026-08-22 用户定案：agent 就该有这些权限）——
- * 所以回执必须报**改了哪本**，用户翻记录时看得见动的是谁的文件。
- */
-export const lorebookUpdate: ToolSpec<LoreDeps> = {
-	name: "lorebook_update",
-	domain: "lore",
-	mode: "write",
-	surfaces: ["stage", "assistant"],
-	label: "修改设定集条目",
-	description: () =>
-		"改一条设定集条目（指纹从 lorebook_list 取）：标题/关键词/正文/常驻，只传要改的字段，没传的原样保留。" +
-		"标了「补充」的是你自己写下的；没标的是用户自己的世界书，改它等于改用户的原稿。",
-	parameters: () => ({
-		type: "object",
-		properties: {
-			fingerprint: { type: "string", description: "要改的条目指纹（从 lorebook_list 取）" },
-			title: { type: "string", description: "新标题" },
-			keys: { type: "array", items: { type: "string" }, description: "新检索关键词（整组替换）" },
-			content: { type: "string", description: "新正典正文（整段替换）" },
-			constant: { type: "boolean", description: "是否常驻注入" },
-		},
-		required: ["fingerprint"],
-	}),
-	async run(args, deps): Promise<ToolResult> {
-		if (!deps.updateLore) return { text: "本环境不支持修改设定集条目。" };
-
-		const fingerprint = strArg(args, "fingerprint");
-		if (!fingerprint) return { text: "缺少 fingerprint 参数（指纹从 lorebook_list 取）。" };
-
-		const patch: { title?: string; keys?: string[]; content?: string; constant?: boolean } = {};
-		const title = strArg(args, "title");
-		if (title) patch.title = title;
-		const content = strArg(args, "content");
-		if (content) patch.content = content;
-		if (Array.isArray(args.keys)) {
-			patch.keys = args.keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim());
-		}
-		if (typeof args.constant === "boolean") patch.constant = args.constant;
-		if (Object.keys(patch).length === 0) return { text: "没有要改的字段（title/keys/content/constant 至少给一个）。" };
-
-		const g = deps.gate?.();
-		if (g) {
-			const verdict = checkWriteGate({
-				toolName: "lorebook_update",
-				lastUserText: g.lastUserText,
-				creationMode: g.creationMode,
-			});
-			if (!verdict.allow) return { text: verdict.reason, activity: "改设定 · 门禁拦下" };
-		}
-
-		let r: { entry: LoreEntryLike; newFingerprint: string; path?: string } | null;
-		try {
-			r = deps.updateLore(fingerprint, patch);
-		} catch (err) {
-			return { text: `修改设定集条目失败：${errText(err)}` };
-		}
-		if (!r) {
-			return {
-				text: "哪本世界书里都没有这个指纹（条目可能已被改过——指纹随正文变，重新 lorebook_list 取一次）。",
-				activity: "改设定 · 未命中",
-			};
-		}
-
-		return {
-			text:
-				`已改【${r.entry.comment}】${r.path ? `（${r.path}）` : ""}` +
-				`${patch.content ? `，正文已换，新指纹 ${r.newFingerprint}` : ""}。`,
-			activity: `改设定「${r.entry.comment}」`,
-			details: { fingerprint: r.newFingerprint, path: r.path },
-		};
-	},
-};
-
-/**
- * 调用情境（M-D7）：用户说「把那条设定删了」——写错的、重复的、后来推翻的。
- *
- * 删除与停用的分工：停用是**可逆开关**，删除是**从源文件里抹掉且没有备份**。
- * 所以描述里那句「拿不准就停用」不是客套，是这个工具唯一的安全网。
- */
-export const lorebookDelete: ToolSpec<LoreDeps> = {
-	name: "lorebook_delete",
-	domain: "lore",
-	mode: "write",
-	surfaces: ["stage", "assistant"],
-	label: "删除设定集条目",
-	description: () =>
-		"删掉一条设定集条目（指纹从 lorebook_list 取）。**仅在用户明确要求删除时调用**，" +
-		"不要自作主张、也不要反问「要不要删」。直接改源文件、不可撤销：" +
-		"没标「补充」的是用户自己的世界书；拿不准就用 lorebook_toggle 停用。",
-	parameters: () => ({
-		type: "object",
-		properties: {
-			fingerprint: { type: "string", description: "要删的条目指纹（从 lorebook_list 取）" },
-		},
-		required: ["fingerprint"],
-	}),
-	async run(args, deps): Promise<ToolResult> {
-		if (!deps.deleteLore) return { text: "本环境不支持删除设定集条目。" };
-
-		const fingerprint = strArg(args, "fingerprint");
-		if (!fingerprint) return { text: "缺少 fingerprint 参数（指纹从 lorebook_list 取）。" };
-
-		const g = deps.gate?.();
-		if (g) {
-			const verdict = checkWriteGate({
-				toolName: "lorebook_delete",
-				lastUserText: g.lastUserText,
-				creationMode: g.creationMode,
-			});
-			if (!verdict.allow) return { text: verdict.reason, activity: "删设定 · 门禁拦下" };
-		}
-
-		let r: { entry: LoreEntryLike; path?: string } | null;
-		try {
-			r = deps.deleteLore(fingerprint);
-		} catch (err) {
-			return { text: `删除设定集条目失败：${errText(err)}` };
-		}
-		if (!r) {
-			return {
-				text: "哪本世界书里都没有这个指纹（条目可能已被改过——指纹随正文变，重新 lorebook_list 取一次）。",
-				activity: "删设定 · 未命中",
-			};
-		}
-
-		return {
-			text: `已删除【${r.entry.comment}】${r.path ? `（${r.path}）` : ""}，此后检索不再命中。`,
-			activity: `删设定「${r.entry.comment}」`,
-			details: { path: r.path },
-		};
-	},
-};
+// ---------------- 列举 + 启停 ----------------
 
 /**
  * 调用情境（D-T3）：模型想知道「这个世界里都写了些什么」——检索靠关键词命中，
@@ -435,7 +194,7 @@ export const lorebookList: ToolSpec<LoreDeps> = {
 	name: "lorebook_list",
 	domain: "lore",
 	mode: "read",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "列举世界书条目",
 	description: () =>
 		"列举设定集的全部条目（标题/关键词/是否常驻/是否已停用/指纹），用于纵览有哪些设定、" +
@@ -500,7 +259,7 @@ export const lorebookToggle: ToolSpec<LoreDeps> = {
 	name: "lorebook_toggle",
 	domain: "lore",
 	mode: "write",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "启停世界书条目",
 	description: () =>
 		"启用/停用设定集条目（按指纹，指纹从 lorebook_list 取）。停用后该条不再注入上下文、检索也不命中。" +
@@ -552,11 +311,11 @@ export const lorebookToggle: ToolSpec<LoreDeps> = {
  * 调用情境：动书之前先看有什么书——建书前查重名、挂载前取路径、
  * 用户问「我这儿都有哪些世界书 / 现在挂了哪几本」。
  */
-export const lorebookFiles: ToolSpec<LoreDeps> = {
+const lorebookFiles: ToolSpec<LoreDeps> = {
 	name: "lorebook_files",
 	domain: "lore",
 	mode: "read",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "列世界书文件",
 	description: () =>
 		"列出项目里的全部世界书文件（路径/书名/条目数）并标出当前挂载了哪几本。" +
@@ -572,7 +331,7 @@ export const lorebookFiles: ToolSpec<LoreDeps> = {
 			return { text: `列举世界书失败：${errText(err)}` };
 		}
 		if (shelf.books.length === 0) {
-			return { text: "项目里还没有世界书文件（用 lorebook_create 建一本）。", activity: "列世界书 · 0 本" };
+			return { text: "项目里还没有世界书文件。", activity: "列世界书 · 0 本" };
 		}
 		const on = new Set(shelf.mounted);
 		const lines = shelf.books.map(
@@ -587,82 +346,16 @@ export const lorebookFiles: ToolSpec<LoreDeps> = {
 };
 
 /**
- * 调用情境：设定攒到该分家了——用户说「给这些单独建一本世界书」，
- * 或 agent 要把某个主题的正典从补充设定集里独立出来。
- *
- * **建书连第一条一起建，并直接挂上**。不给「建空书」这个动作：空书列不出（书单按条目数
- * 过滤）、挂不上（挂载校验拒空书）、也寻址不到（writeLore 的 book 只认书单里的路径）——
- * 建了等于没建。此后往这本里加条目走 `lorebook_write` 带 book。
- */
-export const lorebookCreate: ToolSpec<LoreDeps> = {
-	name: "lorebook_create",
-	domain: "lore",
-	mode: "write",
-	surfaces: ["stage", "assistant"],
-	label: "新建世界书",
-	description: () =>
-		"新建一本世界书并写入第一条，建好即挂载生效。用于把某个主题的设定单独立册。" +
-		"此后往这本里加条目用 lorebook_write 传 book。同名已存在会被拒绝。",
-	parameters: () => ({
-		type: "object",
-		properties: {
-			name: { type: "string", description: "书名，如「北境志」（会成为文件名）" },
-			title: { type: "string", description: "第一条的标题" },
-			keys: { type: "array", items: { type: "string" }, description: "第一条的检索关键词" },
-			content: { type: "string", description: "第一条的正文" },
-			constant: { type: "boolean", description: "第一条是否常驻注入" },
-		},
-		required: ["name", "title", "keys", "content"],
-	}),
-	async run(args, deps): Promise<ToolResult> {
-		if (!deps.createBook) return { text: "本环境不支持新建世界书。" };
-
-		const name = strArg(args, "name");
-		const title = strArg(args, "title");
-		const content = strArg(args, "content");
-		if (!name) return { text: "缺少 name 参数（书名）。" };
-		if (!title || !content) return { text: "缺少 title 或 content（新书要连第一条一起建）。" };
-		const keys = Array.isArray(args.keys)
-			? args.keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
-			: [];
-
-		const g = deps.gate?.();
-		if (g) {
-			const verdict = checkWriteGate({
-				toolName: "lorebook_create",
-				lastUserText: g.lastUserText,
-				creationMode: g.creationMode,
-			});
-			if (!verdict.allow) return { text: verdict.reason, activity: "建世界书 · 门禁拦下" };
-		}
-
-		let r: { path: string; mounted: string[] } | null;
-		try {
-			r = deps.createBook(name, { title, keys, content, constant: args.constant === true });
-		} catch (err) {
-			return { text: `新建世界书失败：${errText(err)}` };
-		}
-		if (!r) return { text: `已有同名世界书「${name}」，未新建。`, activity: "建世界书 · 重名跳过" };
-
-		return {
-			text: `已新建世界书「${name}」（${r.path}）并挂载，首条【${title}】已写入。往这本里再加条目：lorebook_write 传 book="${r.path}"。`,
-			activity: `建世界书「${name}」`,
-			details: { path: r.path, mounted: r.mounted },
-		};
-	},
-};
-
-/**
  * 调用情境：用户说「把那本书挂上／取下来」，或新建的书写完第一条之后要生效。
  *
  * 与 `lorebook_toggle` 的分工：toggle 管**单条**，mount 管**整本**。
  * 二者都是用户级持久开关——拿不准就先问用户，别自作主张换语料。
  */
-export const lorebookMount: ToolSpec<LoreDeps> = {
+const lorebookMount: ToolSpec<LoreDeps> = {
 	name: "lorebook_mount",
 	domain: "lore",
 	mode: "write",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "挂载/卸载世界书",
 	description: () =>
 		"挂载或卸载一本世界书（路径从 lorebook_files 取）。挂载的书才进上下文与检索。" +
@@ -698,16 +391,12 @@ export const lorebookMount: ToolSpec<LoreDeps> = {
 	},
 };
 
-/** 世界书族全部工具（M-D1 检索；M-D2 写/列/启停；M-D7 改删 + 书一级列建挂） */
+/** 世界书族全部工具（检索 / 列 / 启停 / 书一级列挂） */
 export const loreTools: ToolSpec<LoreDeps>[] = [
 	lorebookSearch,
 	lorebookRead,
-	lorebookWrite,
-	lorebookUpdate,
-	lorebookDelete,
 	lorebookList,
 	lorebookToggle,
 	lorebookFiles,
-	lorebookCreate,
 	lorebookMount,
 ];

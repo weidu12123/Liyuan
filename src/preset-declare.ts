@@ -23,7 +23,7 @@ import { PRESET_SOURCE_SUFFIX, formatEntry, stripEntriesWhere, uniqueEntryName }
 /** 站点闭集：每个站点带标签与去向（数据表，UI 与报告共用） */
 export type DeclareStation = "identity" | "writing" | "thinking" | "draft" | "output" | "memory" | "wrapper";
 
-export const STATION_META: Record<DeclareStation, { label: string; dest: string }> = {
+const STATION_META: Record<DeclareStation, { label: string; dest: string }> = {
 	identity: { label: "身份/破限", dest: "APPEND_SYSTEM.md" },
 	writing: { label: "写作规则", dest: "卡档案 AGENTS.md" },
 	thinking: { label: "思考协议", dest: "停用（原生思考＋agent 循环）" },
@@ -138,7 +138,7 @@ export function buildDeclarePrompt(
 
 // ---------------- 响应解析（宽容；拿不准落 writing） ----------------
 
-export interface ParseDeclareResult {
+interface ParseDeclareResult {
 	entries: DeclareEntry[];
 	/** 模型实际声明了几个（对齐 pieces 后） */
 	declared: number;
@@ -237,7 +237,7 @@ export function parseDeclareResponse(text: string, pieces: DeclarePiece[]): Pars
 	return { entries, declared: entries.length - defaulted.length, defaulted, errors };
 }
 
-export interface DeclareAttempt {
+interface DeclareAttempt {
 	ids: string[];
 	response?: string;
 	error?: string;
@@ -246,7 +246,7 @@ export interface DeclareAttempt {
 	errors: string[];
 }
 
-export type DeclareText = (
+type DeclareText = (
 	systemPrompt: string,
 	userText: string,
 	opts: { maxTokens: number; reasoning: "off"; signal: AbortSignal },
@@ -309,7 +309,7 @@ export function normalizeDeclaration(
  *   送模零成本，条目视图里看得见、想要哪段拨开即可——停用是可见可逆的数据，不是消失
  * - 材料包装 → 跳过
  */
-export interface DeclareLineItem {
+interface DeclareLineItem {
 	identifier: string;
 	name: string;
 	chars: number;
@@ -326,7 +326,7 @@ export interface DeclareLineItem {
 	note?: string;
 }
 
-export interface DeclareTranslateResult {
+interface DeclareTranslateResult {
 	/** 卡级 APPEND_SYSTEM.md 追加段（`# 预设提示词` ＋ 身份条目；无身份块则空串） */
 	appendMarkdown: string;
 	/** 卡档案 AGENTS.md 追加段（写作条目＋关闭的机制条目；无则空串） */
@@ -487,8 +487,8 @@ export function declareTranslateReport(
 // ================================================================================
 
 /** 拼接时 char/user 以占位符身份代入：引擎同一条求值路径，产物自然保留占位符（落盘再按卡求值） */
-export const CHAR_PLACEHOLDER = "{{char}}";
-export const USER_PLACEHOLDER = "{{user}}";
+const CHAR_PLACEHOLDER = "{{char}}";
+const USER_PLACEHOLDER = "{{user}}";
 
 /** 引擎按开关编译整份预设（setvar/getvar 照常解，char/user 留占位） */
 export function compilePreset(doc: PresetDoc): AssembleResult {
@@ -496,7 +496,7 @@ export function compilePreset(doc: PresetDoc): AssembleResult {
 }
 
 /** 编译结果里交给处理模型的片段（非 marker；after 尾部连续 assistant＝预填位除外，8/23 定案） */
-export interface CompiledPiece extends AssembledPiece {
+interface CompiledPiece extends AssembledPiece {
 	where: "before" | "after" | "depth";
 }
 
@@ -510,22 +510,9 @@ export function compiledPieces(r: AssembleResult): CompiledPiece[] {
 	];
 }
 
-export interface DroppedItem {
+interface DroppedItem {
 	name: string;
 	reason: string;
-}
-
-/** 处理留档：一份预设一份档（assets/presets/.liyuan/），指纹命中即复用，不重跑模型 */
-export interface PresetProcessStore {
-	version: 1;
-	preset: string;
-	/** 产物对应的预设原文指纹（拨开关/改内容都会变） */
-	fingerprint: string;
-	identity: string;
-	writing: string;
-	dropped: DroppedItem[];
-	model?: string;
-	createdAt: string;
 }
 
 /** 原文指纹：名字＋整份 raw（开关、内容、顺序任何变化都会变） */
@@ -589,7 +576,7 @@ export function buildProcessPrompt(
 	return { systemPrompt, userText };
 }
 
-export interface ParsedProcess {
+interface ParsedProcess {
 	identity: string;
 	writing: string;
 	dropped: DroppedItem[];
@@ -713,7 +700,7 @@ export function parseProcessResponse(text: string): ParsedProcess | null {
 	return parseProcessResponseWithError(text).value;
 }
 
-export interface ProcessedEntries {
+interface ProcessedEntries {
 	/** 卡级 APPEND_SYSTEM.md 追加段（一条「预设提示词（预设）」；无身份产物则空串） */
 	appendMarkdown: string;
 	/** 卡档案 AGENTS.md 追加段（一条「预设写作规则（预设）」；无则空串） */
@@ -748,47 +735,3 @@ export function processIntoEntries(
 	};
 }
 
-export function processReport(
-	doc: PresetDoc,
-	r: {
-		identityChars: number;
-		writingChars: number;
-		dropped: DroppedItem[];
-		unsupportedMacros: string[];
-		usesLastUserMessage: string[];
-		disabledCount: number;
-	},
-	store: PresetProcessStore,
-	sourceFile: string,
-): string {
-	const head = [
-		`# 处理报告：${doc.name}`,
-		``,
-		`- 原文：\`${sourceFile}\`（未改动，可重新处理）`,
-		`- 指纹：\`${store.fingerprint.slice(0, 12)}\`；日期：${store.createdAt}${store.model ? `；处理模型：${store.model}` : ""}`,
-		`- 产物一：本卡 APPEND_SYSTEM.md「预设提示词（预设）」一条，${r.identityChars.toLocaleString()} 字（身份/破限）`,
-		`- 产物二：本卡 AGENTS.md「预设写作规则（预设）」一条，${r.writingChars.toLocaleString()} 字（写作规则）`,
-		`- 丢弃：${r.dropped.length} 段（思考/草稿/输出/记忆机制、包装标签、被选项排除的内容）`,
-		`- 预设开关关着的块：${r.disabledCount.toLocaleString()} 块（要它们就在预设编辑器里打开，再点「重新装载」）`,
-	];
-	if (r.usesLastUserMessage.length > 0) {
-		head.push(`- ⚠ 引用 {{lastusermessage}} 的块（逐拍宏，编译按空串求值）：${r.usesLastUserMessage.join("、")}`);
-	}
-	if (r.unsupportedMacros.length > 0) {
-		head.push(`- ⚠ 产物里清单外宏（原样保留）：${r.unsupportedMacros.join("、")}`);
-	}
-	if (r.dropped.length > 0) {
-		head.push(``, `## 丢弃账`, ``);
-		for (const d of r.dropped) head.push(`- ${d.name}${d.reason ? `——${d.reason}` : ""}`);
-	}
-	head.push(
-		``,
-		`## 已知代价（既定，不当 bug 查）`,
-		``,
-		`- 破限信件对被合并进一条身份契约，role 结构弱化、语义保留。`,
-		`- 丢弃输出合约后，靠预设教模型吐状态栏/选项的卡会停止吐——梨园里这是预期行为（MVU/面板/ask 接管）。`,
-		`- 产物是模型加工结果：预设选项改动后需点「重新装载」，产物才会跟着变。`,
-		`- 处理留档：assets/presets/.liyuan/预设处理-*.json（按指纹复用；删掉即强制重处理）。`,
-	);
-	return [...head, ""].join("\n");
-}

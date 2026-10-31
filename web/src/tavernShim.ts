@@ -40,10 +40,6 @@ export function registerTavernChatBridge(bridge: TavernChatBridge | null): void 
 	chatBridge = bridge;
 }
 
-export function getTavernChatBridge(): TavernChatBridge | null {
-	return chatBridge;
-}
-
 /**
  * 注册梨园自己的通知条给作者脚本的 `toastr` 用（子帧经 `parent.__liyuanToast` 调）。
  * 传 null 注销。挂 window 而不是模块变量：iframe 与 server 各持一份 src 实例，

@@ -38,7 +38,7 @@ export interface BranchEntryLike {
 }
 
 /** 装配产物里的一条历史消息（引擎再转 @liyuan/ai Message） */
-export interface BeatMsg {
+interface BeatMsg {
 	role: "user" | "assistant";
 	text: string;
 }
@@ -59,7 +59,7 @@ const textOf = (content: unknown): string => {
 const CUSTOM_AS_ASSISTANT = new Set(["rp-greeting", "rp-edited-reply"]);
 const CUSTOM_AS_USER = new Set(["rp-import"]);
 
-export interface RebuiltHistory {
+interface RebuiltHistory {
 	history: BeatMsg[];
 	/** 最后一条用户消息原文（postHistory 宏 / 求方向判定用） */
 	lastUserText: string;
@@ -256,7 +256,7 @@ export function stateFromBranch(branch: BranchEntryLike[]): WorldState {
 
 // ---------------- system prompt（字节稳定） ----------------
 
-export interface StageSystemOptions {
+interface StageSystemOptions {
 	card: CharacterCard;
 	config: RpConfig;
 	constantLore: LorebookEntry[];
@@ -442,7 +442,7 @@ export function formatLoreIndex(
 	return `共 ${titles.length} 条：${shown.join("、")}${rest > 0 ? `……等（另 ${rest} 条未列出）` : ""}`;
 }
 
-export interface StageInjectionOptions {
+interface StageInjectionOptions {
 	state: WorldState;
 	activatedLore: LorebookEntry[];
 	card: CharacterCard;

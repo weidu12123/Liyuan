@@ -17,7 +17,7 @@
  */
 import type { CharacterCard, LorebookEntry, MacroContext, RpConfig } from "./types.ts";
 import { applyMacros } from "./card.ts";
-import { formatEntry, lorebookSourceSuffix, uniqueEntryName } from "./prompt-entries.ts";
+import { lorebookSourceSuffix, uniqueEntryName } from "./prompt-entries.ts";
 
 /** 卡档案文件名（pi 生态通用名；住在卡文件夹根） */
 export const CARD_AGENTS_FILE = "AGENTS.md";

@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { DIRS, dir } from "./paths.ts";
 
-export interface SkillMeta {
+interface SkillMeta {
 	name: string;
 	description: string;
 	/** 相对 cwd 的文件路径（写进提示词，agent 用 read 工具取全文） */
@@ -28,7 +28,7 @@ export interface SkillInput {
 	disableModelInvocation?: boolean;
 }
 
-export function skillsDir(cwd: string): string {
+function skillsDir(cwd: string): string {
 	return dir(cwd, "skills");
 }
 
@@ -42,7 +42,7 @@ export function skillSlug(name: string): string {
 }
 
 /** 解析技能文件头部 frontmatter；无 frontmatter 时返回空对象 */
-export function parseSkillHead(text: string): {
+function parseSkillHead(text: string): {
 	name?: string;
 	description?: string;
 	disableModelInvocation?: boolean;

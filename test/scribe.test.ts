@@ -24,19 +24,6 @@ test("场记提示词：只记账，不含连续性审查", () => {
 	assert.ok(userText.includes("阿远：*我递出怀表*"));
 });
 
-test("场记提示词：detectUnaskedTurn 已忽略", () => {
-	const { systemPrompt } = buildScribeTurnPrompt({
-		state: defaultState(),
-		userText: "我们继续。",
-		assistantText: "*他忽然拔剑刺向盟友。*",
-		charName: "青梧",
-		userName: "阿远",
-		detectUnaskedTurn: true,
-	});
-	assert.ok(!systemPrompt.includes("unasked_turn"));
-	assert.ok(!systemPrompt.includes("先斩后奏"));
-});
-
 test("场记输出解析：只取 patch，丢弃审查字段", () => {
 	const bare = parseScribeResult('{"patch":{"time":"第二天清晨"},"warnings":["正文说怀表在她手中 vs 账本记录阿远持有"]}');
 	assert.ok(bare);

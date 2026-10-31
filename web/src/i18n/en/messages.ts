@@ -48,7 +48,6 @@ export const messages: Record<string, string> = {
 	"检索文件": "Grep",
 	"查找文件": "Find files",
 	"列目录": "List directory",
-	"切换模式": "Switch mode",
 	"卡片资源": "Card resources",
 	"查阅剧情": "Read story",
 	"检索记忆": "Search memory",
@@ -63,7 +62,6 @@ export const messages: Record<string, string> = {
 	"删除设定": "Delete lore",
 	"新建世界书": "Create lorebook",
 	"查阅角色卡": "Read card",
-	"改写角色卡": "Edit card",
 	// 选择卡
 	"或自己写一个…": "Or write your own…",
 	"提交": "Submit",

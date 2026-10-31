@@ -108,7 +108,6 @@ scripts/debug-*.mjs
 scripts/find-*.mjs
 scripts/live-*.mjs
 scripts/probe-*.mjs
-!scripts/probe-backstage.mjs
 scripts/verify-*.mjs
 scripts/write-*.mjs
 

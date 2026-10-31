@@ -100,14 +100,6 @@ export const IconSettings = (p: IconProps) => (
 	</Icon>
 );
 
-export const IconSkills = (p: IconProps) => (
-	<Icon {...p}>
-		<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
-		<path d="M20 3v4" />
-		<path d="M22 5h-4" />
-	</Icon>
-);
-
 export const IconCard = (p: IconProps) => (
 	<Icon {...p}>
 		<path d="M18 21a6 6 0 0 0-12 0" />
@@ -295,12 +287,6 @@ export const IconGithub = (p: IconProps) => (
 	</Icon>
 );
 
-export const IconPlay = (p: IconProps) => (
-	<Icon {...p}>
-		<path d="M6 4.5 19 12 6 19.5z" />
-	</Icon>
-);
-
 export const IconRefresh = (p: IconProps) => (
 	<Icon {...p}>
 		<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
@@ -428,19 +414,6 @@ export const IconPalette = (p: IconProps) => (
 		<circle cx="8.5" cy="7.5" r="1" fill="currentColor" stroke="none" />
 		<circle cx="6.5" cy="12.5" r="1" fill="currentColor" stroke="none" />
 		<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.5-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16c3.3 0 6-2.7 6-6 0-5.5-4.5-10-10-10z" />
-	</Icon>
-);
-
-/** 副编剧 Bot 图标（对齐右下角伴随机器人造型：天线 + 圆角机头 + 双眼） */
-export const IconBot = (p: IconProps) => (
-	<Icon {...p}>
-		<path d="M12 6V3" />
-		<circle cx="12" cy="2.5" r="1" fill="currentColor" stroke="none" />
-		<rect x="4" y="6" width="16" height="13" rx="4.5" />
-		<circle cx="9.2" cy="12.5" r="1.4" fill="currentColor" stroke="none" />
-		<circle cx="14.8" cy="12.5" r="1.4" fill="currentColor" stroke="none" />
-		<path d="M2 11v3" />
-		<path d="M22 11v3" />
 	</Icon>
 );
 

@@ -11,7 +11,6 @@ import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@liyuan/ai/pro
 import { getModel, registerFauxProvider, streamSimple } from "@liyuan/ai/compat";
 
 import { StageEngine, type StageStreamFn, type StageEngineDeps } from "../src/stage/engine.ts";
-import { runBotSession } from "../server/bot-runtime.ts";
 import { getStageConnection } from "../src/stage/bridge.ts";
 import { applyDraftRevisions } from "../src/stage/draft-projection.ts";
 import { DraftStore, draftDirectory } from "../src/stage/draft-store.ts";
@@ -59,9 +58,7 @@ async function makePiEngine(deps: Omit<StageEngineDeps, "getSession"> & { sessio
 	// faux 流注入真实 Agent 的 provider seam；context / tool_call / 生命周期均走生产钩子。
 	if (!nativeProvider) session.agent.streamFunction = deps.sideStreamFn as never;
 	sessions.push(session);
-	const engine = new StageEngine({ ...deps, getSession: () => session as never,
-		runBotSession: o => runBotSession(o, { agentDir, modelRuntime, resolveModel: () => ({ model: selected, thinking: "off" }), stream: nativeProvider ? undefined : deps.sideStreamFn }),
-	});
+	const engine = new StageEngine({ ...deps, getSession: () => session as never });
 	sessionByEngine.set(engine, session);
 	return engine;
 }
@@ -693,11 +690,8 @@ test("台前工具面：无 conversation_mode、无世界书写族；主模型�
 	try {
 		const engine = await makePiEngine({
 			...piDeps(cwd, sm, reg.getModel("faux-rp")),
-			// 宿主件全给：工具下架只能因为「台上不注入世界书写族依赖」，不能是因为宿主没接
 			loreHost: {
-				write: () => null, update: () => null, remove: () => null,
-				listMarked: () => [], listBooks: () => ({ books: [], mounted: [] }),
-				createBook: () => null, mountBook: () => [],
+				listMarked: () => [], listBooks: () => ({ books: [], mounted: [] }), mountBook: () => [],
 			},
 			setDisabledLore: () => 0,
 			addMemory: async () => ({ added: 1, total: 1, chunks: 1 }),
@@ -721,95 +715,6 @@ test("台前工具面：无 conversation_mode、无世界书写族；主模型�
 		for (const kept of ["lorebook_search", "lorebook_read", "lorebook_list", "lorebook_files", "lorebook_toggle", "lorebook_mount", "memory_search", "memory_read", "memory_list", "memory_add", "memory_delete", "card_read", "world_state_get", "worldline_list", "worldline_store", "panel_write", "panel_read", "panel_close", "draft_write", "previous_draft_edit", "ask"]) {
 			assert.ok(seen.includes(kept), `台上应当有 ${kept}`);
 		}
-	} finally { reg.unregister(); rmSync(cwd, { recursive: true, force: true }); }
-});
-
-test("副编剧原生工具：卡内静默、卡外先拒后批、本会话授权落树上；产出不进会话树", async () => {
-	const cwd = realpathSync(mkdtempSync(join(tmpdir(), "liyuan-bot-native-")));
-	const cardDir = join(cwd, "cards", "云澜");
-	mkdirSync(cardDir, { recursive: true });
-	writeFileSync(join(cardDir, "云澜.json"), JSON.stringify({ data: { name: "云澜", description: "{{user}}的师姐", first_mes: "你来了。" } }));
-	writeFileSync(join(cwd, "liyuan.config.json"), JSON.stringify({ card: "cards/云澜/云澜.json", userName: "沈舟" }));
-	mkdirSync(join(cwd, ".liyuan"), { recursive: true });
-	mkdirSync(join(cwd, "web", "src"), { recursive: true });
-	writeFileSync(join(cwd, "web", "src", "a.ts"), "OUTSIDE_A_SENTINEL");
-	const sm = SessionManager.create(cwd, join(cwd, "sessions"));
-	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
-	const calls = (...items: any[]) => fauxAssistantMessage(items, { stopReason: "toolUse" });
-	const asked: string[] = [];
-	const answers: string[] = [];
-	const lastToolResult = (ctx: any) => ctx.messages.filter((m: any) => m.role === "toolResult").at(-1)?.content?.[0]?.text ?? "";
-	try {
-		const engine = await makePiEngine({
-			...piDeps(cwd, sm, reg.getModel("faux-rp")),
-			askUser: async (question) => { asked.push(question); return answers.shift(); },
-		}, false, true);
-		answers.push("拒绝", "本会话允许", "允许一次", "以后不再问「echo」（本卡）");
-		reg.setResponses([
-			(ctx) => { assert.ok(ctx.tools.some((t: any) => t.name === "read") && ctx.tools.some((t: any) => t.name === "write"), "原生七工具在副编剧面上"); return calls(fauxToolCall("write", { path: join(cardDir, "创作", "note.txt"), content: "INSIDE_SENTINEL" })); },
-			(ctx) => { assert.equal(asked.length, 0, "卡内写入不问"); return calls(fauxToolCall("read", { path: join(cwd, "web", "src", "a.ts") })); },
-			(ctx) => {
-				assert.equal(asked.length, 1);
-				assert.match(lastToolResult(ctx), /用户拒绝了本次读取/);
-				assert.doesNotMatch(lastToolResult(ctx), /OUTSIDE_A_SENTINEL/, "被拒的读取不执行");
-				return calls(fauxToolCall("read", { path: join(cwd, "web", "src", "a.ts") }));
-			},
-			(ctx) => {
-				assert.equal(asked.length, 2);
-				assert.match(lastToolResult(ctx), /OUTSIDE_A_SENTINEL/);
-				return calls(fauxToolCall("bash", { command: "echo BOT_BASH_OK" }));
-			},
-			(ctx) => { assert.equal(asked.length, 3); assert.match(lastToolResult(ctx), /BOT_BASH_OK/); return calls(fauxToolCall("bash", { command: "echo BOT_BASH_AGAIN" })); },
-			(ctx) => { assert.equal(asked.length, 4, "永久授权不再问"); assert.match(lastToolResult(ctx), /BOT_BASH_AGAIN/); return fauxAssistantMessage("前端看过了，卡里的笔记也写好了。"); },
-		]);
-		const r = await engine.botTurn("整理一下前端。");
-		assert.deepEqual(r, {
-			text: "前端看过了，卡里的笔记也写好了。",
-			tools: [
-				{ name: "write" },
-				{ name: "read", isError: true },
-				{ name: "read" },
-				{ name: "bash" },
-				{ name: "bash" },
-			],
-		});
-		assert.equal(readFileSync(join(cardDir, "创作", "note.txt"), "utf8"), "INSIDE_SENTINEL");
-		assert.match(asked[0]!, /请求读取：.*a\.ts[\s\S]*范围：web/);
-		assert.deepEqual(asked[2]!, "请求执行命令（bash 不受卡目录限制）：\necho BOT_BASH_OK");
-		assert.deepEqual(loadCardConfig(cardDir).sandboxBashAllow, ["echo"], "免问前缀落 卡.json（不是布尔）");
-		assert.equal(loadCardConfig(cardDir).sandboxAllow, undefined, "本会话授权不落 卡.json");
-		assert.ok(sm.getBranch().some((e: any) => e.type === "custom" && e.customType === "liyuan-sandbox" && e.data?.dir === join(cwd, "web")), "本会话授权在会话树上");
-		// 隔离：副编剧的话与它的工具过程都不进会话树（树上只多了一条授权条目）
-		assert.doesNotMatch(JSON.stringify(sm.getBranch()), /整理一下前端|前端看过了|INSIDE_SENTINEL/);
-
-		// 命令黑名单（docs/PLAN-AGENT-BACK-TO-PI.md §二）：即使 bash 已永久授权，命中即拒、不弹选择卡
-		writeFileSync(join(SANDBOX_AGENT_DIR, "BASH_DENYLIST.txt"), "echo BOT_DENY_ME\n", "utf8");
-		try {
-			reg.setResponses([
-				() => calls(fauxToolCall("bash", { command: "echo BOT_DENY_ME" })),
-				(ctx) => {
-					assert.match(lastToolResult(ctx), /命令黑名单/, "命中黑名单的回执说明原因");
-					assert.equal(asked.length, 4, "黑名单直接拒，不弹选择卡");
-					return fauxAssistantMessage("那条命令被拦住了。");
-				},
-			]);
-			assert.deepEqual(await engine.botTurn("跑一下那条命令。"), {
-				text: "那条命令被拦住了。",
-				tools: [{ name: "bash", isError: true }],
-			});
-		} finally {
-			rmSync(join(SANDBOX_AGENT_DIR, "BASH_DENYLIST.txt"), { force: true });
-		}
-
-		// backendControl 关＝用户没给通用工具：副编剧面也不该有原生七工具（与台上、agent 模式同一开关）
-		writeFileSync(join(cwd, "liyuan.config.json"), JSON.stringify({ card: "cards/云澜/云澜.json", userName: "沈舟", backendControl: false }));
-		const off = await makePiEngine(piDeps(cwd, sm, reg.getModel("faux-rp")), false, true);
-		reg.setResponses([(ctx) => {
-			assert.ok(!ctx.tools.some((t: any) => ["read", "write", "edit", "bash", "grep", "find", "ls"].includes(t.name)), "backendControl 关时没有原生工具");
-			assert.ok(ctx.tools.some((t: any) => t.name === "lorebook_search"), "资料工具照旧");
-			return fauxAssistantMessage("那就不动文件了。");
-		}]);
-		assert.deepEqual(await off.botTurn("看一眼卡目录。"), { text: "那就不动文件了。" });
 	} finally { reg.unregister(); rmSync(cwd, { recursive: true, force: true }); }
 });
 

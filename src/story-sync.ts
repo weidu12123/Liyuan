@@ -1,8 +1,8 @@
 /**
  * 剧情扩展内存同步（进程内直达，不经 /panelsync 命令桥）。
  *
- * 背景：助手写面板/账本落盘后，若再用 handlePrompt("/panelsync") 收编，
- * 在剧情回合中（assistant_run 工具执行期间）会 followUp 排队 → 死锁。
+ * 背景：面板/账本落盘后，若再用 handlePrompt("/panelsync") 收编，
+ * 在剧情回合中会 followUp 排队 → 死锁。
  * roleplay 在 session_start 注册回调；server 写盘后直接调用。
  *
  * 【双模块陷阱】（8/23 实证修复）roleplay 由 jiti 加载（tryNative:false），
@@ -11,7 +11,7 @@
  * **静默 no-op**：用户在面板/世界状态编辑窗改的东西落了盘，却永远不进会话树的
  * `rp-state`/`rp-panels` 快照，而引擎每拍读的是快照（stateFromBranch）——
  * 症状就是「编辑无法保存」。故槽位必须挂 globalThis，与
- * `src/assistant-gateway.ts`、`src/mcp.ts` 同一模式。
+ * `src/mcp.ts` 同一模式。
  *
  * 实证：原生实例注册回调后自调 → 执行；jiti 实例调用同名函数 → 无反应；
  * `native === viaJiti` 为 false。

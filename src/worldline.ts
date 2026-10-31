@@ -11,14 +11,13 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { readJsonFile } from "./jsonio.ts";
-import { dir } from "./paths.ts";
 
 export const RP_SAVE_TYPE = "rp-save";
 
-export interface SaveData {
+interface SaveData {
 	/** 稳定 id（软删除与查找用，不等于树 entry id） */
 	id: string;
 	name: string;
@@ -45,7 +44,7 @@ export interface WorldlineMeta {
 	worldlineNames: Record<string, string>;
 }
 
-export interface WorldlineSaveNode {
+interface WorldlineSaveNode {
 	id: string;
 	name: string;
 	entryId: string;
@@ -57,7 +56,7 @@ export interface WorldlineSaveNode {
 	worldlineId: string;
 }
 
-export interface WorldlineLine {
+interface WorldlineLine {
 	id: string;
 	name: string;
 	/** 分叉源存档 id（主线无） */
@@ -83,12 +82,8 @@ export interface TreeEntryLite {
 
 const newId = () => randomBytes(8).toString("hex");
 
-export function emptyMeta(): WorldlineMeta {
+function emptyMeta(): WorldlineMeta {
 	return { deletedSaveIds: [], worldlineNames: {} };
-}
-
-export function metaPath(cwd: string, sessionId: string): string {
-	return join(dir(cwd, "worldline"), `${sessionId}.json`);
 }
 
 export function loadWorldlineMeta(file: string): WorldlineMeta {
@@ -146,7 +141,7 @@ export function extractSaves(entries: TreeEntryLite[], meta: WorldlineMeta = emp
 	return out;
 }
 
-export function parseSaveData(raw: unknown): SaveData | null {
+function parseSaveData(raw: unknown): SaveData | null {
 	if (!raw || typeof raw !== "object") return null;
 	const o = raw as Record<string, unknown>;
 	if (typeof o.id !== "string" || typeof o.name !== "string") return null;

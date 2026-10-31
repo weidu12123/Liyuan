@@ -5,7 +5,7 @@
 
 import type { EmbedMode, MemoryCloudEmbed } from "./types.ts";
 
-export const LOCAL_EMBED_DIM = 256;
+const LOCAL_EMBED_DIM = 256;
 
 function hash32(s: string): number {
 	let h = 2166136261;
@@ -16,7 +16,7 @@ function hash32(s: string): number {
 	return h >>> 0;
 }
 
-export function l2Normalize(v: number[]): number[] {
+function l2Normalize(v: number[]): number[] {
 	let norm = 0;
 	for (const x of v) norm += x * x;
 	norm = Math.sqrt(norm) || 1;
@@ -47,11 +47,6 @@ export function embedTextLocal(text: string, dim = LOCAL_EMBED_DIM): number[] {
 	}
 
 	return l2Normalize(Array.from(v));
-}
-
-/** @deprecated 兼容旧测试名 */
-export function embedText(text: string, dim = LOCAL_EMBED_DIM): number[] {
-	return embedTextLocal(text, dim);
 }
 
 export function cosine(a: number[], b: number[]): number {

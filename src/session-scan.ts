@@ -19,7 +19,7 @@ export interface SessionCardInfo {
 	card: string;
 	/** 卡显示名（写入时的快照，可能为空） */
 	name: string;
-	/** 绑定的剧情会话 id（助手会话对齐用） */
+	/** 绑定的剧情会话 id */
 	storyId?: string;
 }
 

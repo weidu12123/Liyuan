@@ -18,36 +18,30 @@ import { Type } from "typebox";
 import { StoryHistory, listStoryFiles, storyDirectory } from "../../src/stage/story-history.ts";
 
 import { loadCardFile } from "../../src/card.ts";
-import { buildImportBlock, cleanChat, DEFAULT_STRIP_TAGS, parseStChat, serializeForImportSummary } from "../../src/chatlog.ts";
+import { buildImportBlock, cleanChat, parseStChat, serializeForImportSummary } from "../../src/chatlog.ts";
 import { findCommand } from "../../src/commands.ts";
 import { buildGreeting } from "../../src/greeting.ts";
 import { storyBranch } from "../../src/conversation-mode.ts";
-import { memoryArchiveCompacted, memoryRecallForTurn, memorySearch } from "../../src/memory/index.ts";
+import { memorySearch } from "../../src/memory/index.ts";
 import { checkWriteGate } from "../../src/tools/gate.ts";
 import {
-	constantEntries,
 	appendOverlayEntry,
 	applyDisabledLore,
 	loadLorebookFile,
 	mergeEntries,
 	mountedLorebookPaths,
 	overlayPathFor,
-	scanEntries,
 	searchEntries,
 	setMountedLorebooks,
-	withAliases,
 } from "../../src/lorebook.ts";
 import {
 	addFoldTags,
-	cleanAssistantText,
 	discoverFoldTagsFromTexts,
 	resetDisplayTagExtras,
 } from "../../src/postprocess.ts";
 import {
 	activePanels,
 	closePanel,
-	formatPanelIndex,
-	formatPanelSnapshot,
 	loadPanels,
 	PANEL_SOFT_LIMIT,
 	savePanels,
@@ -55,18 +49,13 @@ import {
 	type PanelMap,
 } from "../../src/panels.ts";
 import { normalizeRpPreset, type RpPreset } from "../../src/preset.ts";
-import { applyProjectedSamplers } from "../../src/samplers.ts";
 import { registerStoryPanelSync, registerStoryStateSync } from "../../src/story-sync.ts";
-import { formatPruneStats, pruneClosedTurns } from "../../src/retention.ts";
-import { buildLoreAliasPrompt, buildRpSummaryPrompt, buildScribeTurnPrompt, parseLoreAliases, parseScribeResult } from "../../src/scribe.ts";
-import { listSkills } from "../../src/skills.ts";
-import { formatUploadIndex, listUploads } from "../../src/uploads.ts";
+import { buildRpSummaryPrompt, buildScribeTurnPrompt, parseScribeResult } from "../../src/scribe.ts";
 import { isBackstageText } from "../../src/stance.ts";
 import {
 	applyPatch,
 	canonicalizeCharacterKeys,
 	defaultState,
-	formatRosterIndex,
 	formatState,
 	loadState,
 	saveState,
@@ -80,14 +69,13 @@ import {
 } from "../../src/tts.ts";
 import {
 	defaultSessionEnabledIds,
-	formatMcpIndex,
 	getMcpHub,
 	parametersFromMcpSchema,
 	RP_MCP_TYPE,
 	sanitizeServerId,
 	type McpToolDescriptor,
 } from "../../src/mcp.ts";
-import { dir, resolveConfigPath, DIRS } from "../../src/paths.ts";
+import { dir, resolveConfigPath } from "../../src/paths.ts";
 import { chatDataPath, chatModeOfSessionDir } from "../../src/cardspace.ts";
 import { DEFAULT_CONFIG, type CharacterCard, type LorebookEntry, type RpConfig, type WorldState } from "../../src/types.ts";
 import {
@@ -195,28 +183,17 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 	let panels: PanelMap = {};
 	let panelsFile = "";
 	let preset: RpPreset | null = null;
-	/**
-	 * 本 agent 回合是否装配剧情预设（before_agent_start 按用户原文判定，context 复用）。
-	 * 预设 = 剧情生成专用；纯非剧情 false。
-	 */
-	let applyStoryPresetThisTurn = true;
-	/** 补充设定集文件（lorebook_write 的落点，按卡分文件） */
+		/** 补充设定集文件（lorebook_write 的落点，按卡分文件） */
 	let overlayFile = "";
 	/** 项目根（工具执行时无 ctx.cwd，session_start 捕获） */
 	let appCwd = process.cwd();
 	// 场记记账：进行中标志（防重入）；连续性审查已关闭
 	let scribeBusy = false;
-	// 固定楼层压缩：距上次压缩的叙事轮数 + 主动触发在途标志（防重复触发）
-	let narrativeTurnsSinceCompact = 0;
-	let proactiveCompactInFlight = false;
-	// 世界书中文别名：一次性生成 + 磁盘缓存的懒初始化
-	let aliasPromise: Promise<void> | null = null;
-	// MCP 外设（柱 4）：本会话启用集 + 已注册工具（agent 绑对话，新对话=新窗口）
+				// MCP 外设（柱 4）：本会话启用集 + 已注册工具（agent 绑对话，新对话=新窗口）
 	let sessionMcpEnabled: string[] = [];
 	let mcpToolNames: string[] = [];
 	const mcpRegistered = new Set<string>();
-	let mcpIndexCache = "（当前没有可用的 MCP 工具。）";
-
+	
 	const notify = (ctx: { ui: { notify: (msg: string, level: string) => void } }, msg: string, level = "info") => {
 		try {
 			ctx.ui.notify(msg, level);
@@ -334,8 +311,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		const tools = hub.listActiveTools();
 		mcpToolNames = tools.map((t) => t.qualifiedName);
 		registerMcpTools(tools);
-		mcpIndexCache = formatMcpIndex(statuses);
-		if (rpMode) applyRpToolset();
+				if (rpMode) applyRpToolset();
 		return statuses;
 	};
 
@@ -517,63 +493,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		return result.cancelled ? "cancelled" : "injected";
 	};
 
-	/**
-	 * 世界书中文别名懒初始化：为无 CJK 关键词的条目生成中文检索别名并合入 keys。
-	 * 修复实证缺陷（agent-run-03）：主演把专有名词中译后，英文关键词地板整场失效。
-	 * 结果按世界书内容哈希缓存到 .liyuan-cache/，每副世界书只花一次旁侧调用。
-	 */
-	const ensureAliases = (ctx: SideCtx & { cwd: string }) => {
-		if (aliasPromise) return aliasPromise;
-		aliasPromise = (async () => {
-			if (!/中文|汉语|chinese/i.test(config.language)) return;
-			const need = entries.filter(
-				(e) => e.enabled && e.keys.length > 0 && !e.keys.some((k) => /\p{Script=Han}/u.test(k)),
-			);
-			if (need.length === 0) return;
-			const hash = createHash("md5")
-				.update(JSON.stringify(need.map((e) => [e.uid, e.keys, e.content])))
-				.digest("hex")
-				.slice(0, 12);
-			const cacheFile = join(dir(ctx.cwd, "cache"), `lore-aliases-${hash}.json`);
-			let aliasMap: Map<number, string[]> | null = null;
-			if (existsSync(cacheFile)) {
-				try {
-					const raw = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, string[]>;
-					aliasMap = new Map(Object.entries(raw).map(([k, v]) => [Number(k), v]));
-				} catch {
-					// 缓存损坏则重新生成
-				}
-			}
-			if (!aliasMap) {
-				const { systemPrompt, userText } = buildLoreAliasPrompt(
-					need.map((e) => ({ uid: e.uid, keys: e.keys, comment: e.comment, excerpt: e.content.slice(0, 300) })),
-					config.language,
-				);
-				const text = await sideComplete(ctx, systemPrompt, userText, 1024);
-				if (!text) return;
-				aliasMap = parseLoreAliases(text);
-				if (!aliasMap || aliasMap.size === 0) return;
-				try {
-					mkdirSync(join(dir(ctx.cwd, "cache")), { recursive: true });
-					writeFileSync(cacheFile, JSON.stringify(Object.fromEntries(aliasMap), null, "\t"), "utf8");
-				} catch {
-					// 缓存写入失败不影响本次会话
-				}
-			}
-			entries = withAliases(entries, aliasMap);
-			if (process.env.RP_DEBUG) {
-				console.error(`[rp-alias] 世界书中文别名就绪（${aliasMap.size} 条）`);
-			}
-		})().catch((err) => {
-			if (process.env.RP_DEBUG) {
-				console.error(`[rp-alias] 生成失败（下次会话重试）：${err instanceof Error ? err.message : String(err)}`);
-			}
-			aliasPromise = null; // 允许重试
-		});
-		return aliasPromise;
-	};
-
-	// ---------- 幕后工具 ----------
+		// ---------- 幕后工具 ----------
 
 	try {
 		registerRpTool({
@@ -1126,7 +1046,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				snapshotMcpEnabled();
 			}
 			scribeBusy = false;
-			aliasPromise = null; // 素材可能已变，允许重新初始化（有磁盘缓存，代价极低）
+			// 素材可能已变，允许重新初始化（有磁盘缓存，代价极低）
 
 			// MCP 外设：按本会话启用集连接；索引写进 system prompt（D8：会话内字节稳定）
 			try {
@@ -1136,8 +1056,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 					console.error(`[rp-mcp] sync 失败：${err instanceof Error ? err.message : String(err)}`);
 				}
 				mcpToolNames = [];
-				mcpIndexCache = "（MCP 同步失败。）";
-			}
+							}
 
 			// 双 system：剧情含预设 system 块；非剧情不含——会话内各自字节稳定（D8）
 			rebuildSystemPrompts(ctx.cwd);
@@ -1969,7 +1888,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				const parsed = parseStChat(readFileSync(resolvePath(ctx.cwd, path), "utf8"));
 				const cleaned = cleanChat(parsed.messages, {
 					extractTag,
-					stripTags: [...DEFAULT_STRIP_TAGS, ...(config.importStripTags ?? [])],
+					stripTags: config.importStripTags ?? [],
 				});
 				if (cleaned.length === 0) {
 					notify(ctx, "清洗后没有剩下任何消息——正文标签名是否写错？", "error");

@@ -23,9 +23,7 @@ import type { PresetDoc } from "./preset-doc.ts";
 /** 用户规矩文件名（两级同名，对齐 pi 的 APPEND_SYSTEM.md 习惯） */
 export const USER_RULES_FILE = "APPEND_SYSTEM.md";
 /** agent 模式的全局追加槽：与 APPEND_SYSTEM.md 平级、二选一——扮演轮读前者，agent 轮读本文件 */
-export const AGENT_RULES_FILE = "AGENT_APPEND_SYSTEM.md";
-/** 副编剧（助手）全局默认人设槽：与 APPEND_SYSTEM.md 同目录 */
-export const BOT_RULES_FILE = "BOT.md";
+const AGENT_RULES_FILE = "AGENT_APPEND_SYSTEM.md";
 
 /** agentDir：与 paths.ts preferLiyuanAgentHome 同一约定（启动时写 env；只认 LIYUAN_*，PI_* 不当输入） */
 export function rulesAgentDir(): string {
@@ -38,10 +36,6 @@ export function globalRulesPath(): string {
 
 export function agentRulesPath(): string {
 	return join(rulesAgentDir(), AGENT_RULES_FILE);
-}
-
-export function botRulesPath(): string {
-	return join(rulesAgentDir(), BOT_RULES_FILE);
 }
 
 /**
@@ -66,8 +60,6 @@ export interface UserRules {
 	global: string;
 	/** agent 模式的全局追加（AGENT_APPEND_SYSTEM.md）；扮演轮不读 */
 	agent: string;
-	/** 副编剧（助手）的全局人设（BOT.md） */
-	bot?: string;
 	card: string;
 	/** 项目级局部守则（cards/<卡>/对话/<chatId>/APPEND_SYSTEM.md） */
 	chat?: string;
@@ -85,7 +77,6 @@ export function readUserRules(cardDir: string, chatDir?: string | null): UserRul
 	return {
 		global: read(globalRulesPath()),
 		agent: read(agentRulesPath()),
-		bot: read(botRulesPath()),
 		card: read(cardRulesPath(cardDir)),
 		...(chatDir ? { chat: read(chatRulesPath(chatDir)) } : {}),
 	};
@@ -93,7 +84,7 @@ export function readUserRules(cardDir: string, chatDir?: string | null): UserRul
 
 // ---------------- 预设 → 规矩文件（一次性转译） ----------------
 
-export interface TranslateLineItem {
+interface TranslateLineItem {
 	name: string;
 	chars: number;
 	/** 去向 */

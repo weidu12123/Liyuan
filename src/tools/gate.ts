@@ -23,12 +23,6 @@
  * 但**回音室风险比世界书更隐蔽**——模型自作主张灌进去的内容，下一拍 `memory_search`
  * 又当「既定事实」捞回来，而条目要翻管理面板才看得见。
  *
- * M-D7 追加 `lorebook_update`/`lorebook_delete`/`lorebook_create`：改删与 `lorebook_write`
- * 是同一份用户资料，不可逆程度只高不低（删条目直接改源文件、无备份）；
- * 建书是往项目里落文件。
- * **`lorebook_mount` 不在列**——它跟 `lorebook_toggle` 一样是开关不是写入，
- * 改的是「用哪些料」而不是料本身，且完全可逆。
- *
  * ⚠ 与铁律三的关系：本表列的是**梨园自己发行的工具名**（自家协议），
  * 不是「别人发明的名字」——铁律三禁的是 FOLD_NAME_RE / cardStatusBarFormats 那类
  * 追着卡作者/预设作者措辞跑的识别器。此表正是铁律三的替代所要的那份
@@ -36,9 +30,6 @@
  */
 export const GATED_TOOLS = [
 	"lorebook_write",
-	"lorebook_update",
-	"lorebook_delete",
-	"lorebook_create",
 	"memory_add",
 	"memory_delete",
 	"memory_update",
@@ -49,7 +40,7 @@ export const GATED_TOOLS = [
  * 也不拦错）——门禁的成本不对称：错拦会让用户明确的指令失效且模型无从申辩，
  * 错放只是多一条可删的设定条目。
  */
-export const WRITE_REQUEST_RE =
+const WRITE_REQUEST_RE =
 	/(写入|写进|写一下|记下|记入|记录|记住|牢记|登记|存进|存到|保存|收藏|归档|收进|收录|固化|入典|沉淀|备注|补充设定|世界书|设定集|知识库|图鉴|物志|向量|记忆库|record|save|store|remember|memorize|lorebook|codex)/i;
 
 /**
@@ -76,10 +67,10 @@ function signalMatches(toolName: string, text: string): boolean {
 }
 
 /** 门禁判定结果：allow=放行；block 带 reason（原样回给模型，别让它转头去问用户） */
-export type GateVerdict = { allow: true } | { allow: false; reason: string };
+type GateVerdict = { allow: true } | { allow: false; reason: string };
 
 /** 被拦时回给模型的话术（搬自原实现：明确禁止「转头问用户要不要写」） */
-export const GATE_BLOCK_REASON =
+const GATE_BLOCK_REASON =
 	"写入设定集需用户明确要求：本轮用户并未要求记录，本次写入已拒绝。" +
 	"不要写、也不要询问「是否写入」；若用户后续明确要求再执行。";
 
@@ -87,7 +78,7 @@ export const GATE_BLOCK_REASON =
  * 删除被拦时的话术（M-D3）。与写入同一条纪律（不要转头问用户），
  * 但**成本方向相反**：错删不可逆且用户不易察觉，故话术要指向「继续演」而不是「等确认」。
  */
-export const GATE_DELETE_BLOCK_REASON =
+const GATE_DELETE_BLOCK_REASON =
 	"删除记忆条目需用户明确要求：本轮用户并未要求删除，本次删除已拒绝。" +
 	"不要删、也不要询问「是否删除」；记忆有误就在正文里绕开它，若用户后续明确要求再执行。";
 

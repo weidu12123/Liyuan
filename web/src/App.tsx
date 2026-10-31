@@ -14,7 +14,6 @@ import {
 	apiGetCacheClearForPanel,
 	apiGetCacheClearForToolNames,
 	apiPost,
-	apiPut,
 	personaAvatarUrl,
 	prefetchPanelApis,
 	uploadFile,
@@ -29,7 +28,7 @@ import {
 	toAttachmentView,
 	type AttachmentView,
 } from "./attachments.ts";
-import { ArtifactPanel, renderMarkdown } from "./components/ArtifactPanel.tsx";
+import { ArtifactPanel } from "./components/ArtifactPanel.tsx";
 import { DraftPanel } from "./components/DraftPanel.tsx";
 import { workspaceSegments } from "./draft-view.ts";
 import type { DraftView } from "./wire.ts";
@@ -60,13 +59,11 @@ import {
 	IconChevronLeft,
 	IconClose,
 	IconDock,
-	IconEdit,
 	IconPencil,
 	IconLorebook,
 	IconNewChat,
 	IconPanelLeft,
 	IconPersona,
-	IconBot,
 	IconMore,
 	IconPreset,
 	IconPuzzle,
@@ -119,8 +116,6 @@ import { CardLorePicker } from "./components/CardPanel.tsx";
 import { RosterPanel } from "./components/RosterPanel.tsx";
 import { ScriptHost } from "./components/ScriptHost.tsx";
 import { SessionsPanel, NewProjectBox, nextProjectName, ChatAssetCenter, type ChatAssetTarget } from "./components/SessionsPanel.tsx";
-import { BotSessionControls } from "./components/BotSessionControls.tsx";
-import type { BotSessionSnapshot } from "../../src/stage/bot-session-types.ts";
 import { SettingsPanel } from "./components/SettingsPanel.tsx";
 import { AboutPanel } from "./components/AboutPanel.tsx";
 import { ThemePanel } from "./components/ThemePanel.tsx";
@@ -136,8 +131,6 @@ import type {
 	RpPanel,
 	ServerFrame,
 	WireActivity,
-	WireBotMsg,
-	WireBotToolCall,
 	WireChatInfo,
 	WireSessionInfo,
 	WireStats,
@@ -351,23 +344,6 @@ export default function App() {
 	 * 前端先发 `/note`（多条＝一个命令多行）再发动作；不进入剧情历史，用完即清。
 	 */
 	const [noteRows, setNoteRows] = useState<string[]>([]);
-	// 幕后副编剧 Bot 伴随抽屉状态（PLAN-COMPANION-BOT 刀 3）
-	const [botOpen, setBotOpen] = useState(false);
-	const [botSession, setBotSession] = useState<BotSessionSnapshot | null>(null);
-	const [botMessages, setBotMessages] = useState<WireBotMsg[]>([]);
-	const [botStreaming, setBotStreaming] = useState(false);
-	const [botStreamText, setBotStreamText] = useState("");
-	const [botStreamThinking, setBotStreamThinking] = useState("");
-	const [botLiveTools, setBotLiveTools] = useState<WireBotToolCall[]>([]);
-	const [botInput, setBotInput] = useState("");
-	const [botSettingsOpen, setBotSettingsOpen] = useState(false);
-	const [botSettingsScope, setBotSettingsScope] = useState<"global" | "card">("global");
-	const [botGlobalPersona, setBotGlobalPersona] = useState("");
-	const [botCardPersona, setBotCardPersona] = useState("");
-	const [botPresets, setBotPresets] = useState<Array<{ id: string; name: string; tagline: string; content: string }>>([]);
-	const [botViewBeats, setBotViewBeats] = useState<number>(0);
-	const [botSavingSettings, setBotSavingSettings] = useState(false);
-	const botScrollRef = useRef<HTMLDivElement>(null);
 	const [sessions, setSessions] = useState<WireSessionInfo[] | null>(null);
 	/** 两层布局的子项目清单（null＝老布局/未下发 ⇒ 面板回落扁平列表） */
 	const [chats, setChats] = useState<WireChatInfo[] | null>(null);
@@ -979,14 +955,6 @@ export default function App() {
 						setDraftWorkspace(frame.workspace);
 						setDraftHistory(undefined);
 						setBusy(frame.streaming === true);
-						setBotMessages(frame.botMessages ?? []);
-						setBotSession(frame.botSession ?? null);
-						setBotStreaming(frame.botStreaming === true);
-						if (!frame.botStreaming) {
-							setBotStreamText("");
-							setBotStreamThinking("");
-							setBotLiveTools([]);
-						}
 						if (frame.streaming && frame.workspace && !frame.workspace.entryId) {
 							const segs = workspaceSegments(frame.workspace);
 							setSegs(segs);
@@ -996,13 +964,6 @@ export default function App() {
 						refreshAvatars();
 					break;
 				}
-				case "conversation_mode":
-					modeRef.current = frame.mode;
-					setConversationMode(frame.mode);
-					streamModeRef.current = frame.turnMode ?? frame.mode;
-					setStreamMode(streamModeRef.current);
-					if (frame.turnMode !== undefined ? frame.turnMode !== "roleplay" : frame.mode !== "roleplay") setDraftWorkspace(undefined);
-					break;
 				case "message":
 					if (frame.message.channel === "narrative" || frame.message.channel === "backstage") {
 						clearStream();
@@ -1251,53 +1212,6 @@ export default function App() {
 					pushToast("error", frame.text);
 					setWarnings((ws) => [{ ts: Date.now(), level: "error" as const, text: frame.text }, ...ws].slice(0, 30));
 					break;
-				case "bot_session":
-					setBotSession(frame.snapshot);
-					setBotMessages(frame.snapshot.messages);
-					if (!["running", "compacting"].includes(frame.snapshot.status)) {
-						setBotStreamText(""); setBotStreamThinking(""); setBotLiveTools([]);
-					}
-					break;
-				case "bot_history":
-					setBotMessages(frame.messages);
-					setBotStreamText("");
-					setBotStreamThinking("");
-					setBotLiveTools([]);
-					break;
-				case "bot_state":
-					setBotStreaming(frame.state === "start");
-					setBotStreamText("");
-					setBotStreamThinking("");
-					setBotLiveTools([]);
-					break;
-				case "bot_delta":
-					if (frame.kind === "text") {
-						setBotStreamText((prev) => prev + frame.delta);
-					} else {
-						setBotStreamThinking((prev) => prev + frame.delta);
-					}
-					break;
-				case "bot_activity":
-					setBotLiveTools((prev) => [
-						...prev,
-						{
-							name: frame.activity.name,
-							...(frame.activity.detail ? { detail: frame.activity.detail } : {}),
-							...(frame.activity.isError ? { isError: true } : {}),
-						},
-					]);
-					if (apiGetCacheClearForToolNames([frame.activity.name])) {
-						bumpWatchPanels();
-					}
-					break;
-				case "bot_message":
-					setBotMessages((prev) => [...prev, frame.message]);
-					if (frame.message.role === "assistant") {
-						setBotStreamText("");
-						setBotStreamThinking("");
-						setBotLiveTools([]);
-					}
-					break;
 			}
 		},
 		[pushToast, refreshAvatars, refreshCardFront],
@@ -1541,10 +1455,7 @@ export default function App() {
 			}
 		}
 		let sent: boolean;
-		if (/^\/bot(?:\s|$)/i.test(typed) && pending.length === 0) {
-			setBotOpen(true);
-			sent = ws.send({ type: "prompt", text: typed });
-		} else if (/^\/compact(?:\s|$)/i.test(typed) && pending.length === 0) {
+		if (/^\/compact(?:\s|$)/i.test(typed) && pending.length === 0) {
 			sent = typed === "/compact" || /^\/compact\s*$/i.test(typed)
 				? ws.send({ type: "compact" })
 				: ws.send({ type: "prompt", text: typed });
@@ -1575,87 +1486,6 @@ export default function App() {
 	// 须接到输入框 / WS，否则界面显示「档案已发送」但聊天栏空白
 	const inputRefForBridge = useRef(input);
 	inputRefForBridge.current = input;
-	useEffect(() => {
-		if (!botOpen) return;
-		const el = botScrollRef.current;
-		if (el) el.scrollTop = el.scrollHeight;
-	}, [botOpen, botMessages, botStreamText, botStreamThinking, botLiveTools]);
-
-	const sendBot = useCallback(
-		(override?: string) => {
-			const q = (override ?? botInput).trim();
-			if (!q) return;
-			if (busy || botStreaming) {
-				pushToast("warning", t("请等当前回复完成（或先停止），再唤副编剧"));
-				return;
-			}
-			if (!ws.send({ type: "bot_prompt", text: q })) {
-				pushToast("warning", t("连接还没好，内容还在输入框里"));
-				return;
-			}
-			if (override === undefined) setBotInput("");
-		},
-		[botInput, botStreaming, busy, pushToast, ws],
-	);
-
-	const openBotSettings = useCallback(async () => {
-		if (botSettingsOpen) {
-			setBotSettingsOpen(false);
-			return;
-		}
-		setBotSettingsOpen(true);
-		try {
-			apiGetCacheClear("/api/bot/settings");
-			const r = await apiGet<{
-				personas: Array<{ id: string; name: string; tagline: string; content: string }>;
-				globalPersona: string;
-				cardPersona: string;
-				activeScope: "global" | "card";
-				botViewBeats: number;
-			}>("/api/bot/settings");
-			setBotPresets(r.personas ?? []);
-			setBotGlobalPersona(r.globalPersona ?? "");
-			setBotCardPersona(r.cardPersona ?? "");
-			setBotSettingsScope(r.activeScope ?? "global");
-			setBotViewBeats(typeof r.botViewBeats === "number" ? r.botViewBeats : 0);
-		} catch (e) {
-			pushToast("error", e instanceof Error ? e.message : String(e));
-		}
-	}, [botSettingsOpen, pushToast]);
-
-	const saveBotSettings = useCallback(async () => {
-		if (botSavingSettings) return;
-		setBotSavingSettings(true);
-		try {
-			const content = botSettingsScope === "card" ? botCardPersona : botGlobalPersona;
-			await apiPut("/api/bot/settings", {
-				scope: botSettingsScope,
-				content,
-				botViewBeats,
-			});
-			setBotSettingsOpen(false);
-			pushToast("ok", t("副编剧设置已保存"));
-		} catch (e) {
-			pushToast("error", e instanceof Error ? e.message : String(e));
-		} finally {
-			setBotSavingSettings(false);
-		}
-	}, [botCardPersona, botGlobalPersona, botSavingSettings, botSettingsScope, botViewBeats, pushToast]);
-
-	const applyBotToNote = useCallback(
-		(raw: string) => {
-			const clean = raw
-				.replace(/^#{1,4}\s+/gm, "")
-				.replace(/\|\|([^|]+)\|\|/g, "$1")
-				.replace(/\s*\n+\s*/g, "；")
-				.trim();
-			if (!clean) return;
-			setNoteRows((rs) => [...rs.filter((x) => x.trim().length > 0), clean]);
-			pushToast("ok", t("已填入台前备注（下一拍生效）"));
-		},
-		[pushToast],
-	);
-
 	const connRef = useRef(conn);
 	connRef.current = conn;
 	useEffect(() => {
@@ -3757,378 +3587,6 @@ export default function App() {
 					);
 				})()}
 			</nav>
-			{/* 右下角副编剧 Bot 入口与伴随抽屉（仅扮演模式显示，写作模式无副编剧） */}
-			{!agentSplit && botOpen && (
-				<aside className="bot-drawer" aria-label={t("副编剧 Bot")}>
-					<header className="bot-drawer-head">
-						<div className="bot-drawer-title">
-							<span className={`bot-drawer-dot ${botStreaming ? "live" : ""}`} />
-							<IconBot size={16} />
-							<span className="bot-drawer-name">{t("副编剧")}</span>
-							<span className="bot-drawer-sub">
-								{botStreaming ? t("思考中…") : t("幕后伴随 · 不进正史")}
-							</span>
-						</div>
-						<div className="bot-drawer-actions">
-							<button
-								type="button"
-								className={`bot-head-btn ${botSettingsOpen ? "active" : ""}`}
-								onClick={() => void openBotSettings()}
-								title={t("副编剧设置")}
-							>
-								<IconSettings size={13} />
-								<span>{t("设置")}</span>
-							</button>
-							<button
-								type="button"
-								className="bot-head-close"
-								onClick={() => {
-									setBotOpen(false);
-									setBotSettingsOpen(false);
-								}}
-								title={t("收起副编剧")}
-								aria-label={t("收起副编剧")}
-							>
-								<IconClose size={15} />
-							</button>
-						</div>
-					</header>
-
-					<BotSessionControls snapshot={botSession} disabled={botStreaming || busy || conn !== "open"} send={request => ws.send({ type: "bot_manage", request })} />
-					{botSettingsOpen ? (
-						<div className="bot-settings-pane">
-							<div className="bot-settings-body">
-								<div className="bot-field">
-									<div className="bot-field-head">
-										<span className="bot-field-label">{t("性格生效范围")}</span>
-										<div className="bot-seg-group">
-											<button
-												type="button"
-												className={`bot-seg-btn ${botSettingsScope === "global" ? "active" : ""}`}
-												onClick={() => setBotSettingsScope("global")}
-											>
-												{t("全局默认")}
-											</button>
-											<button
-												type="button"
-												className={`bot-seg-btn ${botSettingsScope === "card" ? "active" : ""}`}
-												onClick={() => setBotSettingsScope("card")}
-											>
-												{t("仅当前角色卡")}
-											</button>
-										</div>
-									</div>
-								</div>
-
-								<div className="bot-field">
-									<span className="bot-field-label">{t("预设性格模板")}</span>
-									<div className="bot-preset-chips">
-										{botPresets.map((p) => {
-											const curVal = (botSettingsScope === "card" ? botCardPersona : botGlobalPersona).trim();
-											const isMatched = curVal === p.content.trim();
-											return (
-												<button
-													key={p.id}
-													type="button"
-													className={`bot-preset-chip ${isMatched ? "active" : ""}`}
-													title={p.tagline}
-													onClick={() => {
-														if (botSettingsScope === "card") setBotCardPersona(p.content);
-														else setBotGlobalPersona(p.content);
-													}}
-												>
-													{t(p.name)}
-												</button>
-											);
-										})}
-									</div>
-								</div>
-
-								<div className="bot-field">
-									<span className="bot-field-label">{t("性格与说话口吻")}</span>
-									<span className="bot-field-hint">
-										{t("只需写它的性格、脾气与对你的称呼；纯聊天体规范与幕后工具纪律已内置生效。")}
-									</span>
-									<textarea
-										className="bot-persona-textarea"
-										rows={6}
-										value={botSettingsScope === "card" ? botCardPersona : botGlobalPersona}
-										placeholder={
-											botSettingsScope === "card"
-												? t("留空则跟随全局默认性格…")
-												: t("描述副编剧的性格与说话风格…")
-										}
-										onChange={(e) => {
-											if (botSettingsScope === "card") setBotCardPersona(e.target.value);
-											else setBotGlobalPersona(e.target.value);
-										}}
-									/>
-								</div>
-
-								<div className="bot-field">
-									<div className="bot-field-head">
-										<span className="bot-field-label">{t("剧情视野范围")}</span>
-										<div className="bot-seg-group">
-											<button
-												type="button"
-												className={`bot-seg-btn ${botViewBeats === 0 ? "active" : ""}`}
-												onClick={() => setBotViewBeats(0)}
-											>
-												{t("跟随主模型视角")}
-											</button>
-											<button
-												type="button"
-												className={`bot-seg-btn ${botViewBeats > 0 ? "active" : ""}`}
-												onClick={() => setBotViewBeats(botViewBeats > 0 ? botViewBeats : 8)}
-											>
-												{t("指定最近拍数")}
-											</button>
-										</div>
-									</div>
-									<span className="bot-field-hint">
-										{botViewBeats === 0
-											? t("与台前主模型完全一致（携带前情提要、世界状态与当前未压缩的全部剧情）。")
-											: t("仅自动携带最近 N 拍剧情以节省上下文，更早的剧情由副编剧按需调工具查阅。")}
-									</span>
-									{botViewBeats > 0 && (
-										<div className="bot-beats-row">
-											<span>{t("最近")}</span>
-											<input
-												type="number"
-												className="bot-beats-input"
-												min={1}
-												max={50}
-												value={botViewBeats}
-												onChange={(e) => setBotViewBeats(Math.max(1, Math.min(50, Math.floor(Number(e.target.value) || 1))))}
-											/>
-											<span>{t("拍")}</span>
-										</div>
-									)}
-								</div>
-							</div>
-
-							<footer className="bot-settings-foot">
-								<button
-									type="button"
-									className="bot-head-btn"
-									onClick={() => setBotSettingsOpen(false)}
-								>
-									{t("取消")}
-								</button>
-								<button
-									type="button"
-									className="bot-save-btn"
-									disabled={botSavingSettings}
-									onClick={() => void saveBotSettings()}
-								>
-									{botSavingSettings ? t("保存中…") : t("保存设置")}
-								</button>
-							</footer>
-						</div>
-					) : (
-						<>
-							<div ref={botScrollRef} className="bot-drawer-body">
-								{botMessages.length === 0 && !botStreaming ? (
-									<div className="bot-empty">
-										<div className="bot-empty-title">{t("随时唤我聊戏、查设定、记笔记")}</div>
-										<div className="bot-empty-desc">
-											{t("我与台前主模型共享当前剧目视野，也能帮你读写世界书和项目记忆，所有对话完全独立、绝不污染台前正文。")}
-										</div>
-								<div className="bot-quick-grid">
-									<button
-										type="button"
-										className="bot-quick-card"
-										onClick={() => sendBot(t("点评一下刚才最新这一拍的节奏和人物反应，有什么出彩或生硬的地方？"))}
-									>
-										<span className="bot-quick-card-title">{t("锐评刚才这拍")}</span>
-										<span className="bot-quick-card-sub">{t("看看节奏、人设与张力")}</span>
-									</button>
-									<button
-										type="button"
-										className="bot-quick-card"
-										onClick={() => sendBot(t("结合当前剧情和世界状态，帮我推演接下来 2~3 个有意思的剧情走向。"))}
-									>
-										<span className="bot-quick-card-title">{t("推演后续走向")}</span>
-										<span className="bot-quick-card-sub">{t("给几个不同方向的脑洞")}</span>
-									</button>
-									<button
-										type="button"
-										className="bot-quick-card"
-										onClick={() => sendBot(t("看看最近几拍有没有新出现的设定、人物或地点值得写进世界书？帮我整理并写入。"))}
-									>
-										<span className="bot-quick-card-title">{t("提取新设定入世界书")}</span>
-										<span className="bot-quick-card-sub">{t("沉淀设定供台前检索")}</span>
-									</button>
-									<button
-										type="button"
-										className="bot-quick-card"
-										onClick={() => sendBot(t("帮我把目前的重要剧情进展和伏笔整理进本项目的记忆文档里。"))}
-									>
-										<span className="bot-quick-card-title">{t("整理本局记忆")}</span>
-										<span className="bot-quick-card-sub">{t("写入项目 记忆/*.md")}</span>
-									</button>
-								</div>
-							</div>
-						) : (
-							<div className="bot-msg-list">
-								{botMessages.map((m, idx) => (
-									<div
-										key={`${m.ts ?? idx}-${idx}`}
-										className={`bot-msg ${m.role === "user" ? "bot-msg-user" : "bot-msg-assistant"}`}
-									>
-										{m.role === "assistant" && m.tools && m.tools.length > 0 && (
-											<div className="bot-tool-chips">
-												{m.tools.map((tc, ti) => (
-													<span
-														key={ti}
-														className={`bot-tool-chip ${tc.isError ? "err" : ""}`}
-														title={tc.detail || tc.name}
-													>
-														<span className="bot-tool-chip-name">{toolLabel(tc.name)}</span>
-														{tc.detail && <span className="bot-tool-chip-detail">{tc.detail}</span>}
-													</span>
-												))}
-											</div>
-										)}
-										<div className="bot-msg-content artifact-md">
-											{m.role === "assistant" ? renderMarkdown(m.text) : m.text}
-										</div>
-										{m.role === "assistant" && (
-											<div className="bot-msg-foot">
-												<button
-													type="button"
-													className="bot-note-btn"
-													onClick={() => applyBotToNote(m.text)}
-													title={t("将这条建议填入台前输入框的「备注」栏，指导下一拍演出")}
-												>
-													<IconPencil size={11} />
-													<span>{t("填入备注")}</span>
-												</button>
-											</div>
-										)}
-									</div>
-								))}
-								{botStreaming && (
-									<div className="bot-msg bot-msg-assistant bot-msg-live">
-										{botLiveTools.length > 0 && (
-											<div className="bot-tool-chips">
-												{botLiveTools.map((tc, ti) => (
-													<span
-														key={ti}
-														className={`bot-tool-chip ${tc.isError ? "err" : ""}`}
-													>
-														<span className="bot-tool-chip-name">{toolLabel(tc.name)}</span>
-														{tc.detail && <span className="bot-tool-chip-detail">{tc.detail}</span>}
-													</span>
-												))}
-											</div>
-										)}
-										{botStreamThinking && !botStreamText && (
-											<div className="bot-thinking">{t("正在思考与查阅资料…")}</div>
-										)}
-										{botStreamText ? (
-											<div className="bot-msg-content artifact-md">{renderMarkdown(botStreamText)}</div>
-										) : (
-											!botStreamThinking && <div className="bot-thinking">{t("副编剧正在回应…")}</div>
-										)}
-									</div>
-								)}
-							</div>
-						)}
-					</div>
-
-					<footer className="bot-drawer-foot">
-						{botMessages.length > 0 && (
-							<div className="bot-quick-pills">
-								<button
-									type="button"
-									className="bot-quick-pill"
-									disabled={botStreaming || busy}
-									onClick={() => sendBot(t("点评一下刚才最新这一拍的节奏和人物反应，有什么出彩或生硬的地方？"))}
-								>
-									{t("锐评这拍")}
-								</button>
-								<button
-									type="button"
-									className="bot-quick-pill"
-									disabled={botStreaming || busy}
-									onClick={() => sendBot(t("结合当前剧情和世界状态，帮我推演接下来 2~3 个有意思的剧情走向。"))}
-								>
-									{t("推演走向")}
-								</button>
-								<button
-									type="button"
-									className="bot-quick-pill"
-									disabled={botStreaming || busy}
-									onClick={() => sendBot(t("看看最近几拍有没有新出现的设定、人物或地点值得写进世界书？帮我整理并写入。"))}
-								>
-									{t("提取设定")}
-								</button>
-								<button
-									type="button"
-									className="bot-quick-pill"
-									disabled={botStreaming || busy}
-									onClick={() => sendBot(t("帮我把目前的重要剧情进展和伏笔整理进本项目的记忆文档里。"))}
-								>
-									{t("整理记忆")}
-								</button>
-							</div>
-						)}
-						<div className="bot-input-row">
-							<textarea
-								className="bot-input"
-								rows={2}
-								value={botInput}
-								placeholder={t("问剧情、聊走向、查设定、记笔记…（Enter 发送）")}
-								onChange={(e) => setBotInput(e.target.value)}
-								onKeyDown={(e) => {
-									if (!coarse && e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-										e.preventDefault();
-										sendBot();
-									}
-								}}
-							/>
-							{botStreaming ? (
-								<button
-									type="button"
-									className="bot-send-btn stop"
-									onClick={() => ws.send({ type: "bot_manage", request: { action: "stop" } })}
-									title={t("停止")}
-								>
-									<IconStop size={15} />
-								</button>
-							) : (
-								<button
-									type="button"
-									className="bot-send-btn"
-									disabled={!botInput.trim() || busy || conn !== "open"}
-									onClick={() => sendBot()}
-									title={t("发送给副编剧")}
-								>
-									<IconSend size={15} />
-								</button>
-							)}
-						</div>
-					</footer>
-						</>
-					)}
-				</aside>
-			)}
-			{!agentSplit && (
-				<button
-					type="button"
-					className={`bot-fab ${botOpen ? "active" : ""} ${botStreaming ? "streaming" : ""}`}
-					title={t("副编剧 Bot")}
-					aria-label={t("副编剧 Bot")}
-					aria-expanded={botOpen}
-					onClick={() => setBotOpen((v) => !v)}
-				>
-					<IconBot size={20} />
-					{botMessages.length > 0 && !botOpen && (
-						<span className="bot-fab-badge">{Math.ceil(botMessages.length / 2)}</span>
-					)}
-				</button>
-			)}
 			</div>
 			<PreviewRunner request={previewRequest} onClose={() => setPreviewRequest(null)} />
 			{floatPanel &&

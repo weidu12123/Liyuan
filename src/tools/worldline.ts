@@ -12,9 +12,7 @@
  *   输入，钉在这里的存档回退过去只有输入没有回复；且钉档要与账本/面板快照对齐，
  *   那两件封笔后才有正确值。引擎把请求排到场记之后执行（场记刚写完 rp-state，
  *   面板写入时已自快照）——那正是全局唯一对齐的时刻。
- * - `worldline_back`：导航到某个存档点。走 `navigateTree`（宿主 ctx 操作）---
- *   **不会删东西**（旧后续完整保留在树上，rewind 后走不同的路再 store 才分出新世界线）。
- *   仅**助手面**开放——台上 back 即便推迟到封笔后也怪：模型刚写完一拍，树就跳走，
+ * - 回退不对模型开放：台上 back 即便推迟到封笔后也怪——模型刚写完一拍，树就跳走，
  *   这一拍当场变成旁支。回退是「两拍之间」的动作，且留哪条时间线是用户的主权决定。
  *
  * ## 「新开世界线」是怎么发生的
@@ -25,16 +23,16 @@
  *
  * ## 门禁
  *
- * `worldline_store` / `worldline_back` 都是写侧，但**不挂门禁**。
+ * `worldline_store` 是写侧，但**不挂门禁**。
  * 理由：存档是时间轴快照——不覆写用户数据（不像 lorebook_write 改设定集），
  * 不跨会话污染（不像 memory_add 写进本对话的检索库），且全可逆
- * （back 后的旧后续可再导航回去；softDelete 只是软删）。
+ * （回退后的旧后续可再导航回去；softDelete 只是软删）。
  */
 
 import { errText, intArg, strArg, type ToolResult, type ToolSpec } from "./registry.ts";
 
 /** 存档视图子集（不依赖 worldline.ts 全形，便于离线单测） */
-export interface WorldlineSaveLite {
+interface WorldlineSaveLite {
 	id: string;
 	name: string;
 	worldlineId: string;
@@ -63,11 +61,6 @@ export interface WorldlineDeps {
 	 * 此时 worldlineName 尚不可知——分线与否由钉档那一刻的树形决定。
 	 */
 	storeSave?: (name: string) => { id: string; name: string; worldlineName: string; deferred?: boolean } | null;
-	/**
-	 * 导航到某个存档点（navigateTree），不删旧内容。
-	 * 仅助手面注入——台上拿不到 navigateTree（StageSessionManager 无此能力）。
-	 */
-	navigateToSave?: (saveId: string) => { ok: boolean; error?: string };
 }
 
 const formatTime = (ts: number): string => {
@@ -82,11 +75,11 @@ const formatTime = (ts: number): string => {
  *
  * 读侧 `worldline_list` 给目录。
  */
-export const worldlineStore: ToolSpec<WorldlineDeps> = {
+const worldlineStore: ToolSpec<WorldlineDeps> = {
 	name: "worldline_store",
 	domain: "worldline",
 	mode: "write",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "创建存档",
 	description: (ctx) =>
 		"在当前剧情节点钉一个存档点。不删不改任何现有内容，存完继续正常推进。" +
@@ -141,11 +134,11 @@ export const worldlineStore: ToolSpec<WorldlineDeps> = {
  * 用户在台上问「刚才存的那个档叫什么」时模型只能瞎猜。
  * （原注「台上拿不到分支树数据」已不成立——`sm.getBranch()` 引擎里到处在用。）
  */
-export const worldlineList: ToolSpec<WorldlineDeps> = {
+const worldlineList: ToolSpec<WorldlineDeps> = {
 	name: "worldline_list",
 	domain: "worldline",
 	mode: "read",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "列出世界线/存档",
 	description: (ctx) =>
 		"列出全部存档与世界线（按时间排序、标明当前分支归属）。" +
@@ -193,53 +186,5 @@ export const worldlineList: ToolSpec<WorldlineDeps> = {
 	},
 };
 
-/**
- * 调用情境：用户说「回到那个存档点」——**仅助手面**。
- *
- * ⚠ 不在台上开放：导航树会打断当前生成回合，且留哪条时间线是用户的主权决定。
- * 助手侧的 agent 经 `story_command` 本来就可以排 `/back` 命令，
- * 本工具只是给一个更精确的按 id 导航——同时也被拒概率更高
- * （saveId 是从 list 取的真实编号，不会拼错）。
- */
-export const worldlineBack: ToolSpec<WorldlineDeps> = {
-	name: "worldline_back",
-	domain: "worldline",
-	mode: "write",
-	surfaces: ["assistant"],
-	label: "回退到存档",
-	description: () =>
-		"导航到指定存档点（从 worldline_list 取 id）。**不删任何内容**——" +
-		"旧后续完整保留在树上，之后再走不同的路 store 才会分出新世界线。" +
-		"回退是用户级的决定——只在用户明确说「回到某个存档」时调用；" +
-		"不要自作主张回退，不要反复问「要不要回退」。",
-	parameters: () => ({
-		type: "object",
-		properties: {
-			id: { type: "string", description: "存档 id（从 worldline_list 的 [id] 取）" },
-		},
-		required: ["id"],
-	}),
-	async run(args, deps): Promise<ToolResult> {
-		if (!deps.navigateToSave) return { text: "本环境不支持导航到存档点。" };
-
-		const id = strArg(args, "id");
-		if (!id) return { text: "缺少 id 参数（存档编号从 worldline_list 取）。" };
-
-		let r: { ok: boolean; error?: string };
-		try {
-			r = deps.navigateToSave(id);
-		} catch (err) {
-			return { text: `导航失败：${errText(err)}` };
-		}
-		if (!r.ok) return { text: r.error ?? `未找到存档 ${id}。` };
-
-		return {
-			text: `已导航到存档 ${id}。被回退的内容完整保留在树上——走不同的路再 store 会分叉出新世界线。`,
-			activity: `回退到存档 ${id}`,
-			details: { id },
-		};
-	},
-};
-
-/** 世界线族全部工具（M-D5：store/list/back；rewind 语义同 back、delete 永不开放） */
-export const worldlineTools: ToolSpec<WorldlineDeps>[] = [worldlineStore, worldlineList, worldlineBack];
+/** 世界线族全部工具（store/list；回退与删除不对模型开放） */
+export const worldlineTools: ToolSpec<WorldlineDeps>[] = [worldlineStore, worldlineList];

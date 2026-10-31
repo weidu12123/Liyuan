@@ -3,9 +3,9 @@
 import { randomUUID } from "node:crypto";
 import { applyDraftEdits, locateEdit, searchDraft, type DraftEditItem, type DraftRules } from "../draft.ts";
 
-export type BeatMode = "explore" | "write";
-export type BeatPhase = "exploring" | "writing" | "waiting" | "sealed" | "stopped" | "error";
-export interface BeatStep { id: string; text: string; status: "pending" | "in_progress" | "done" | "cancelled" }
+type BeatMode = "explore" | "write";
+type BeatPhase = "exploring" | "writing" | "waiting" | "sealed" | "stopped" | "error";
+interface BeatStep { id: string; text: string; status: "pending" | "in_progress" | "done" | "cancelled" }
 export interface DraftRevision { version: number; text: string; reason: string; at: number }
 
 export interface TurnWorkspace {
@@ -187,14 +187,6 @@ function replaceDraftSegment(ws: TurnWorkspace, content: string): void {
 	const first = ws.timeline.findIndex((s) => s.kind === "text" && s.draft === true);
 	ws.timeline = ws.timeline.filter((s) => !(s.kind === "text" && s.draft === true));
 	ws.timeline.splice(first < 0 ? ws.timeline.length : first, 0, { kind: "text", text: content, draft: true });
-}
-
-/**
- * 稿件按空行切段——分段的**同源算法**：时间线重切（下方 resyncDraftSegments）、
- * 引擎的 draft_resync 帧（修复后前端原位替换稿段）都用它，保证前后端看到同一套分段。
- */
-export function splitDraftSegments(draft: string): string[] {
-	return draft.match(/[\s\S]+?(?:\n[\t ]*\n|$)/g) ?? [];
 }
 
 export interface WorkspaceDeps {

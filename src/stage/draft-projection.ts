@@ -14,7 +14,7 @@ export interface DraftBranchEntry {
 	message?: unknown;
 }
 
-export interface DraftRevisionData {
+interface DraftRevisionData {
 	targetId: string;
 	text: string;
 	timeline?: unknown;

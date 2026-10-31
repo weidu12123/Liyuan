@@ -21,14 +21,14 @@ import { loadLorebookFile } from "./lorebook.ts";
 import type { LorebookEntry } from "./types.ts";
 
 /** 判定文件后缀：挂在书文件旁边（`<书名>.json` → `<书名>.json.判定.json`） */
-export const DECLARATION_SUFFIX = ".判定.json";
+const DECLARATION_SUFFIX = ".判定.json";
 
 export function declarationPathFor(bookPath: string): string {
 	return `${bookPath}${DECLARATION_SUFFIX}`;
 }
 
 /** 判定文件里的单条记录 */
-export interface DeclarationEntry {
+interface DeclarationEntry {
 	uid: number;
 	title: string;
 	chars: number;
@@ -37,7 +37,7 @@ export interface DeclarationEntry {
 	signals: string[];
 }
 
-export interface LorebookDeclaration {
+interface LorebookDeclaration {
 	version: 1;
 	declaredAt: string;
 	/** 判定依据（生产方式），报告用 */

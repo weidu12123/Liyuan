@@ -1,12 +1,4 @@
 .card-authoring { min-width: 0; }
-.card-authoring-toolbar { flex-wrap: wrap; gap: 8px; margin: 10px 0; }
-.card-authoring-toolbar > span { margin-right: auto; color: var(--text-soft); font-size: 12px; }
-.card-authoring-label { display: grid; gap: 6px; margin: 12px 0; color: var(--text-soft); font-size: 12px; }
-.card-authoring-label select {
-	width: 100%; min-width: 0; padding: 8px; color: var(--text);
-	background: var(--surface); border: 1px solid var(--hairline-strong); border-radius: var(--radius-s);
-}
-.card-authoring .card-source-editor { font-family: Consolas, "SFMono-Regular", monospace; font-size: 12px; tab-size: 2; }
 .card-authoring textarea { width: 100%; min-width: 0; resize: vertical; line-height: 1.6; }
 .card-authoring-error { color: var(--accent-strong); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .card-authoring :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -16,7 +8,6 @@
 	border-radius: var(--radius-s); background: var(--surface);
 }
 .card-preview-event { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-soft); font-size: 12px; }
-
 
 /* agent 预览运行器（App 级浮层，与工坊预览弹窗同形） */
 .card-preview-runner {

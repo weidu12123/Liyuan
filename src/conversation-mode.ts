@@ -22,13 +22,13 @@ export interface ContextMessage {
 	details?: Record<string, unknown>;
 	[key: string]: unknown;
 }
-export interface ProcessRecord {
+interface ProcessRecord {
 	requestId: string;
 	mode: ConversationMode;
 	message: ContextMessage;
 }
 
-export function isConversationMode(value: unknown): value is ConversationMode {
+function isConversationMode(value: unknown): value is ConversationMode {
 	return value === "roleplay" || value === "authoring" || value === "agent";
 }
 
@@ -73,12 +73,10 @@ export function storyBranch<T extends ConversationEntry>(branch: T[]): T[] {
 }
 
 /**
- * 2026-10-16 刀 2（docs/PLAN-COMPANION-BOT.md §三）：工作模式退场。
- * 树上**遗留**的 authoring 条目照旧认得（旧会话要读得回来，story 流照旧滤掉它们），
- * 但不再有新条目产生，维护段也不再进台前上下文——`roleplayHistory` 随工作模式一并退场，
- * 写卡维护改由副编剧（assets/BOT.md）承担。
+ * 工作模式已退场。树上**遗留**的 authoring 条目照旧认得（旧会话要读得回来，story 流照旧滤掉它们），
+ * 但不再有新条目产生，维护段也不再进台前上下文。
  */
-export function processRecord(entry: ConversationEntry): ProcessRecord | undefined {
+function processRecord(entry: ConversationEntry): ProcessRecord | undefined {
 	if (entry.type !== "custom" || entry.customType !== CONVERSATION_PROCESS_TYPE) return undefined;
 	const d = entry.data as ProcessRecord | undefined;
 	return d && typeof d.requestId === "string" && isConversationMode(d.mode) && typeof d.message?.role === "string" ? d : undefined;

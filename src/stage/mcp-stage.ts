@@ -30,7 +30,7 @@ export interface McpStageTool {
 }
 
 /** 工具执行结果（与 tools.ts 的返回同形：text 进对话，activity 进过程条） */
-export interface McpStageResult {
+interface McpStageResult {
 	text: string;
 	activity?: string;
 	isError?: boolean;

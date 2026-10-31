@@ -13,7 +13,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 export const ACCESS_COOKIE = "liyuan_access";
 const MAX_TOKENS = 20;
 
-export interface AccessToken {
+interface AccessToken {
 	id: string;
 	createdAt: number;
 }

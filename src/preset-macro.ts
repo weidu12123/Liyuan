@@ -21,7 +21,7 @@ export interface MacroEnv {
 	userText?: string;
 }
 
-export interface MacroEvalResult {
+interface MacroEvalResult {
 	text: string;
 	/** 本次调用遇到的清单外宏名（去重） */
 	unsupported: string[];

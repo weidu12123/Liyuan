@@ -22,7 +22,7 @@ import {
 import { toolsFor, type ToolContext } from "../src/tools/registry.ts";
 
 const stageCtx: ToolContext = { surface: "stage", language: "中文" };
-const assistantCtx: ToolContext = { surface: "assistant", language: "中文" };
+const extensionCtx: ToolContext = { surface: "extension", language: "中文" };
 
 const deps = (over: Partial<MemoryDeps> = {}): MemoryDeps => ({
 	searchMemory: async () => [],
@@ -35,12 +35,12 @@ const ASK_DELETE = { lastUserText: "把那条记忆忘掉", creationMode: "ask" 
 
 // ---------------- 1. 合一与跨 surface 一致性 ----------------
 
-test("记忆族六件；memory_search 三面共用一份实现", () => {
+test("记忆族六件；memory_search 两面共用一份实现", () => {
 	assert.deepEqual(
 		memoryTools.map((t) => t.name),
 		["memory_search", "memory_read", "memory_update", "memory_add", "memory_list", "memory_delete"],
 	);
-	assert.deepEqual([...memorySearch.surfaces].sort(), ["assistant", "extension", "stage"]);
+	assert.deepEqual([...memorySearch.surfaces].sort(), ["extension", "stage"]);
 	// 写侧与管理三件不给扩展面（那套工具面对台上不可达，不新增暴露）
 	assert.deepEqual(
 		toolsFor(memoryTools, "extension").map((t) => t.name),
@@ -60,7 +60,7 @@ test("跨 surface 一致性：同样的命中，正文逐字相同（差异只�
 		],
 	});
 	const s = await memorySearch.run({ query: "青梧" }, d, stageCtx);
-	const a = await memorySearch.run({ query: "青梧" }, d, assistantCtx);
+	const a = await memorySearch.run({ query: "青梧" }, d, extensionCtx);
 	assert.equal(s.text, a.text, "命中格式化是共用的，两面必须逐字一致");
 	assert.equal(s.text, "1. 〔旧事〕\n青梧在黑渊封印了魔尊。\n\n2. 〔archive〕\n玉佩碎成两半。");
 	assert.equal(s.activity, a.activity);
@@ -68,7 +68,7 @@ test("跨 surface 一致性：同样的命中，正文逐字相同（差异只�
 
 test("跨 surface 差异是**有意**的：台上禁臆造给出路，助手报诊断口径", async () => {
 	const s = await memorySearch.run({ query: "无此事" }, deps(), stageCtx);
-	const a = await memorySearch.run({ query: "无此事" }, deps(), assistantCtx);
+	const a = await memorySearch.run({ query: "无此事" }, deps(), extensionCtx);
 	// 台上：不许臆造，但要给「怎么往下演」的出路，否则模型会卡住
 	assert.match(s.text, /不要臆造/);
 	assert.match(s.text, /模糊化处理/);
@@ -93,7 +93,7 @@ test("容错契约：检索抛错/缺参都回可读文本，不抛", async () =
 
 test("作用域不经模型：任何工具的 schema 都不得出现 scope/sessionId/card 参数", () => {
 	for (const spec of memoryTools) {
-		for (const ctx of [stageCtx, assistantCtx]) {
+		for (const ctx of [stageCtx, extensionCtx]) {
 			const props = (spec.parameters(ctx) as { properties?: Record<string, unknown> }).properties ?? {};
 			for (const banned of ["scope", "sessionId", "session_id", "card"]) {
 				assert.ok(
@@ -119,10 +119,9 @@ test("写侧不给 store 参数：narrative 服务层禁写，只有一个合法
 	assert.deepEqual(listProps.store?.enum, ["external", "narrative", "card", "chat"]);
 });
 
-test("memory_add 的描述必须钉死「不跨会话」并改道 lorebook_write（最易说谎处）", () => {
+test("memory_add 的描述必须钉死「不跨会话」（最易说谎处）", () => {
 	const d = memoryAdd.description(stageCtx);
 	assert.match(d, /不跨会话|本对话/, "记忆按对话隔离，不说清模型会当长期记忆用");
-	assert.match(d, /lorebook_write/, "要跨会话留存必须给出正确去处");
 });
 
 test("memory_add 回执如实说明作用域，不许承诺「永久记住」", async () => {

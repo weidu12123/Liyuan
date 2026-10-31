@@ -12,14 +12,14 @@ import { formatMvuTree, type MvuTree } from "./mvu.ts";
  * MVU 记账上下文（仅 MVU 卡有；见 src/mvu.ts）。给场记看「这张卡还有棵状态树，当前长这样、
  * 更新规则如是」，让它读完本拍连树该改哪些值一起判断。判断在模型，落值由 applyMvuPatch 执行。
  */
-export interface ScribeMvuContext {
+interface ScribeMvuContext {
 	/** 当前 MVU 树（本拍开演前） */
 	tree: MvuTree;
 	/** 卡自带的「变量更新规则」原文（哪些字段何时该动；来自世界书条目，可空） */
 	rules?: string;
 }
 
-export interface ScribePromptInput {
+interface ScribePromptInput {
 	/** 当前世界状态（JSON 序列化前的对象） */
 	state: WorldState;
 	/** 本轮用户输入文本 */
@@ -37,10 +37,6 @@ export interface ScribePromptInput {
 	 * 与 mvu 是同一件事换个主人：那棵是卡的树，这些是梨园自己面板的树。
 	 */
 	panels?: Array<{ name: string; tree: MvuTree }>;
-	/**
-	 * @deprecated 已不再做先斩后奏检测；保留字段以免旧调用方报错，忽略。
-	 */
-	detectUnaskedTurn?: boolean;
 }
 
 export interface ScribeResult {
@@ -214,7 +210,7 @@ export function parseScribeResult(text: string): ScribeResult | null {
 
 // ---------- 世界书中文别名（修复：专有名词中译后英文关键词地板失效） ----------
 
-export interface AliasEntryInput {
+interface AliasEntryInput {
 	uid: number;
 	keys: string[];
 	comment: string;
@@ -261,7 +257,7 @@ export function parseLoreAliases(text: string): Map<number, string[]> | null {
 
 // ---------- 前情接力摘要（原 src/compaction.ts，2026-08-02 随 harness 重做移入） ----------
 
-export interface RpSummaryPromptInput {
+interface RpSummaryPromptInput {
 	/** 被裁早期剧情的对话原文（序列化后） */
 	conversationText: string;
 	/** 工具账本快照（辅助参考，可能滞后于正文） */

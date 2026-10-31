@@ -31,11 +31,11 @@ export interface DraftOp {
 }
 
 /** 追加式补丁（M2）：把缺失的整块模块（如状态栏）补到稿末 */
-export interface DraftAppendOp {
+interface DraftAppendOp {
 	append: string;
 }
 
-export type AnyDraftOp = DraftOp | DraftAppendOp;
+type AnyDraftOp = DraftOp | DraftAppendOp;
 
 /** 补丁消息 content（JSON 字符串）→ 补丁；不合法返回 null */
 export function parseDraftOp(content: unknown): AnyDraftOp | null {
@@ -201,7 +201,7 @@ export function draftTurnText(messages: DraftMsgLike[]): string {
 }
 
 /** draft_edit 定位校验（对给定草稿文本）：old 必须恰好出现一次 */
-export function resolveDraftEditText(turn: string, old: string): { ok: true } | { ok: false; error: string } {
+function resolveDraftEditText(turn: string, old: string): { ok: true } | { ok: false; error: string } {
 	if (!old || !old.trim()) return { ok: false, error: "old 不能为空。" };
 	if (!turn) return { ok: false, error: "本回合还没有可修订的正文——先把草稿写出来。" };
 	let count = 0;
@@ -245,9 +245,9 @@ function normalizePunct(s: string): string {
 }
 
 /** 定位命中级别——非精确命中要在 toolResult 里说明，模型才知道自己引得不准 */
-export type EditMatchLevel = "exact" | "trimmed" | "punct";
+type EditMatchLevel = "exact" | "trimmed" | "punct";
 
-export interface EditLocation {
+interface EditLocation {
 	start: number;
 	end: number;
 	level: EditMatchLevel;
@@ -314,7 +314,7 @@ export interface DraftEditItem {
 	new: string;
 }
 
-export interface DraftEditResult {
+interface DraftEditResult {
 	ok: boolean;
 	/** 成功时的新全文（失败时不产出——批量原子性） */
 	text?: string;
@@ -420,10 +420,7 @@ export function emptyDraftRules(): DraftRules {
 	return {};
 }
 
-	// 兼容三种形态：<tag>（成对）、<tag >、<tag/>（自闭合占位符——界面由卡渲染）
-	const TAG_IN_HINT_RE = /<([A-Za-z_][\w.-]*)\s*\/?\s*>/g;
-
-/**
+	/**
  * 「成文纪律」块判定（四阶段供料，2026-08-02 用户定案）：禁词表、禁八股、比喻原则、
  * 句式禁令等——全是对"已存在文字"做手术的规则。这类块**不进写作上下文**：
  * 初稿阶段只见文风/人称/字数/剧情类要求（写顺为先），纪律块全文随 draft_write
@@ -513,28 +510,6 @@ export function stripAuditLines(content: string): { text: string; dropped: numbe
 	const text = kept.join("\n").replace(/\n{3,}/g, "\n\n");
 	return { text, dropped };
 }
-/** 通用 HTML 标签不算模块标签 */
-const GENERIC_TAGS = new Set(["details", "summary", "br", "div", "span", "p", "b", "i", "hr", "html", "body"]);
-/**
- * 指代性标签不算输出模块：预设叙述里常用 <user>/<char> 指"用户/角色"本人
- * （2026-08-02 实测：某预设行动选项块的「选择的内容是<user>的行动」被误判成必须模块，
- * 模型顺从地发明了一个 <user> 块塞进正文）。
- */
-const REFERENT_TAGS = new Set(["user", "char", "assistant", "human", "system", "player_input", "bot"]);
-
-/**
- * 提示串里的模块标签名（通用 HTML 与指代性标签除外）。
- * 规则提取（statusBarTagGroup）与输出合约 v0 生成共用**同一份**判定——不另立平行名单。
- */
-export function moduleTagsInHint(hint: string): string[] {
-	const out: string[] = [];
-	for (const tm of hint.matchAll(TAG_IN_HINT_RE)) {
-		const tag = tm[1];
-		if (GENERIC_TAGS.has(tag.toLowerCase()) || REFERENT_TAGS.has(tag.toLowerCase())) continue;
-		if (!out.includes(tag)) out.push(tag);
-	}
-	return out;
-}
 
 /**
  * 从预设启用块原文提取字数目标（数据，供末端注入的字数事实一行；不做任何检测）。
@@ -565,17 +540,6 @@ export function extractDraftRules(blockContents: string[]): DraftRules {
 	return rules;
 }
 
-
-const escapeReg = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * 格式模块标签是否已出现（成对 `<tag>`、带属性 `<tag …>`、自闭合 `<tag/>` 都算）。
- * 谢幕判定用（8/09 输出形式）：状态栏等格式块该不该催，看文本里有没有，
- * 不看模型思考里说没说。
- */
-export function hasFormatTag(text: string, tag: string): boolean {
-	return new RegExp(`<${escapeReg(tag)}[\\s/>]`, "i").test(text);
-}
 
 /** 剥掉全部顶层标签块与 HTML 注释后的正文 */
 export function extractDraftBody(turnText: string): string {

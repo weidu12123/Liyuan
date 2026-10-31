@@ -9,8 +9,7 @@
  *
  * `MemoryScope = {sessionId, card}` **对模型完全不可见**，由宿主从「当前对话 + 当前卡」派生。
  * 这是本族最容易被说谎的地方：向量记忆按 `cardHash__sessionId` 隔离，
- * **写进去的东西不跨会话**——与 `lorebook_write` 的跨会话语义正好相反。
- * 故 `memory_add` 的描述必须把这条钉死，并把「要跨会话留存」明确改道到 `lorebook_write`，
+ * **写进去的东西不跨会话**。故 `memory_add` 的描述必须把这条钉死，
  * 否则模型会拿它当长期记忆用，让用户以为「它记住了」而换个对话就没了。
  *
  * `store` 只在 `memory_list` 上暴露（两库性质不同，纵览时要能分）：
@@ -106,7 +105,7 @@ export const memorySearch: ToolSpec<MemoryDeps> = {
 	name: "memory_search",
 	domain: "memory",
 	mode: "read",
-	surfaces: ["stage", "assistant", "extension"],
+	surfaces: ["stage", "extension"],
 	label: "检索剧情记忆",
 	description: (ctx) =>
 		ctx.surface === "stage"
@@ -174,22 +173,19 @@ export const memorySearch: ToolSpec<MemoryDeps> = {
 /**
  * 调用情境（D-T3）：用户说「记住这个设定/这段前情」，或给了一大段资料让模型日后能查。
  *
- * 与 `lorebook_write` 的分工是本工具描述的重点——**二者不是同一个抽屉**：
- *   - 本工具写向量库，**只活在当前对话**，靠语义检索取回，适合长资料/前情/小传；
- *   - `lorebook_write` 写补充设定集，**跨会话保留**，靠关键词命中，适合世界设定。
- * 模型最容易犯的错是拿本工具当长期记忆用，然后告诉用户「我永远记住了」。
+ * 本工具写向量库，**只活在当前对话**，靠语义检索取回，适合长资料/前情/小传。
+ * 模型最容易犯的错是拿它当长期记忆用，然后告诉用户「我永远记住了」。
  */
 export const memoryAdd: ToolSpec<MemoryDeps> = {
 	name: "memory_add",
 	domain: "memory",
 	mode: "write",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "写入剧情记忆",
 	description: () =>
 		"把用户明确要求记住的长文字存进**本对话的**记忆库（前情梗概、人物小传、大段参考资料），此后 memory_search 可按语义检索到。" +
 		"**仅在用户明确要求记住时调用**——不要自作主张写，也不要反问「要不要记下来」。" +
-		"⚠ 记忆按对话隔离：写进去的内容**不跨会话**，换一个对话就查不到了——" +
-		"要长期保留的**世界设定**请改用 lorebook_write（跨会话）；本工具只收本局用得上的长文字。" +
+		"⚠ 记忆按对话隔离：写进去的内容**不跨会话**，换一个对话就查不到了——本工具只收本局用得上的长文字。" +
 		"不要往这里灌自己刚写的正文（下一拍会被当成既定事实捞回来）——剧情进展自有去处，不归这里。",
 	parameters: () => ({
 		type: "object",
@@ -246,7 +242,7 @@ export const memoryList: ToolSpec<MemoryDeps> = {
 	name: "memory_list",
 	domain: "memory",
 	mode: "read",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "列举记忆条目",
 	description: () =>
 		"列举本对话记忆库的条目目录（编号、开头几十字、来源）。用于纵览「记过些什么」，" +
@@ -324,7 +320,7 @@ export const memoryDelete: ToolSpec<MemoryDeps> = {
 	name: "memory_delete",
 	domain: "memory",
 	mode: "write",
-	surfaces: ["stage", "assistant"],
+	surfaces: ["stage"],
 	label: "删除记忆条目",
 	description: () =>
 		"删除本对话记忆库里的某条条目（编号从 memory_list 取）。" +
@@ -385,7 +381,7 @@ export const memoryDelete: ToolSpec<MemoryDeps> = {
 
 /** 向量库族全部工具（M-D3；memory_search 由本族接管，原台上/扩展两份实现合一） */
 export const memoryRead: ToolSpec<MemoryDeps> = {
-	name: "memory_read", domain: "memory", mode: "read", surfaces: ["stage", "assistant"], label: "读取记忆原文",
+	name: "memory_read", domain: "memory", mode: "read", surfaces: ["stage"], label: "读取记忆原文",
 	description: () => "按 memory_search/list 的 ref 精确读取记忆及内容版本。保留来源、局与分支范围；start/end 为字符偏移，end 不含。",
 	parameters: () => ({ type: "object", properties: { ref: { type: "string" }, start: { type: "integer", minimum: 0 }, end: { type: "integer", minimum: 0 } }, required: ["ref"] }),
 	async run(args, deps) {
@@ -400,8 +396,8 @@ export const memoryRead: ToolSpec<MemoryDeps> = {
 	},
 };
 
-export const memoryUpdate: ToolSpec<MemoryDeps> = {
-	name: "memory_update", domain: "memory", mode: "write", surfaces: ["stage", "assistant"], label: "更正项目记忆",
+const memoryUpdate: ToolSpec<MemoryDeps> = {
+	name: "memory_update", domain: "memory", mode: "write", surfaces: ["stage"], label: "更正项目记忆",
 	description: () => "按 ref（如 chat:MEMORY、chat:大纲、chat:APPEND_SYSTEM）与可选版本号更新当前项目的 Markdown 记忆或局部守则文档，并自动同步 MEMORY.md 索引。",
 	parameters: () => ({ type: "object", properties: { ref: { type: "string" }, version: { type: "string" }, content: { type: "string" } }, required: ["ref", "content"] }),
 	async run(args, deps) {

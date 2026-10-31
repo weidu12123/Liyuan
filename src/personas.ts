@@ -30,12 +30,12 @@ export interface PersonaStore {
 const storePath = (cwd: string) => join(cwd, PERSONAS_FILE);
 
 /** 头像默认落点（按 id 一图；PNG） */
-export function personaAvatarRelPath(id: string): string {
+function personaAvatarRelPath(id: string): string {
 	const safe = id.replace(/[^a-zA-Z0-9_-]/g, "_") || "persona";
 	return `assets/personas/${safe}.png`;
 }
 
-export function personaAvatarAbsPath(cwd: string, id: string): string {
+function personaAvatarAbsPath(cwd: string, id: string): string {
 	return join(cwd, personaAvatarRelPath(id));
 }
 

@@ -97,7 +97,6 @@ export const TOOL_LABELS: Record<string, string> = {
 	grep: "检索文件", // i18n-ignore
 	find: "查找文件", // i18n-ignore
 	ls: "列目录", // i18n-ignore
-	conversation_mode: "切换模式", // i18n-ignore
 	card_project: "卡片资源", // i18n-ignore
 	story_read: "查阅剧情", // i18n-ignore
 	memory_search: "检索记忆", // i18n-ignore
@@ -112,7 +111,6 @@ export const TOOL_LABELS: Record<string, string> = {
 	lorebook_delete: "删除设定", // i18n-ignore
 	lorebook_create: "新建世界书", // i18n-ignore
 	card_read: "查阅角色卡", // i18n-ignore
-	card_update: "改写角色卡", // i18n-ignore
 };
 
 export const toolLabel = (name: string) => {
@@ -474,18 +472,6 @@ export function ActivityBar({ activities }: { activities: WireActivity[] }) {
 				))}
 			</ul>
 		</details>
-	);
-}
-
-/** 过程清单（进行中态）：每一步实时追加、全程平铺可见；定稿后由 ActivityBar 收进折叠 */
-export function LiveSteps({ activities }: { activities: WireActivity[] }) {
-	if (activities.length === 0) return null;
-	return (
-		<ul className="live-steps">
-			{activities.map((a, i) => (
-				<ActivityItem key={i} a={a} />
-			))}
-		</ul>
 	);
 }
 

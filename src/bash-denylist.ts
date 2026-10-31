@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { rulesAgentDir } from "./user-rules.ts";
 
-export const DENYLIST_FILE = "BASH_DENYLIST.txt";
+const DENYLIST_FILE = "BASH_DENYLIST.txt";
 
 export function denylistPath(): string {
 	return join(rulesAgentDir(), DENYLIST_FILE);

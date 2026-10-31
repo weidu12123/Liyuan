@@ -12,10 +12,6 @@ export type UiLocale = "zh" | "en";
 
 let current: UiLocale = "zh";
 
-export function getUiLocale(): UiLocale {
-	return current;
-}
-
 /** 非法值当没写：保持 zh */
 export function setUiLocale(v: unknown): void {
 	current = v === "en" ? "en" : "zh";
@@ -45,4 +41,3 @@ export function t(zh: string, vars?: TVars): string {
 	return fill(out, vars);
 }
 
-export { en as enCatalog };

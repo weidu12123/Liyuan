@@ -255,10 +255,8 @@ test("封面：PNG 卡只换图像，卡数据照常写回；JSON 卡也受理�
 });
 
 test("工具面：写卡模式只留 card_project 一条写路径；操作入口能走完整链", t => {
-	const names = authoringTools("zh", { project: async () => ({}), updateCard: () => {}, greetings: { list: () => [], add: () => 0, edit: () => {}, remove: () => {} } } as any).map(t => t.name);
+	const names = authoringTools("zh", { project: async () => ({}) } as any).map(t => t.name);
 	assert.ok(names.includes("card_project"));
-	assert.ok(!names.includes("card_update"));
-	assert.ok(!names.includes("card_greetings"));
 	const { cwd, card } = project(t);
 	const added = cardProjectOperation(cwd, card, { action: "add", kind: "script", fields: { name: "工具脚本", content: "x=1" } }) as any;
 	assert.equal(added.item.label, "工具脚本");

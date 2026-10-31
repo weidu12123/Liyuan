@@ -12,13 +12,13 @@ import { join } from "node:path";
 
 import { CHAT_HISTORY_DIR, CHAT_STORY_DIR } from "../paths.ts";
 
-export const HISTORY_OBJECTS_DIR = "对象";
-export const HISTORY_LOG_FILE = "检查点.jsonl";
+const HISTORY_OBJECTS_DIR = "对象";
+const HISTORY_LOG_FILE = "检查点.jsonl";
 /** 会话树上的检查点留痕（讨论区卡片、「文件和对话一起恢复」的对应关系）；真相在 检查点.jsonl，这只是投影 */
 export const STORY_CHECKPOINT_TYPE = "liyuan-story-checkpoint";
 
 export const storyDirectory = (chatDir: string): string => join(chatDir, CHAT_STORY_DIR);
-export const historyDirectory = (chatDir: string): string => join(chatDir, CHAT_HISTORY_DIR);
+const historyDirectory = (chatDir: string): string => join(chatDir, CHAT_HISTORY_DIR);
 
 /** 稿子里的一个文件（一章） */
 export interface StoryFile {

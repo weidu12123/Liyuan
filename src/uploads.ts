@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "nod
 import { basename, extname, join } from "node:path";
 import { DIRS, UPLOAD_PREFIX, dir } from "./paths.ts";
 
-export interface UploadMeta {
+interface UploadMeta {
 	/** 落盘文件名（含时间戳前缀） */
 	name: string;
 	/** 相对 cwd 的路径（写进提示词与消息，agent 用 read 工具取内容） */
@@ -16,7 +16,7 @@ export interface UploadMeta {
 	mtimeMs: number;
 }
 
-export function uploadsDir(cwd: string): string {
+function uploadsDir(cwd: string): string {
 	return dir(cwd, "uploads");
 }
 

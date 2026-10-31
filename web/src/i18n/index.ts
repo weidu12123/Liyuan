@@ -111,5 +111,3 @@ export function fmtDateTime(d: Date | number | string, opts?: Intl.DateTimeForma
 	}
 }
 
-/** 供测试/脚本核对：英文目录本身 */
-export { en as enCatalog };

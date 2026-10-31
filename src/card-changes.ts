@@ -27,7 +27,7 @@ export const emptyChanges = (): CardChanges => ({ version: 1, removed: [], meta:
 export const hasStructuralChanges = (c: CardChanges) => c.removed.length > 0 || c.added.length > 0 || Object.keys(c.meta).length > 0 || Boolean(c.cover);
 
 /** 节点类型只由路径形状决定 */
-export type NodeKind = "lore" | "regex" | "script" | "greeting" | "variables" | "depth-prompt" | "card" | "book";
+type NodeKind = "lore" | "regex" | "script" | "greeting" | "variables" | "depth-prompt" | "card" | "book";
 export function nodeKind(path: string[]): NodeKind | null {
 	const p = path.join("/");
 	if (/(^|\/)character_book\/entries\/[^/]+$/.test(p)) return "lore";
@@ -43,7 +43,7 @@ export function nodeKind(path: string[]): NodeKind | null {
 /** 可整项删除的类型 */
 export const REMOVABLE: ReadonlySet<NodeKind> = new Set(["lore", "regex", "script", "greeting"]);
 
-export const LORE_POSITIONS = ["before_char", "after_char", "an_top", "an_bottom", "at_depth", "em_top", "em_bottom"] as const;
+const LORE_POSITIONS = ["before_char", "after_char", "an_top", "an_bottom", "at_depth", "em_top", "em_bottom"] as const;
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every(x => typeof x === "string");
 const isNumberArray = (v: unknown): v is number[] => Array.isArray(v) && v.every(x => typeof x === "number" && Number.isFinite(x));

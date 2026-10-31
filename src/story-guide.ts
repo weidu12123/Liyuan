@@ -11,11 +11,11 @@
 import { readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { createChat, latestChat, listCardSpaces, listChats, resolveCardSpace, type CardSpace, type ChatInfo } from "./cardspace.ts";
-import { cardsRoot, chatSessionsDirOf } from "./paths.ts";
+import { createChat, latestChat, listChats, resolveCardSpace, type CardSpace, type ChatInfo } from "./cardspace.ts";
+import { chatSessionsDirOf } from "./paths.ts";
 
 /** 引导决定的输出：main.ts 拿它去 SessionManager */
-export interface StorySessionTarget {
+interface StorySessionTarget {
 	/** 当前卡的文件夹（不是 cards/ 卡时为 null） */
 	space: CardSpace | null;
 	/** 引导到的子项目（cards/ 卡但还没有任何子项目时为 null——调用方建） */
@@ -68,7 +68,7 @@ export function ensureStorySessionDir(cwd: string, configCard: string): string |
  * runtime.switchSession 直用——它按父目录推导 sessionDir，正好回到该子项目）。
  * 当前卡不在 cards/ 里 ⇒ null（调用方走 SessionManager.list(cwd) 老路径）。
  */
-export interface ChatSessionEntry {
+interface ChatSessionEntry {
 	chatId: string;
 	/** 会话文件绝对路径 */
 	path: string;
@@ -120,12 +120,3 @@ function chatOrder(_space: CardSpace, chatId: string): number {
 	return -chatId.localeCompare("9999");
 }
 
-/** 换卡落点：卡库枚举（cards/ 优先，assets/cards 老卡库并存展示） */
-export function cardSpaceLibrary(cwd: string): CardSpace[] {
-	return listCardSpaces(cwd);
-}
-
-/** cards/ 根本没建过（迁移从未发生且用户没手动建）⇒ 全程走老布局 */
-export function cardsRootExists(cwd: string): boolean {
-	return existsSync(cardsRoot(cwd));
-}

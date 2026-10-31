@@ -13,7 +13,7 @@ import { isMvuRulesEntry } from "./mvu.ts";
 import { isProtocolContent } from "./protocol-detect.ts";
 
 export type CardSectionDeclarations = Record<string, CardSectionId>;
-export const CARD_SECTION_ORDER: CardSectionId[] = [
+const CARD_SECTION_ORDER: CardSectionId[] = [
 	"settings", "greetings", "lore-knowledge", "lore-constant", "rules", "mvu", "ui", "prompt-regex", "scripts", "ejs", "deps", "other",
 ];
 export const isCardSectionId = (v: unknown): v is CardSectionId => typeof v === "string" && Object.hasOwn(CARD_SECTION_LABELS, v);
@@ -68,7 +68,7 @@ function collectUrls(text: string, into: Map<string, number>) {
 	}
 }
 
-export interface OutlineMarks { removed: Set<string>; added: Set<string> }
+interface OutlineMarks { removed: Set<string>; added: Set<string> }
 const underAny = (path: string[], marks: Set<string>) => {
 	for (let i = path.length; i >= 1; i--) if (marks.has(JSON.stringify(path.slice(0, i)))) return true;
 	return false;

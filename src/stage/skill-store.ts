@@ -21,7 +21,7 @@ export function sanitizeSkillDir(name: string): string | null {
 	return d;
 }
 
-export interface StageSkillInput {
+interface StageSkillInput {
 	/** 已有 skill 的存储目录（编辑）；缺省=新建，目录取名称 */
 	dir?: string;
 	name: string;

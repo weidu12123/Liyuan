@@ -34,7 +34,7 @@ import { applySkinKeepingBody } from "./cardSkin.ts";
 import { fencedBlockHoldsMarkup } from "./htmlMarkup.ts";
 import { mountMvuPanel } from "./mvu.ts";
 
-export type TagPolicy = "fold" | "strip" | "unwrap" | "keep";
+type TagPolicy = "fold" | "strip" | "unwrap" | "keep";
 
 /**
  * 「内容不是正文文字」的 HTML 元素——对它们做 unwrap **在语义上就是错的**。
@@ -66,7 +66,7 @@ const HTML_NON_PROSE_TAGS = new Set([
 ]);
 
 /** 是不是「内容不是正文文字」的 HTML 元素（见 HTML_NON_PROSE_TAGS） */
-export function isHtmlNonProseTag(tag: string): boolean {
+function isHtmlNonProseTag(tag: string): boolean {
 	return HTML_NON_PROSE_TAGS.has(tag.trim().toLowerCase());
 }
 
@@ -124,13 +124,13 @@ export function addHistoryStripTags(tags: Iterable<string>): void {
 }
 
 /** 该标签是否「只在历史剥」 */
-export function isHistoryStripTag(tag: string): boolean {
+function isHistoryStripTag(tag: string): boolean {
 	const raw = tag.trim();
 	const norm = normalizeTagName(raw);
 	return historyOnlyStrip.has(norm) || historyOnlyStrip.has(raw.toLowerCase());
 }
 
-export function normalizeTagName(tag: string): string {
+function normalizeTagName(tag: string): string {
 	return tag.trim().toLowerCase().replace(/_/g, "");
 }
 
@@ -564,8 +564,3 @@ export function extractScaffoldThinking(text: string): string {
 		.trim();
 }
 
-// —— 兼容旧导出名（测试 / 外部若仍引用）——
-/** @deprecated 策略引擎后不再维护精确名单；保留空/示意避免破 import */
-export const STRIP_BLOCK_TAGS: string[] = [];
-export const DISPLAY_STRIP_SCAFFOLD_TAGS: string[] = [];
-export const UNWRAP_BLOCK_TAGS: string[] = [];

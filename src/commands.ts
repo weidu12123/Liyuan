@@ -47,13 +47,6 @@ export const RP_COMMANDS: CommandMeta[] = [
 		mode: "roleplay",
 	},
 	{
-		name: "bot",
-		usage: "/bot <话>",
-		description: "副编剧：问剧情、点评、改设定（世界书/卡/记忆）。独立线程，不进剧情历史",
-		takesArgs: true,
-		mode: "roleplay",
-	},
-	{
 		name: "swipe",
 		usage: "/swipe [prev|next|new]",
 		description: "切换回复变体（prev/next；在末条 next=再生成；new=强制再生成）。不产生世界线",

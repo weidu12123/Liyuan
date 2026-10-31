@@ -13,11 +13,11 @@ import { dirname, isAbsolute, join, normalize, relative } from "node:path";
 /** 项目配置主文件（新） */
 export const CONFIG_FILE = "liyuan.config.json";
 /** 旧配置文件名（兼容读） */
-export const CONFIG_FILE_LEGACY = "rp.config.json";
+const CONFIG_FILE_LEGACY = "rp.config.json";
 
 /** 预设默认文件名 */
-export const PRESET_FILE = "liyuan-preset.json";
-export const PRESET_FILE_LEGACY = "rp-preset.json";
+const PRESET_FILE = "liyuan-preset.json";
+const PRESET_FILE_LEGACY = "rp-preset.json";
 
 /** 在 POSIX 上 path.isAbsolute 不认盘符；会话里常存 Windows 绝对路径 */
 function isAbsPath(p: string): boolean {
@@ -113,12 +113,10 @@ export const CARDS_ROOT = "cards";
 export const CARD_CONFIG_FILE = "卡.json";
 /** 卡文件夹内：agent 写的补充设定集（旧 .liyuan-lore/<卡名>.json） */
 export const CARD_OVERLAY_FILE = "补充设定集.json";
-/** 卡文件夹内：本卡的技能 */
-export const CARD_SKILLS_DIR = "技能";
 /** 卡文件夹内：代码与内容的创作稿、原包快照。 */
 export const CARD_AUTHORING_DIR = "创作";
 /** 卡文件夹内：跨对话记忆（第二步，见 src/card-memory.ts） */
-export const CARD_MEMORY_DIR = "记忆";
+const CARD_MEMORY_DIR = "记忆";
 /** 记忆/ 内：常驻摘要（每拍进上下文的那一层，有字数上限） */
 export const CARD_MEMORY_RESIDENT_FILE = "常驻摘要.md";
 /** 记忆/ 内：合并后的手册（按局分块，供检索层；人可读可改） */
@@ -202,7 +200,7 @@ export function chatSummaryPath(chatDir: string): string {
 export const PERSONAS_FILE = ".liyuan-personas.json";
 /** MCP 外设配置（项目根单文件；`src/mcp.ts` 同名再导出给既有调用方） */
 export const MCP_CONFIG_FILE = ".liyuan-mcp.json";
-export const PERSONAS_FILE_LEGACY = ".rp-personas.json";
+const PERSONAS_FILE_LEGACY = ".rp-personas.json";
 
 export function dir(cwd: string, key: keyof typeof DIRS): string {
 	return join(cwd, DIRS[key]);
@@ -269,24 +267,6 @@ export function resolveConfigPath(cwd: string): string {
 	const old = join(cwd, CONFIG_FILE_LEGACY);
 	if (existsSync(old)) return old;
 	return neu; // 默认写新名
-}
-
-export function resolvePresetPath(cwd: string, configured?: string): string {
-	if (configured) {
-		const p = configured.startsWith(".") || configured.includes("/") || configured.includes("\\")
-			? join(cwd, configured)
-			: join(cwd, configured);
-		if (existsSync(p)) return p;
-		// 配置写着 rp-preset.json 时尝试新名
-		if (configured === PRESET_FILE_LEGACY || configured.endsWith(PRESET_FILE_LEGACY)) {
-			const alt = join(cwd, PRESET_FILE);
-			if (existsSync(alt)) return alt;
-		}
-		return p;
-	}
-	const neu = join(cwd, PRESET_FILE);
-	if (existsSync(neu)) return neu;
-	return join(cwd, PRESET_FILE_LEGACY);
 }
 
 /**
@@ -379,27 +359,6 @@ export function seedStageSystemPrompt(cwd: string, agentDir: string): void {
 		if (!existsSync(agentAppendTarget) && existsSync(shipped("AGENT_APPEND_SYSTEM.md"))) {
 			copyFileSync(shipped("AGENT_APPEND_SYSTEM.md"), agentAppendTarget);
 			lastAgentMergeLog.push(`已播种 agent 模式定义默认值 AGENT_APPEND_SYSTEM.md → ${agentAppendTarget}`);
-		}
-
-		// 副编剧默认人设（PLAN-COMPANION-BOT）：与 APPEND_SYSTEM.md 同一规则，缺失才播种；
-		// 若为刀 1 未改过的旧默认说明文或含 <style_guide> 的过渡版，自动升级为纯性格版 assets/BOT.md
-		const botPersonaTarget = join(agentDir, "BOT.md");
-		if (existsSync(shipped("BOT.md"))) {
-			const needSeed = !existsSync(botPersonaTarget);
-			const isLegacyDefault =
-				!needSeed &&
-				(() => {
-					try {
-						const cur = readFileSync(botPersonaTarget, "utf8");
-						return cur.includes("你是这张卡的幕后副编剧，服务于这一局扮演的戏外工作") || cur.includes("<style_guide>");
-					} catch {
-						return false;
-					}
-				})();
-			if (needSeed || isLegacyDefault) {
-				copyFileSync(shipped("BOT.md"), botPersonaTarget);
-				lastAgentMergeLog.push(`已播种副编剧默认人设 BOT.md → ${botPersonaTarget}`);
-			}
 		}
 	} catch (err) {
 		console.error(`[liyuan] 播种提示词槽位失败：${err instanceof Error ? err.message : String(err)}`);

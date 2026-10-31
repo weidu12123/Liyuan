@@ -15,7 +15,6 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { gzipSync } from "node:zlib";
 
 import {
-	EMPTY_AGENT_CONFIG,
 	deleteChannelFromProfiles,
 	deleteProfile,
 	enableProfile,
@@ -26,7 +25,6 @@ import {
 	materializeEnvKeysInConfig,
 	mergeModelEntries,
 	mergeProfilesIntoActiveConfig,
-	migrateActiveConfigIntoProfiles,
 	normalizeAgentConfig,
 	normalizeModels,
 	publicProvider,
@@ -91,7 +89,7 @@ import {
 	resolveConfigPath,
 	sameCardPath,
 } from "../src/paths.ts";
-import { createCardSpace, deleteChat, exportChatZip, importChatZip, listCardSpaces, listChatMarkdownAssets, listChats, loadCardConfig, renameChat, resolveCardSpace, saveCardConfig } from "../src/cardspace.ts";
+import { createCardSpace, exportChatZip, importChatZip, listCardSpaces, listChatMarkdownAssets, listChats, loadCardConfig, renameChat, resolveCardSpace, saveCardConfig } from "../src/cardspace.ts";
 import { scanSkillFiles, stageSkillRoot } from "../src/stage/materials.ts";
 import { deleteStageSkill, saveStageSkill } from "../src/stage/skill-store.ts";
 import type { WorldlineView } from "../src/worldline.ts";
@@ -100,7 +98,6 @@ import type { FileDiff } from "../src/stage/story-history.ts";
 import {
 	appendLorebookFileEntry,
 	applyDisabledLore,
-	constantEntries,
 	bookOfEntries,
 	deleteLorebookFileEntry,
 	exportStLorebook,
@@ -141,7 +138,6 @@ import {
 } from "../src/preset-doc.ts";
 import {
 	agentRulesPath,
-	botRulesPath,
 	cardRulesPath,
 	globalRulesPath,
 	readUserRules,
@@ -151,7 +147,6 @@ import {
 	translateReport,
 } from "../src/user-rules.ts";
 import { denylistContent, denylistPath, parseDenylist } from "../src/bash-denylist.ts";
-import { BOT_PERSONA_FILE, BOT_PERSONA_PRESETS } from "../src/stage/bot.ts";
 import {
 	assembleForDeclare,
 	declarePieceHash,
@@ -180,7 +175,7 @@ import { cardProjectOperation, inspectCardProject, previewCardProject, readCardC
 import type { CardPreviewReport } from "./card-preview.ts";
 import type { ScreenshotReport } from "./screenshot.ts";
 import { readDeclaration, removeDeclaration, writeDeclarationFromDetection } from "../src/lorebook-declare.ts";
-import { constantLoreOf, loadStageMaterials } from "../src/stage/materials.ts";
+import { loadStageMaterials } from "../src/stage/materials.ts";
 import {
 	allocateServerId,
 	discoverMcpCatalog,
@@ -227,7 +222,7 @@ export interface ModelInfo {
 	maxTokens?: number;
 }
 
-export interface AuthProviderInfo {
+interface AuthProviderInfo {
 	provider: string;
 	displayName: string;
 	/** 已写入 auth.json（可「移除已存 key」） */
@@ -246,7 +241,7 @@ export interface AuthProviderInfo {
 }
 
 /** 运行时渠道快照（用于空配置时收编当前正在用的渠道） */
-export interface ProviderRuntimeSnapshot {
+interface ProviderRuntimeSnapshot {
 	provider: string;
 	baseUrl?: string;
 	api?: string;
@@ -262,8 +257,6 @@ export interface ProviderRuntimeSnapshot {
 }
 
 export interface RestHost {
-	botSnapshot?: () => import("../src/stage/bot-session-types.ts").BotSessionSnapshot;
-	manageBot?: (request: import("../src/stage/bot-session-types.ts").BotSessionAction) => Promise<import("../src/stage/bot-session-types.ts").BotSessionSnapshot>;
 	cwd: string;
 	isStreaming(): boolean;
 	listModels(): { current: CurrentModelInfo | null; models: ModelInfo[] };
@@ -364,7 +357,7 @@ export interface RestHost {
 	): Promise<string | { error: string }>;
 }
 
-export interface SessionInfoLite {
+interface SessionInfoLite {
 	path: string;
 	id: string;
 	name?: string;
@@ -522,7 +515,6 @@ const CONFIG_EDITABLE = new Set([
 	"disabledLore",
 	"backendControl",
 	"creationMode",
-	"assistantModel",
 	"sideModel",
 	"compactEveryNTurns",
 ]);
@@ -548,22 +540,6 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 	next.greeting = next.greeting === true;
 	// 决策门禁档位：只认 ask / silent；非法值删除（扩展缺省按 silent）
 	if (next.creationMode !== "ask" && next.creationMode !== "silent") delete next.creationMode;
-	// 助手模型：只认 { provider, id } 形；非法值删除（缺省=跟随剧情模型）
-	if (next.assistantModel !== undefined) {
-		const am = next.assistantModel as { provider?: unknown; id?: unknown } | null;
-		if (
-			!am ||
-			typeof am !== "object" ||
-			typeof am.provider !== "string" ||
-			!am.provider ||
-			typeof am.id !== "string" ||
-			!am.id
-		) {
-			delete next.assistantModel;
-		} else {
-			next.assistantModel = { provider: am.provider, id: am.id };
-		}
-	}
 	// 旁路模型：只认 { provider, entry } 形——entry 是连接配置里那条模型条目的名字，
 	// 不是模型 id（同一个 id 可以有多条条目）。非法值删除（缺省=跟随剧情模型）
 	if (next.sideModel !== undefined) {
@@ -607,7 +583,7 @@ function clampInt(v: unknown, min: number, max: number, dflt: number): number {
 
 // ---------- 世界书（服务端只读副本，与扩展同一装配路径） ----------
 
-export type LoreSource = "card" | "file" | "agent";
+type LoreSource = "card" | "file" | "agent";
 
 /**
  * 世界书装配：已挂载独立书（0..N 本）+ agent 补充设定集。
@@ -973,7 +949,7 @@ function validatePresetPath(p: string): string {
 	return norm;
 }
 
-export function presetOverridePath(cwd: string): string {
+function presetOverridePath(cwd: string): string {
 	return join(cwd, PRESET_OVERRIDE_REL);
 }
 
@@ -989,7 +965,7 @@ function clearPresetOverride(cwd: string): void {
 }
 
 /** 预设名＝文件名（酒馆预设没有 name 字段，名字在酒馆就是文件名） */
-export function presetNameFromFile(file: string): string {
+function presetNameFromFile(file: string): string {
 	const base = file.replace(/\\/g, "/").split("/").pop() ?? file;
 	return base.replace(/\.json$/i, "") || "preset";
 }
@@ -1000,7 +976,7 @@ function readPresetDoc(cwd: string, file: string): PresetDoc {
 }
 
 /** 磁盘上的已保存预设（不含草稿） */
-export function loadDiskPreset(cwd: string): { path: string; doc: PresetDoc } | null {
+function loadDiskPreset(cwd: string): { path: string; doc: PresetDoc } | null {
 	const config = loadConfig(cwd);
 	if (!config.preset) return null;
 	if (!existsSync(resolvePath(cwd, config.preset))) return null;
@@ -1008,7 +984,7 @@ export function loadDiskPreset(cwd: string): { path: string; doc: PresetDoc } | 
 }
 
 /** 运行时生效：草稿优先，否则磁盘。草稿与磁盘同格式（原文），只是没落盘 */
-export function loadEffectivePreset(cwd: string): { path: string | null; doc: PresetDoc | null; fromOverride: boolean } {
+function loadEffectivePreset(cwd: string): { path: string | null; doc: PresetDoc | null; fromOverride: boolean } {
 	const config = loadConfig(cwd);
 	if (!config.preset) return { path: null, doc: null, fromOverride: false };
 	const ovr = presetOverridePath(cwd);
@@ -1054,19 +1030,14 @@ function listPresetFiles(cwd: string): Array<{ file: string; name: string }> {
 	return out;
 }
 
-// ---------- 预设：面板与助手工具共用（M-D8 工具化）----------
+// ---------- 预设：面板与工具共用（M-D8 工具化）----------
 //
 // 写侧一律两段式：先落运行时草稿（.liyuan/preset-override.json，下一拍生效但不动用户文件），
 // `savePresetDraft(true)` 才落盘。面板本来就是这套，工具沿用同一套——否则会出现
 // 「agent 改了预设、用户在面板点撤销却撤不掉」。
 
-/** 预设库 + 当前用哪份（`preset_list` 与 GET /api/presets 同源） */
-export function presetLibrary(cwd: string): { presets: Array<{ file: string; name: string }>; active: string | null } {
-	return { presets: listPresetFiles(cwd), active: loadConfig(cwd).preset ?? null };
-}
-
 /** 把补丁打进**运行时草稿**（不落盘）。返回改了几块、新增了哪些 id */
-export function writePresetDraft(cwd: string, patch: PresetPatch): { blocks: number; added: string[] } {
+function writePresetDraft(cwd: string, patch: PresetPatch): { blocks: number; added: string[] } {
 	const config = loadConfig(cwd);
 	if (!config.preset) throw new Error(t("当前未配置预设文件"));
 	const base = loadEffectivePreset(cwd).doc ?? loadDiskPreset(cwd)?.doc;
@@ -1083,7 +1054,7 @@ export function writePresetDraft(cwd: string, patch: PresetPatch): { blocks: num
 }
 
 /** 草稿落盘（save=true）或整份丢弃（save=false） */
-export function savePresetDraft(cwd: string, save: boolean): void {
+function savePresetDraft(cwd: string, save: boolean): void {
 	if (!save) {
 		clearPresetOverride(cwd);
 		return;
@@ -1096,48 +1067,8 @@ export function savePresetDraft(cwd: string, save: boolean): void {
 	clearPresetOverride(cwd);
 }
 
-/**
- * 新建一份**可用的**空白预设并选用。
- * 骨架必须带 `chatHistory` 槽位——没有它历史无处可插，装配出来的预设是废的。
- */
-export function createBlankPreset(cwd: string, name: string): { file: string } | null {
-	const file = `${PRESETS_DIR}/${presetSlug(name)}.json`;
-	const abs = resolvePath(cwd, file);
-	if (existsSync(abs)) return null;
-	const raw = {
-		prompts: [
-			{ identifier: "main", name: t("主提示词"), role: "system", content: "", system_prompt: true, marker: false },
-			{ identifier: "chatHistory", name: "Chat History", marker: true },
-		],
-		prompt_order: [
-			{
-				character_id: 100001,
-				order: [
-					{ identifier: "main", enabled: true },
-					{ identifier: "chatHistory", enabled: true },
-				],
-			},
-		],
-	};
-	mkdirSync(dirname(abs), { recursive: true });
-	writeFileSync(abs, `${JSON.stringify(raw, null, "\t")}\n`, "utf8");
-	selectPresetFile(cwd, file);
-	return { file };
-}
-
-/** 当前预设（含草稿）整份另存为新文件；不切换当前使用的那份 */
-export function saveAsPreset(cwd: string, name: string): { file: string } | null {
-	const file = `${PRESETS_DIR}/${presetSlug(name)}.json`;
-	const abs = resolvePath(cwd, file);
-	if (existsSync(abs)) return null;
-	const raw = loadEffectivePreset(cwd).doc?.raw ?? {};
-	mkdirSync(dirname(abs), { recursive: true });
-	writeFileSync(abs, `${JSON.stringify(raw, null, "\t")}\n`, "utf8");
-	return { file };
-}
-
 /** 换用某份预设（null = 不用预设）。与面板同语义：**丢弃未保存草稿**。false = 文件不存在 */
-export function selectPresetFile(cwd: string, file: string | null): boolean {
+function selectPresetFile(cwd: string, file: string | null): boolean {
 	const config = loadConfig(cwd) as unknown as Record<string, unknown>;
 	clearPresetOverride(cwd);
 	if (file === null || file === "") {
@@ -1153,7 +1084,7 @@ export function selectPresetFile(cwd: string, file: string | null): boolean {
 
 // ---------- 预设装载态同步：装载即转译、改开关即转译（2026-09-12 用户定序） ----------
 
-export interface PresetSyncDeps {
+interface PresetSyncDeps {
 	runSideText: RestHost["runSideText"];
 	/** 声明留档用的模型名 */
 	modelLabel?: string;
@@ -1352,7 +1283,7 @@ export async function syncPresetTranslation(
  * 剥离可能由旧投影抄入档案的 `# 世界设定（常驻事实）` 大节及其下属无主条目。
  * 世界书内容只应由 syncLorebookMirror 以带后缀条目形态动态持有，不应有静态大节残留。
  */
-export function stripWorldSettingsSection(md: string): string {
+function stripWorldSettingsSection(md: string): string {
 	const lines = md.split(/\r?\n/);
 	const out: string[] = [];
 	let inside = false;
@@ -1407,7 +1338,7 @@ export function syncLorebookMirror(cwd: string): { state: "none" | "unchanged" |
  * 局部提示词反向同步（用户修改 APPEND_SYSTEM.md 或 AGENTS.md 里的预设/世界书条目时，
  * 同步修改对应的预设块与世界书源文件，避免紧随其后的 syncCardFiles 把修改覆盖回去）。
  */
-export function syncBackFromCardPrompts(cwd: string, scope: "card" | "agents", nextMarkdown: string): void {
+function syncBackFromCardPrompts(cwd: string, scope: "card" | "agents", nextMarkdown: string): void {
 	const nextEntries = parsePromptEntries(nextMarkdown);
 	const config = loadConfig(cwd);
 	const cardDir = dirname(resolvePath(cwd, config.card));
@@ -1691,10 +1622,10 @@ function listLorebookFiles(cwd: string, config: RpConfig): Array<{ path: string;
 	return out;
 }
 
-// ---------- 条目写侧：面板 / 台上 / 助手三处共用一套寻址与善后 ----------
+// ---------- 条目写侧：面板与工具共用一套寻址与善后 ----------
 //
 // 「改用户的书」这件事只能有一套实现。此前 PUT/DELETE 两个端点各抄一遍寻址 + 指纹迁移；
-// 工具化之后再抄两遍（台上、助手）就是四份追着彼此跑——2026-08-22 收成下面三个函数。
+// 工具化之后再抄就是几份追着彼此跑——2026-08-22 收成下面三个函数。
 
 /** 相对 cwd 的展示路径（回执里报「改了哪本」用） */
 function relToCwd(cwd: string, abs: string): string {
@@ -1724,7 +1655,7 @@ export function loreWriteTargets(cwd: string, config: RpConfig, scope?: string):
  * 内容变了＝换身份（指纹是内容 md5），停用清单里的旧指纹必须跟着迁移，
  * 否则用户亲手关掉的条目会静默复活。
  */
-export function patchLoreEntryAnywhere(
+function patchLoreEntryAnywhere(
 	cwd: string,
 	config: RpConfig,
 	fingerprint: string,
@@ -1745,7 +1676,7 @@ export function patchLoreEntryAnywhere(
 }
 
 /** 按指纹删一条：同一寻址；顺手清掉停用清单里的残留指纹（删掉的条目不该继续占位）。 */
-export function deleteLoreEntryAnywhere(
+function deleteLoreEntryAnywhere(
 	cwd: string,
 	config: RpConfig,
 	fingerprint: string,
@@ -1803,8 +1734,7 @@ export function setLorebookMounted(cwd: string, config: RpConfig, path: string, 
  * 连 `loreWriteTargets` 都寻址不到它，建了等于没建（8/22 探针实测撞上这个死胡同）。
  */
 /**
- * 建一本新世界书。**唯一实现**，两类入口共用：
- * agent 的 `lorebook_create` 工具（`main.ts` / `assistant.ts` 两处薄壳）与 `POST /api/lorebooks`（用户新建）。
+ * 建一本新世界书（`POST /api/lorebooks`，用户新建）。
  *
  * **首条必填，不接受空书**——这不是保守，是下游两条硬约束（8/29 实跑坐实，别再试图放宽）：
  *  1. `setLorebookMounted` 校验「空书要先写入条目」，空书挂不上；
@@ -1870,12 +1800,7 @@ function projectPersonaToConfig(cwd: string, p: Persona): void {
 
 // ---------- 卡库 / 身份：面板与两个 agent 面共用（M-D7 工具化）----------
 
-/** 卡库列表 + 当前卡（`card_list` 工具与 GET /api/cards 同源） */
-export function cardLibrary(cwd: string, config: RpConfig): { cards: CardLibItem[]; current: string } {
-	return { cards: listCardLibrary(cwd, config), current: config.card };
-}
-
-export interface NewCardInput {
+interface NewCardInput {
 	name: string;
 	description?: string;
 	personality?: string;
@@ -1887,7 +1812,7 @@ export interface NewCardInput {
 
 /**
  * 建一张新角色卡（CharaCard V3 JSON）。**唯一实现**，两类入口共用（8/29 提取）：
- * agent 的 `card_create` 工具（原先是 `assistant.ts` 里的内联闭包，只有助手够得着）
+ * agent 的 `card_create` 工具
  * 与 `POST /api/cards`（用户自己新建——此前只能导入酒馆卡，不能创作）。
  *
  * - 同名拒写，返回 `null`（不覆盖用户已有的卡）。
@@ -1966,9 +1891,9 @@ function syncLockedCardLorebooksIfAny(cwd: string, cardPath: string, paths: stri
 
 /**
  * 换卡：验卡 → 写 config（清掉随卡走的 displayName/greetingIndex）→ 按卡投影身份与已保存世界书 → 切/建会话。
- * POST /api/card/switch 与 `card_switch` 工具共用此函数。
+ * POST /api/card/switch 用此函数。
  */
-export async function selectCard(
+async function selectCard(
 	cwd: string,
 	host: RestHost,
 	cardPath: string,
@@ -2006,51 +1931,6 @@ export async function selectCard(
 /** 当前卡的绝对路径（开场白等卡文件写侧共用） */
 export function currentCardPath(cwd: string, config: RpConfig): string {
 	return resolvePath(cwd, config.card);
-}
-
-/**
- * 身份一览（`persona_list` 工具与 GET /api/personas 同源，含首次使用时的单人设收编迁移）。
- * activeId = 当前卡实际生效的那个（卡锁定优先于全局默认）。
- */
-export function personaOverview(cwd: string): {
-	personas: Persona[];
-	activeId: string | null;
-	lockedForCard: string | null;
-} {
-	let store = loadPersonas(cwd);
-	const config = loadConfig(cwd);
-	if (store.personas.length === 0 && config.userName) {
-		const r = createPersona(store, { name: config.userName, persona: config.userPersona });
-		store = { ...r.store, current: r.id };
-		savePersonas(cwd, store);
-	}
-	const active = personaForCard(store, config.card);
-	return { personas: store.personas, activeId: active?.id ?? null, lockedForCard: store.byCard[config.card] ?? null };
-}
-
-/** 选用身份：lockToCard=true 锁到当前卡，否则设为全局默认。投影进 config（热载归调用方） */
-export function usePersonaFor(cwd: string, id: string, lockToCard: boolean): boolean {
-	const store = loadPersonas(cwd);
-	const p = findPersona(store, id);
-	if (!p) return false;
-	const config = loadConfig(cwd);
-	const byCard = { ...store.byCard };
-	if (lockToCard) byCard[config.card] = p.id;
-	else delete byCard[config.card];
-	savePersonas(cwd, { ...store, current: lockToCard ? store.current : p.id, byCard });
-	projectPersonaToConfig(cwd, p);
-	return true;
-}
-
-/** 改身份；改到的若正是当前生效的那个，一并投影（热载归调用方）。false = id 不存在 */
-export function updatePersonaFor(cwd: string, id: string, patch: { name?: string; persona?: string }): boolean {
-	const store = loadPersonas(cwd);
-	if (!findPersona(store, id)) return false;
-	const next = updatePersona(store, id, patch);
-	savePersonas(cwd, next);
-	const active = personaForCard(next, loadConfig(cwd).card);
-	if (active?.id === id) projectPersonaToConfig(cwd, active);
-	return true;
 }
 
 // ---------- 路由 ----------
@@ -3474,7 +3354,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			case "POST /api/presets/select": {
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as { file?: string | null; redeclare?: boolean };
-				// 切换（含“丢弃未保存草稿”）归 selectPresetFile，与 preset_select 工具共用
+				// 切换（含“丢弃未保存草稿”）归 selectPresetFile
 				if (!selectPresetFile(host.cwd, body.file ?? null)) throw new Error(t("预设文件不存在"));
 				if (body.file && body.redeclare) {
 					const name = presetNameFromFile(body.file);
@@ -3629,7 +3509,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				sendJson(res, 200, { name: presetNameFromFile(file), json: JSON.parse(readFileSync(abs, "utf8")) });
 				return true;
 			}
-			// ---- 用户提示词（刀2/前端重构）：SYSTEM.md + 全局追加（扮演/写作/助手）+ 卡级 APPEND_SYSTEM.md ----
+			// ---- 用户提示词（刀2/前端重构）：SYSTEM.md + 全局追加（扮演/写作）+ 卡级 APPEND_SYSTEM.md ----
 			case "GET /api/rules": {
 				const config = loadConfig(host.cwd);
 				const cardDir = dirname(resolvePath(host.cwd, config.card));
@@ -3647,105 +3527,9 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				sendJson(res, 200, {
 					global: { content: readGlobalSlot(globalRulesPath(), "APPEND_SYSTEM.md"), path: globalRulesPath() },
 					agent: { content: readGlobalSlot(agentRulesPath(), "AGENT_APPEND_SYSTEM.md"), path: agentRulesPath() },
-					bot: { content: readGlobalSlot(botRulesPath(), "BOT.md"), path: botRulesPath() },
-					botPersonas: BOT_PERSONA_PRESETS,
 					card: { content: rules.card, path: cardRulesPath(cardDir), cardName: config.displayName ?? basename(config.card).replace(/\.(png|json)$/i, "") },
 					system: { content: readGlobalSlot(systemPromptPath(), "SYSTEM.md"), path: systemPromptPath() },
 				});
-				return true;
-			}
-			case "GET /api/bot/personas": {
-				sendJson(res, 200, { personas: BOT_PERSONA_PRESETS });
-				return true;
-			}
-			case "GET /api/bot/sessions": {
-				if (!host.botSnapshot) throw new Error(t("副编剧运行时未接入"));
-				sendJson(res, 200, host.botSnapshot()); return true;
-			}
-			case "POST /api/bot/sessions": {
-				if (!host.manageBot) throw new Error(t("副编剧运行时未接入"));
-				const body = JSON.parse(await readBody(req));
-				if (!body || !["list", "new", "open", "rename", "delete", "model", "compact", "stop"].includes(body.action)) throw new Error(t("副编剧会话操作无效"));
-				sendJson(res, 200, await host.manageBot(body)); return true;
-			}
-			case "GET /api/bot/settings": {
-				const config = loadConfig(host.cwd);
-				const cardDir = dirname(resolvePath(host.cwd, config.card));
-				const cardBotPath = join(cardDir, BOT_PERSONA_FILE);
-				const globalBotPath = botRulesPath();
-				const readClean = (p: string): string => {
-					if (!existsSync(p)) return "";
-					try {
-						const raw = readFileSync(p, "utf8").trim();
-						if (raw.includes("你是这张卡的幕后副编剧，服务于这一局扮演的戏外工作") || raw.includes("<style_guide>")) { // i18n-ignore
-							return BOT_PERSONA_PRESETS[0]!.content;
-						}
-						return raw;
-					} catch {
-						return "";
-					}
-				};
-				const globalPersona = readClean(globalBotPath) || BOT_PERSONA_PRESETS[0]!.content;
-				const cardPersona = readClean(cardBotPath);
-				sendJson(res, 200, {
-					personas: BOT_PERSONA_PRESETS,
-					globalPersona,
-					cardPersona,
-					activeScope: cardPersona ? "card" : "global",
-					cardName: config.displayName ?? basename(config.card).replace(/\.(png|json)$/i, ""),
-					botViewBeats: typeof config.botViewBeats === "number" && config.botViewBeats > 0 ? Math.floor(config.botViewBeats) : 0,
-				});
-				return true;
-			}
-			case "PUT /api/bot/settings": {
-				if (refuseWhileStreaming()) return true;
-				const body = JSON.parse(await readBody(req)) as {
-					scope?: "global" | "card";
-					content?: string;
-					botViewBeats?: number;
-				};
-				const config = loadConfig(host.cwd);
-				const cardDir = dirname(resolvePath(host.cwd, config.card));
-				if (typeof body.content === "string") {
-					const trimmed = body.content.trim();
-					if (body.scope === "card") {
-						const cardBotPath = join(cardDir, BOT_PERSONA_FILE);
-						if (!trimmed) {
-							if (existsSync(cardBotPath)) rmSync(cardBotPath, { force: true });
-						} else {
-							mkdirSync(cardDir, { recursive: true });
-							writeFileSync(cardBotPath, trimmed + "\n", "utf8");
-						}
-					} else {
-						const globalBotPath = botRulesPath();
-						mkdirSync(dirname(globalBotPath), { recursive: true });
-						writeFileSync(globalBotPath, (trimmed || BOT_PERSONA_PRESETS[0]!.content) + "\n", "utf8");
-					}
-				}
-				if (typeof body.botViewBeats === "number" && Number.isFinite(body.botViewBeats)) {
-					const beats = Math.max(0, Math.floor(body.botViewBeats));
-					if (beats > 0) config.botViewBeats = beats;
-					else delete config.botViewBeats;
-					writeJsonWithBackup(configPath(host.cwd), config);
-				}
-				await host.softRefreshConfig();
-				sendJson(res, 200, { ok: true });
-				return true;
-			}
-			case "POST /api/bot/persona": {
-				if (refuseWhileStreaming()) return true;
-				const body = JSON.parse(await readBody(req)) as { presetId?: string; scope?: "global" | "card" };
-				const preset = BOT_PERSONA_PRESETS.find((p) => p.id === body.presetId);
-				if (!preset) throw new Error(t("未知副编剧人设模板"));
-				const config = loadConfig(host.cwd);
-				const abs =
-					body.scope === "card"
-						? join(dirname(resolvePath(host.cwd, config.card)), BOT_PERSONA_FILE)
-						: botRulesPath();
-				mkdirSync(dirname(abs), { recursive: true });
-				writeFileSync(abs, preset.content, "utf8");
-				await host.softRefreshConfig();
-				sendJson(res, 200, { ok: true, presetId: preset.id, name: preset.name, path: abs, content: preset.content });
 				return true;
 			}
 			case "PUT /api/rules": {
@@ -3763,16 +3547,13 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				} else if (body.scope === "agent") {
 					abs = agentRulesPath();
 					mkdirSync(rulesAgentDir(), { recursive: true });
-				} else if (body.scope === "bot") {
-					abs = botRulesPath();
-					mkdirSync(rulesAgentDir(), { recursive: true });
 				} else if (body.scope === "card") {
 					const cardDir = dirname(resolvePath(host.cwd, config.card));
 					mkdirSync(cardDir, { recursive: true });
 					abs = cardRulesPath(cardDir);
 					syncBackFromCardPrompts(host.cwd, "card", body.content);
 				} else {
-					throw new Error(t("scope 必须是 system、global、agent、bot 或 card"));
+					throw new Error(t("scope 必须是 system、global、agent 或 card"));
 				}
 				writeFileSync(abs, body.content, "utf8");
 				await host.softRefreshConfig();
@@ -3901,10 +3682,8 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				const space = resolveCardSpace(host.cwd, config.card);
 				const cardCfg = space ? loadCardConfig(space.dir) : {};
 				sendJson(res, 200, {
-					/** 多本同时挂载；兼容旧前端：active 现为 string[] */
+					/** 多本同时挂载 */
 					active,
-					/** @deprecated 旧单本字段：取 active[0] 或 null */
-					activeOne: active[0] ?? null,
 					books: listLorebookFiles(host.cwd, config),
 					/** 当前角色卡是否已保存专属世界书选择（`cards/<卡>/卡.json` 的 `lorebooks`） */
 					lockedForCard: Array.isArray(cardCfg.lorebooks),
@@ -4022,7 +3801,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				return true;
 			}
 			case "POST /api/lorebooks": {
-				// 用户手动新建一本世界书（8/29）。与 agent 的 lorebook_create 共用 createLorebookWithEntry。
+				// 用户手动新建一本世界书（8/29）。
 				// 首条必填：空书挂不上、也不会出现在书单里（见该函数注释），造出来就是孤儿文件。
 				if (refuseWhileStreaming()) return true;
 				const body = JSON.parse(await readBody(req)) as {
@@ -4518,34 +4297,6 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				});
 				return true;
 			}
-			// 兼容旧路径：转发到 agent-config
-			case "GET /api/models-json": {
-				const { path, exists, config, seeded } = (await loadOrSeedAgentConfig(host));
-				sendJson(res, 200, {
-					path,
-					exists: exists || seeded,
-					content: config,
-					text: `${JSON.stringify(config, null, "\t")}\n`,
-				});
-				return true;
-			}
-			case "PUT /api/models-json": {
-				const body = JSON.parse(await readBody(req)) as { text?: string; content?: unknown };
-				const parsed =
-					typeof body.text === "string"
-						? JSON.parse(body.text)
-						: body.content !== undefined
-							? body.content
-							: null;
-				if (!parsed) throw new Error(t("缺少 text 或 content"));
-				const config = await persistAgentConfig(host, normalizeAgentConfig(parsed));
-				sendJson(res, 200, {
-					ok: true,
-					path: loadAgentConfig(host.cwd).path,
-					text: `${JSON.stringify(config, null, "\t")}\n`,
-				});
-				return true;
-			}
 			case "POST /api/channels": {
 				const body = JSON.parse(await readBody(req)) as {
 					name?: string;
@@ -4789,7 +4540,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				const cardPath = (body.card ?? "").trim();
 				if (!cardPath) throw new Error(t("缺少 card 路径"));
 				const switchSession = body.switchSession !== false;
-				// 验卡 / 写盘 / 清随卡字段 / 身份投影 / 切会话 都在 selectCard 里（与 card_switch 工具共用）
+				// 验卡 / 写盘 / 清随卡字段 / 身份投影 / 切会话 都在 selectCard 里
 				const r = await selectCard(host.cwd, host, cardPath, { switchSession });
 				if (switchSession) {
 					host.notify(
@@ -5294,7 +5045,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			/** 丢弃未保存草稿，从磁盘重载 */
 			case "POST /api/preset/revert": {
 				if (refuseWhileStreaming()) return true;
-				savePresetDraft(host.cwd, false); // 与 preset_save(save=false) 共用一份
+				savePresetDraft(host.cwd, false);
 				await host.softRefreshConfig();
 				sendJson(res, 200, { ok: true, dirty: false });
 				return true;
@@ -5405,11 +5156,3 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 	}
 }
 
-function sanitizeSamplers(input: Record<string, number> | undefined): Record<string, number> | undefined {
-	if (!input || typeof input !== "object") return undefined;
-	const out: Record<string, number> = {};
-	for (const [k, v] of Object.entries(input)) {
-		if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
-	}
-	return out;
-}

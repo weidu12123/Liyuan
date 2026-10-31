@@ -47,25 +47,17 @@ import {
 	normalizeAgentConfig,
 	syncAgentConfigToRuntime,
 } from "../src/agent-config.ts";
-import { loadCardFile, readCardRawJson, updateCardFields } from "../src/card.ts";
+import { loadCardFile, readCardRawJson } from "../src/card.ts";
 import { applyMacros } from "../src/card-macros.ts";
 import { prepareDisplayText } from "../src/postprocess.ts";
 import { findInitVar, findSchemaDefaults, seedMvuIfNeeded } from "../src/mvu.ts";
 import { authorScriptManifest, extractAuthorScripts } from "../src/authorScripts.ts";
 import { buildGreeting } from "../src/greeting.ts";
 import { StageEngine, type AssistantMsgLike, type StageModelLike, type StageStreamFn } from "../src/stage/engine.ts";
-import {
-	BOT_PERSONA_FILE,
-	BOT_PERSONA_PRESETS,
-	botThreadPath,
-} from "../src/stage/bot.ts";
-import { BotSessionStore, runBotSession } from "./bot-runtime.ts";
-import type { BotModelSelection, BotSessionAction } from "../src/stage/bot-session-types.ts";
-import { botRulesPath, rulesAgentDir } from "../src/user-rules.ts";
 import { displayConversationBranch, storyBranch, messageMode } from "../src/conversation-mode.ts";
 import { cardProjectOperation, previewCardProject } from "../src/card-authoring.ts";
 import { buildCardPreviewRequest, CardPreviewHub } from "./card-preview.ts";
-import { ScreenshotHub, type ScreenshotReport } from "./screenshot.ts";
+import { ScreenshotHub } from "./screenshot.ts";
 import { stateFromBranch, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
 import {
 	activePanels,
@@ -75,7 +67,6 @@ import {
 	writePanel,
 } from "../src/panels.ts";
 import {
-	DIRS,
 	dir,
 	migrateLegacyLayout,
 	preferLiyuanAgentHome,
@@ -119,23 +110,18 @@ import {
 	memoryListChunks,
 	memoryManualAdd,
 	memoryRecallForTurn,
-	memorySearch,
 	memorySearchReport,
 	memoryReadChunk,
 	onNarrativeTurnEnd,
 } from "../src/memory/index.ts";
 import {
-	createLorebookWithEntry,
 	createCardFile,
 	currentCardPath,
-	deleteLoreEntryAnywhere,
 	handleApiRequest,
 	loadCardFrontSnapshot,
 	loadConfig,
 	loadMergedLoreMarked,
 	lorebookShelf,
-	loreWriteTargets,
-	patchLoreEntryAnywhere,
 	setLorebookMounted,
 	syncCardFiles,
 	thinkingLevelOfEntry,
@@ -166,14 +152,11 @@ import { DISCUSSION_SUMMARY_TYPE } from "../src/stage/discussion.ts";
 import { chatDirOf, chatSessionsDirOf, insidePath, sameCardPath } from "../src/paths.ts";
 import { readSessionCardInfo } from "../src/session-scan.ts";
 import { t } from "../src/i18n/index.ts";
-import { cardDirOfChatDir, cardFileIn, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, createChat, listChatMarkdownAssets, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
+import { cardFileIn, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, listChatMarkdownAssets, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
 import { chatSessionsOf, chatsOfCard, ensureStorySessionDir, newChatSessionDir, storySessionTarget } from "../src/story-guide.ts";
 import { loadManifest, memoryPaths, saveManifest, syncCardMemory } from "../src/card-memory.ts";
 import { alreadyMigrated, applyCardMigration, planCardMigration, planOrphanSessions, promoteStagedCard } from "../src/migrate-cards.ts";
 import {
-	appendLorebookFileEntry,
-	appendOverlayEntry,
-	overlayPathFor,
 	toggleDisabledLore,
 } from "../src/lorebook.ts";
 import { syncStoryPanelsFromDisk, syncStoryStateFromDisk } from "../src/story-sync.ts";
@@ -972,8 +955,6 @@ const helloFrame = (): ServerFrame => {
 	 * 前端拿清单算指纹，只在换卡/换预设（指纹变了）时才去拉一次正文。
 	 */
 	const { scripts, ...cardfrontLite } = cardfront;
-	const botFile = botThreadPath(cwd, session.sessionManager.getSessionDir(), session.sessionId);
-	const botSnapshot = new BotSessionStore(botFile, cwd).snapshot(botStreamingFlag);
 	return {
 		type: "hello",
 		uiLanguage: loadConfig(cwd).uiLanguage,
@@ -986,9 +967,6 @@ const helloFrame = (): ServerFrame => {
 		panels: currentPanels(),
 		workspace: workspace ? workspaceView(workspace) : undefined,
 		streaming: stage?.isStreaming ?? false,
-		botMessages: botSnapshot.messages,
-		botSession: botSnapshot,
-		botStreaming: botStreamingFlag,
 		conversationMode: stage?.mode ?? "roleplay",
 		turnMode: stage?.turnMode,
 		...(stage?.mode === "agent" ? { story: storyOutline() } : {}),
@@ -997,39 +975,8 @@ const helloFrame = (): ServerFrame => {
 	};
 };
 
-let botStreamingFlag = false;
-
 /** 全量重放（斜杠命令 / 树导航 / 压缩后：让所有端与会话文件对齐） */
 const resyncAll = () => broadcast(helloFrame());
-
-const botStore = () => new BotSessionStore(botThreadPath(cwd, session.sessionManager.getSessionDir(), session.sessionId), cwd);
-const resolveBotModel = (selection?: BotModelSelection) => {
-	if (!selection) {
-		if (!session.model) throw new Error(t("尚未配置副编剧模型"));
-		return { model: session.model, thinking: session.thinkingLevel };
-	}
-	const config = loadAgentConfig(cwd).config;
-	const entry = findModelEntry(config.providers?.[selection.provider]?.models, selection.entry);
-	if (!entry) throw new Error(t("副编剧指定的模型条目已不存在"));
-	const base = session.modelRuntime.getModel(selection.provider, entry.id);
-	if (!base || !session.modelRuntime.hasConfiguredAuth(base.provider)) throw new Error(t("副编剧指定的模型不可用或缺少鉴权"));
-	const model = applyEntryThinkingMap(base, entry);
-	return { model, thinking: selection.thinking ?? thinkingLevelOfEntry(config, selection.provider, selection.entry), label: `${selection.provider}/${selection.entry}` };
-};
-const manageBot = async (request: BotSessionAction) => {
-	if (request.action === "stop") { stage.abortBot(); return botStore().snapshot(botStreamingFlag); }
-	if (storyStreaming() || botStreamingFlag) throw new Error(t("请先停止生成，再管理副编剧会话"));
-	if (stage.mode === "agent") throw new Error(t("副编剧只服务扮演会话"));
-	if (request.action === "compact") { await handleBotPrompt("", true); return botStore().snapshot(); }
-	if (request.action === "model" && request.model) {
-		if (typeof request.model.provider !== "string" || typeof request.model.entry !== "string") throw new Error(t("副编剧模型选择无效"));
-		if (request.model.thinking && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(request.model.thinking)) throw new Error(t("副编剧模型选择无效"));
-		resolveBotModel(request.model);
-	}
-	const snapshot = botStore().manage(request);
-	broadcast({ type: "bot_session", snapshot });
-	return snapshot;
-};
 
 const workspaceView = (workspace: TurnWorkspace) => {
 	const { mediaDeliveries: _media, ...view } = workspace;
@@ -1776,9 +1723,7 @@ const currentModelInfo = (): CurrentModelInfo | null => {
 
 const restHost: RestHost = {
 	cwd,
-	isStreaming: () => session.isStreaming || botStreamingFlag,
-	botSnapshot: () => botStore().snapshot(botStreamingFlag),
-	manageBot,
+	isStreaming: () => session.isStreaming,
 	settleCardPreview: (report) => cardPreviews.settle(report),
 	settleScreenshot: (report) => screenshots.settle(report),
 	runCardPreview: (args) => {
@@ -2727,10 +2672,6 @@ const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
 stage = new StageEngine({
 	cwd,
-	runBotSession: options => runBotSession(options, {
-		agentDir: rulesAgentDir(), modelRuntime: session.modelRuntime, resolveModel: resolveBotModel,
-		onSnapshot: snapshot => broadcast({ type: "bot_session", snapshot }),
-	}),
 	getSession: () => session as never,
 	getModel: () => session.model as never,
 	getAuth: async (m) => {
@@ -2884,66 +2825,17 @@ stage = new StageEngine({
 		void restHost.softRefreshConfig();
 		return fingerprints.length;
 	},
-	// 世界书写侧宿主件（M-D7）：条目改/删 + 书一级列/建/挂载。
-	// 全部经 rest.ts 的共用寻址（书单全部 + 补充设定集）——面板与两个 agent 面同一套语义，
-	// 且 disabledLore 指纹迁移在那里统一善后。写完 softRefreshConfig：constant/挂载都影响注入。
+	// 世界书宿主件：带来源标记的列举 + 书一级列/挂载（经 rest.ts 的共用寻址）。
 	loreHost: {
-		write: (input) => {
-			const config = loadConfig(cwd);
-			if (input.book) {
-				const [abs] = loreWriteTargets(cwd, config, input.book);
-				const entry = appendLorebookFileEntry(abs, {
-					comment: input.title,
-					keys: input.keys,
-					content: input.content,
-					...(input.constant !== undefined ? { constant: input.constant } : {}),
-				});
-				if (entry) void restHost.softRefreshConfig();
-				return entry;
-			}
-			const card = loadCardFile(isAbsolute(config.card) ? config.card : join(cwd, config.card));
-			return appendOverlayEntry(overlayPathFor(cwd, card.name, config.card), input);
-		},
-		update: (fingerprint, patch) => {
-			const r = patchLoreEntryAnywhere(cwd, loadConfig(cwd), fingerprint, {
-				...(patch.title !== undefined ? { comment: patch.title } : {}),
-				...(patch.keys !== undefined ? { keys: patch.keys } : {}),
-				...(patch.content !== undefined ? { content: patch.content } : {}),
-				...(patch.constant !== undefined ? { constant: patch.constant } : {}),
-			});
-			if (r) void restHost.softRefreshConfig();
-			return r;
-		},
-		remove: (fingerprint) => {
-			const r = deleteLoreEntryAnywhere(cwd, loadConfig(cwd), fingerprint);
-			if (r) void restHost.softRefreshConfig();
-			return r;
-		},
 		listMarked: () => loadMergedLoreMarked(cwd, loadConfig(cwd)),
 		listBooks: () => lorebookShelf(cwd, loadConfig(cwd)),
-		createBook: (name, first) => {
-			const r = createLorebookWithEntry(cwd, loadConfig(cwd), name, {
-				comment: first.title,
-				keys: first.keys,
-				content: first.content,
-				...(first.constant !== undefined ? { constant: first.constant } : {}),
-			});
-			if (r) void restHost.softRefreshConfig();
-			return r;
-		},
 		mountBook: (path, mounted) => {
 			const next = setLorebookMounted(cwd, loadConfig(cwd), path, mounted);
 			void restHost.softRefreshConfig();
 			return next;
 		},
 	},
-	// card_update 工具（M-D7）：改用户的卡文件。PNG 卡改 tEXt 内嵌 JSON，立绘像素不动。
-	// 卡字段进 system prompt，写完必须重装——与 setDisabledLore 同一条理由归宿主。
-	updateCard: (patch) => {
-		updateCardFields(currentCardPath(cwd, loadConfig(cwd)), patch);
-		void restHost.softRefreshConfig();
-	},
-	// 卡工程宿主件（card_project / card_create / card_update）：工作模式退场后由 agent 模式与副编剧面消费
+	// 卡工程宿主件（card_project / card_create）：由 agent 模式消费
 	authoring: {
 		project: async (args) => {
 			const config = loadConfig(cwd);
@@ -2951,7 +2843,6 @@ stage = new StageEngine({
 			if (args.action === "preview") return restHost.runCardPreview(args);
 			return cardProjectOperation(cwd, path, args);
 		},
-		updateCard: (patch) => updateCardFields(currentCardPath(cwd, loadConfig(cwd)), patch),
 		createCard: (input) => {
 			const created = createCardFile(cwd, input);
 			return created ? { name: created.name, path: created.abs } : null;
@@ -3094,106 +2985,6 @@ const hostCompact = async (): Promise<void> => {
 };
 
 /** 发送用户输入（含斜杠命令；命令后全量对齐所有端） */
-/**
- * 副编剧入口（PLAN-COMPANION-BOT）：/bot <话> | /bot clear | /bot persona [list|<id> [card|global]]。
- * 引擎侧＝stage.botTurn（独立线程、与台前串行）；CLI 与 Web WS 共用同一条执行与广播链路。
- */
-const handleBotPrompt = async (text: string, compact = false) => {
-	const say = (level: "info" | "warning" | "error", message: string) => {
-		cli?.out(`[${level}] ${message}`);
-		broadcast({ type: "notify", level, text: message });
-	};
-	if (stage.mode === "agent") {
-		say("warning", t("副编剧只服务扮演会话"));
-		return;
-	}
-	if (!text && !compact) {
-		say("info", t("用法：/bot <话>——幕后副编剧：问剧情、点评、改设定，独立线程不进剧情历史"));
-		return;
-	}
-	if (/^clear$/i.test(text)) {
-		await manageBot({ action: "new" });
-		say("info", t("已清空副编剧对话记录"));
-		return;
-	}
-	const command = /^(sessions|new|open|rename|delete|model|compact|stop)(?:\s+([\s\S]*))?$/.exec(text);
-	if (command) {
-		const name = command[1], arg = command[2]?.trim() ?? "";
-		let request: BotSessionAction;
-		if (name === "model") {
-			const [provider, entry, thinking] = arg.split(/\s+/);
-			request = { action: "model", model: !arg || arg === "follow" ? null : { provider, entry, ...(thinking ? { thinking } : {}) } };
-		} else if (name === "open" || name === "delete") request = { action: name, id: arg };
-		else if (name === "rename" || name === "new") request = { action: name, name: arg };
-		else request = { action: name === "sessions" ? "list" : name as "compact" | "stop" };
-		const snapshot = await manageBot(request);
-		cli?.out(`[bot session] ${JSON.stringify(snapshot)}`);
-		return;
-	}
-	const personaMatch = /^persona(?:\s+(\S+)(?:\s+(card|global))?)?$/i.exec(text);
-	if (personaMatch) {
-		const arg = (personaMatch[1] ?? "list").toLowerCase();
-		const targetScope = (personaMatch[2] ?? "global").toLowerCase();
-		if (arg === "list") {
-			const listText = BOT_PERSONA_PRESETS.map((p) => `- ${p.id}（${p.name}）：${p.tagline}`).join("\n");
-			cli?.out(`[bot persona]\n${listText}`); // i18n-ignore：CLI 终端输出
-			return;
-		}
-		const preset = BOT_PERSONA_PRESETS.find((p) => p.id === arg);
-		if (!preset) {
-			cli?.out(`[warning] 未知副编剧人设模板：${arg}（可选：${BOT_PERSONA_PRESETS.map((p) => p.id).join(" / ")}）`); // i18n-ignore：CLI 终端输出
-			return;
-		}
-		const curChatDir = chatDirOfSessionDir(session.sessionManager.getSessionDir());
-		const curCardDir = curChatDir ? cardDirOfChatDir(curChatDir) : resolveCardSpace(cwd, cardPath)?.dir;
-		const targetPath = targetScope === "card" && curCardDir ? join(curCardDir, BOT_PERSONA_FILE) : botRulesPath();
-		mkdirSync(dirname(targetPath), { recursive: true });
-		writeFileSync(targetPath, preset.content, "utf8");
-		cli?.out(`[bot persona] 已切换为「${preset.name}」（${targetPath}）`); // i18n-ignore：CLI 终端输出
-		return;
-	}
-	if (storyStreaming() || botStreamingFlag) {
-		say("warning", t("请等当前回复完成（或先停止），再{what}", { what: t("唤副编剧") }));
-		return;
-	}
-	const userTs = Date.now();
-	botStreamingFlag = true;
-	if (!compact) broadcast({ type: "bot_message", message: { role: "user", text, ts: userTs } });
-	broadcast({ type: "bot_state", state: "start" });
-	cli?.out("[副编剧]"); // i18n-ignore：终端日志
-	try {
-		const r = await stage.botTurn(compact ? "/compact" : text, {
-			compact,
-			onDelta: (kind, delta) => {
-				cli?.stream(kind, delta);
-				broadcast({ type: "bot_delta", kind, delta });
-			},
-			onActivity: (d) => cli?.out(`[activity] ${d}`),
-			onToolCall: (rec) => {
-				broadcast({
-					type: "bot_activity",
-					activity: {
-						kind: "tool_end",
-						name: rec.name,
-						...(rec.detail ? { detail: rec.detail } : {}),
-						...(rec.isError ? { isError: true } : {}),
-					},
-				});
-			},
-		});
-		cli?.out("");
-		if ("error" in r) {
-			cli?.out(`[error] ${r.error}`); // i18n-ignore：终端日志
-			broadcast({ type: "notify", level: "error", text: t("副编剧没有完成这一轮") });
-		} else if (compact) cli?.out(r.text);
-	} finally {
-		botStreamingFlag = false;
-		broadcast({ type: "bot_session", snapshot: botStore().snapshot() });
-		broadcast({ type: "bot_state", state: "end" });
-		cli?.out("[end] mode=bot"); // i18n-ignore：终端日志（与台上 [end] mode=… 同一约定，驱动器据此续跑）
-	}
-};
-
 const handlePrompt = async (text: string) => {
 	const trimmed = text.trim();
 	// 导演备注（PLAN-DIRECTOR-NOTE）：戏外当拍指示的武装/清除。不落树、不进历史——
@@ -3213,14 +3004,6 @@ const handlePrompt = async (text: string) => {
 		});
 		return;
 	}
-	// 副编剧（PLAN-COMPANION-BOT 刀 1）：第二个线程——独立存储、不进正史、主 agent 不知道它存在。
-	// 每句落进持久线程；输入口默认仍属台前。界面（抽屉）在下一刀，当前只接命令行。
-	const botMatch = /^\/bot(?:[ \t]+([\s\S]*))?$/i.exec(trimmed);
-	if (botMatch) {
-		await handleBotPrompt((botMatch[1] ?? "").trim());
-		return;
-	}
-	if (botStreamingFlag) throw new Error(t("请先停止生成，再管理副编剧会话"));
 	// CLI / 宿主命令：/project（列出项目、新建项目、切换项目）与 /session（同项目新建会话、列出会话、切换会话）与 /assets（项目级 .md 资产）
 	const projectMatch = /^\/project(?:[ \t]+([\s\S]*))?$/i.exec(trimmed);
 	if (projectMatch) {
@@ -3839,7 +3622,6 @@ wss.on("connection", (ws, req) => {
 				return;
 			}
 			try {
-				if (botStreamingFlag && !["bot_manage", "abort", "choice_reply", "ping", "sessions", "draft_history"].includes(frame.type)) throw new Error(t("请先停止生成，再管理副编剧会话"));
 					switch (frame.type) {
 						case "draft_history": {
 							const draft = stage.getWorkspaces().find((d) => d.id === frame.id);
@@ -3859,20 +3641,6 @@ wss.on("connection", (ws, req) => {
 					case "prompt": {
 						const text = String(frame.text ?? "").trim();
 						if (text) await handlePrompt(text);
-						break;
-					}
-					case "bot_prompt": {
-						const text = String(frame.text ?? "").trim();
-						if (text) await handleBotPrompt(text);
-						break;
-					}
-					case "bot_clear": {
-						await manageBot({ action: "new" });
-						broadcast({ type: "notify", level: "info", text: t("已清空副编剧对话记录") });
-						break;
-					}
-					case "bot_manage": {
-						await manageBot(frame.request);
 						break;
 					}
 					case "abort": {

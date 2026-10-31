@@ -497,7 +497,7 @@ export function findSchemaDefaults(scripts: Array<{ content?: string }>): MvuTre
 }
 
 /** 一次 MVU 记账的结果 */
-export interface MvuPatchResult {
+interface MvuPatchResult {
 	tree: MvuTree;
 	/** 人类可读的变更摘要（过程条/日志用） */
 	applied: string[];

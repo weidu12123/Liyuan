@@ -33,11 +33,11 @@ test("工具清单：注入世界书写侧依赖后，写侧/列举/启停才上
 	// 正式退役——台上现在是 agent，写侧受门禁与依赖注入双重约束，而非一律不给。
 	const full = stageTools(
 		"中文",
-		makeDeps({ writeLore: () => null, listLore: () => [], fingerprint: (c) => c, toggleLore: () => 0 }),
+		makeDeps({ listLore: () => [], fingerprint: (c) => c, toggleLore: () => 0 }),
 	);
 	assert.deepEqual(
 		full.map((t) => t.name).sort(),
-		["lorebook_list", "lorebook_read", "lorebook_search", "lorebook_toggle", "lorebook_write", "memory_search", "world_state_get"],
+		["lorebook_list", "lorebook_read", "lorebook_search", "lorebook_toggle", "memory_search", "world_state_get"],
 	);
 });
 

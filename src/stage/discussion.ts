@@ -15,7 +15,7 @@ export const DISCUSSION_SUMMARY_TYPE = "liyuan-discussion-summary";
  */
 export const MANUAL_MIN_DISCUSSION_TOKENS = 2000;
 
-export interface DiscussionSummaryData {
+interface DiscussionSummaryData {
 	summary: string;
 	/** 从这条起的条目照常回放（与 pi compaction 同名同义） */
 	firstKeptEntryId: string;
@@ -27,7 +27,7 @@ export interface DiscussionSummaryData {
 }
 
 /** 与 pi estimateTokens 同一把尺：字符数 / 4 */
-export function estimateMessageTokens(m: ContextMessage): number {
+function estimateMessageTokens(m: ContextMessage): number {
 	let chars = 0;
 	if (m.role === "assistant" && Array.isArray(m.content)) {
 		for (const b of m.content as Array<{ type?: string; text?: string; thinking?: string; name?: string; arguments?: unknown }>) {
@@ -98,7 +98,7 @@ const latestSummary = (branch: ConversationEntry[]): { at: number; data: Discuss
 };
 
 /** 摘要之后仍活着的条目（无摘要＝整条分支） */
-export function liveDiscussion<T extends ConversationEntry>(branch: T[]): { live: T[]; summary?: string } {
+function liveDiscussion<T extends ConversationEntry>(branch: T[]): { live: T[]; summary?: string } {
 	const s = latestSummary(branch);
 	if (!s) return { live: branch };
 	const kept = branch.findIndex((e) => e.id === s.data.firstKeptEntryId);
@@ -113,7 +113,7 @@ export function agentHistory(branch: ConversationEntry[]): ContextMessage[] {
 	return messages;
 }
 
-export interface DiscussionCompactPlan {
+interface DiscussionCompactPlan {
 	firstKeptEntryId: string;
 	/** 待摘要的讨论（已序列化） */
 	conversationText: string;
@@ -125,7 +125,7 @@ export interface DiscussionCompactPlan {
 	turns: number;
 }
 
-export interface DiscussionCompactOptions {
+interface DiscussionCompactOptions {
 	contextWindow: number;
 	reserveTokens?: number;
 	keepRecentTokens?: number;

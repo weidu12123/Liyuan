@@ -47,7 +47,7 @@ Liyuan is an RP Agent built on pi, designed to bring coding agent capabilities i
 
 ### 2. 高度自定义
 - **提示词分层自定义**：开放 `SYSTEM.md`（引擎底层协议）与 `AGENTS.md`（角色世界法则），支持完全透明的文件化编辑与条目级开关。
-- **角色卡协同制作平台**：内置角色卡工坊与工作模式，支持用户与 Agent 在沙箱内协同编写、修改与测试卡片资源与前端脚本。
+- **角色卡协同制作平台**：内置角色卡工坊，支持用户与 Agent 在沙箱内协同编写、修改与测试卡片资源与前端脚本。
 
 ![4:6 双轨角色卡工坊](docs/images/card-studio.png)
 

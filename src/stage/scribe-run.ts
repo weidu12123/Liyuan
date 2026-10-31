@@ -31,7 +31,7 @@ export interface ScribeRunDeps {
 	onActivity?: (detail: string) => void;
 }
 
-export interface ScribeRunInput {
+interface ScribeRunInput {
 	/** 本拍开演前的账本（= f(分支)） */
 	state: WorldState;
 	userText: string;
@@ -46,7 +46,7 @@ export interface ScribeRunInput {
 	mvuRules?: string;
 }
 
-export type ScribeRunOutcome =
+type ScribeRunOutcome =
 	| { kind: "skipped"; reason: string }
 	| { kind: "stale" }
 	| { kind: "failed"; error: string }

@@ -8,7 +8,7 @@ import { commitWorkspace, finalTimeline, runWriteTool, type TurnWorkspace, type 
 const textOf = (content: unknown): string => typeof content === "string" ? content : Array.isArray(content)
 	? content.filter((c) => c?.type === "text").map((c) => c.text ?? "").join("") : "";
 
-export interface PreviousReply {
+interface PreviousReply {
 	entryId: string;
 	text: string;
 	version: number;

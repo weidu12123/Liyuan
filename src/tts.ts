@@ -7,7 +7,7 @@
  * 可选：LIYUAN_TTS_MODEL（默认 tts-1）、LIYUAN_TTS_VOICE（默认 alloy）
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -92,7 +92,3 @@ export function importLocalAudio(cwd: string, absPath: string, ext: string): { f
 	return saveAudioBuffer(cwd, buffer, ext);
 }
 
-/** 无内容时的占位名（测试用） */
-export function randomAudioName(ext = ".mp3"): string {
-	return `${randomBytes(8).toString("hex")}${ext}`;
-}

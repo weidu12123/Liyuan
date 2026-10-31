@@ -20,8 +20,7 @@
  * - 目录名的唯一主人仍是 `src/paths.ts`。
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { loadCardFile } from "./card.ts";
@@ -48,7 +47,7 @@ import {
 import { readSessionCardInfo } from "./session-scan.ts";
 
 /** 一张卡：从哪搬到哪个文件夹 */
-export interface CardMove {
+interface CardMove {
 	/** 卡本体现在的绝对路径 */
 	from: string;
 	/** 目标文件夹名（cards/ 下一级） */
@@ -60,7 +59,7 @@ export interface CardMove {
 }
 
 /** 一个旧会话 → 一个子项目 */
-export interface SessionMove {
+interface SessionMove {
 	/** 会话 jsonl 绝对路径 */
 	file: string;
 	/** 落到哪张卡的文件夹 */
@@ -75,7 +74,7 @@ export interface SessionMove {
 	newRef: string;
 }
 
-export interface CardMigrationPlan {
+interface CardMigrationPlan {
 	cards: CardMove[];
 	sessions: SessionMove[];
 	/** 认不出卡、原地不动的会话 */
@@ -102,7 +101,7 @@ export function sessionIdFromFile(fileName: string): string {
  * 升格/一次性迁移只**拷进**卡空间，源文件留着——Docker 把 `assets/cards` 挂成卷，
  * 搬走＝CI 断言与下次播种都落空；卡库会同时列出暂存和空间，拷完靠 basename 去重。
  */
-export function isProductSeedCard(fileName: string): boolean {
+function isProductSeedCard(fileName: string): boolean {
 	return /^default_/i.test(basename(fileName));
 }
 

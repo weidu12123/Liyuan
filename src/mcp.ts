@@ -10,7 +10,7 @@
  * 领域层：不 import runtime/pi（PLAN.md D3）。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,7 @@ import { Type, type TSchema } from "typebox";
 
 export { MCP_CONFIG_FILE } from "./paths.ts";
 import { MCP_CONFIG_FILE } from "./paths.ts";
-export const MCP_USER_CONFIG_FILE = "mcp.json"; // ~/.liyuan/mcp.json
+const MCP_USER_CONFIG_FILE = "mcp.json"; // ~/.liyuan/mcp.json
 export const RP_MCP_TYPE = "rp-mcp"; // 会话树：本对话启用的服务器 id 列表
 
 export type McpTransport = "stdio" | "http" | "sse";
@@ -46,7 +46,7 @@ export interface McpServerConfig {
 	headers?: Record<string, string>;
 }
 
-export interface McpCatalogEntry extends McpServerConfig {
+interface McpCatalogEntry extends McpServerConfig {
 	/** 最高优先级来源（决定当前 endpoint） */
 	source: McpSource;
 	/** 所有出现过来源 */
@@ -57,7 +57,7 @@ export interface McpCatalogEntry extends McpServerConfig {
 	builtin?: boolean;
 }
 
-export interface McpConfigFile {
+interface McpConfigFile {
 	format: "liyuan-mcp";
 	version: 2;
 	/** 项目内手写/覆盖的服务器（可改 endpoint） */
@@ -78,7 +78,7 @@ export interface McpToolDescriptor {
 	inputSchema: Record<string, unknown>;
 }
 
-export type McpConnStatus = "disconnected" | "connecting" | "connected" | "error";
+type McpConnStatus = "disconnected" | "connecting" | "connected" | "error";
 
 export interface McpServerStatus {
 	id: string;
@@ -101,11 +101,11 @@ export interface McpServerStatus {
 
 // ---------- 路径 ----------
 
-export function mcpConfigPath(cwd: string): string {
+function mcpConfigPath(cwd: string): string {
 	return join(cwd, MCP_CONFIG_FILE);
 }
 
-export function userMcpConfigPath(): string {
+function userMcpConfigPath(): string {
 	return join(homedir(), ".liyuan", MCP_USER_CONFIG_FILE);
 }
 
@@ -130,7 +130,7 @@ export function saveMcpConfig(cwd: string, config: McpConfigFile): void {
 	writeFileSync(mcpConfigPath(cwd), `${JSON.stringify(normalized, null, "\t")}\n`, "utf8");
 }
 
-export function loadUserMcpConfig(): McpConfigFile {
+function loadUserMcpConfig(): McpConfigFile {
 	const p = userMcpConfigPath();
 	if (!existsSync(p)) return emptyMcpConfig();
 	try {
@@ -138,12 +138,6 @@ export function loadUserMcpConfig(): McpConfigFile {
 	} catch {
 		return emptyMcpConfig();
 	}
-}
-
-export function saveUserMcpConfig(config: McpConfigFile): void {
-	const dir = join(homedir(), ".liyuan");
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(userMcpConfigPath(), `${JSON.stringify(normalizeMcpConfig(config), null, "\t")}\n`, "utf8");
 }
 
 export function normalizeMcpConfig(raw: Partial<McpConfigFile> | null | undefined): McpConfigFile {
@@ -248,7 +242,7 @@ export function serverSummary(s: Pick<McpServerConfig, "transport" | "command" |
 }
 
 /** 合并后的默认启用表：用户级 ← 项目级（项目覆盖） */
-export function loadDefaultEnabledMap(cwd: string): Record<string, boolean> {
+function loadDefaultEnabledMap(cwd: string): Record<string, boolean> {
 	const user = loadUserMcpConfig().defaults ?? {};
 	const project = loadMcpConfig(cwd).defaults ?? {};
 	return { ...user, ...project };
@@ -504,7 +498,7 @@ export function discoverMcpCatalog(cwd: string): McpCatalogEntry[] {
 }
 
 /** 解析本会话应连接的服务器配置（仅 sessionEnabled 中的 id） */
-export function resolveSessionServers(cwd: string, sessionEnabled: string[]): McpServerConfig[] {
+function resolveSessionServers(cwd: string, sessionEnabled: string[]): McpServerConfig[] {
 	const catalog = discoverMcpCatalog(cwd);
 	const want = new Set(sessionEnabled.map(sanitizeServerId).filter(Boolean));
 	return catalog
@@ -558,7 +552,7 @@ export function parametersFromMcpSchema(inputSchema: unknown): TSchema {
 
 // ---------- 探测 ----------
 
-export interface McpProbeResult {
+interface McpProbeResult {
 	ok: boolean;
 	error?: string;
 	tools: Array<{ name: string; description: string }>;

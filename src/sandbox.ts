@@ -28,7 +28,7 @@ export const NATIVE_TOOL_ACCESS = {
 	write: "write",
 	bash: "bash",
 } as const;
-export type NativeToolName = keyof typeof NATIVE_TOOL_ACCESS;
+type NativeToolName = keyof typeof NATIVE_TOOL_ACCESS;
 
 /** 会话树自定义条目：本会话授权（`{ dir }` 或 `{ bash: true }`），沿当前分支重放 */
 export const SANDBOX_GRANT_TYPE = "liyuan-sandbox";
@@ -37,7 +37,7 @@ const TOOL_VERB: Record<NativeToolName, string> = {
 	read: "读取", grep: "搜索", find: "查找", ls: "列出", edit: "修改", write: "写入", bash: "执行命令",
 };
 
-export interface SandboxScope {
+interface SandboxScope {
 	cwd: string;
 	/** 卡在 `cards/` 里时的卡目录；不在卡库里的卡为 undefined ⇒ 没有 `卡.json` 可落永久授权 */
 	cardDir?: string;
@@ -60,7 +60,7 @@ export interface SandboxGrants {
 
 export type SandboxGrant = { dir: string } | { bashPrefix: string };
 
-export type SandboxVerdict =
+type SandboxVerdict =
 	| { kind: "allow" }
 	| { kind: "ask"; tool: NativeToolName; target: string; unit: string }
 	| { kind: "ask-bash"; command: string }
@@ -107,7 +107,7 @@ const isDir = (p: string): boolean => {
 };
 
 /** 路径类工具的目标（grep/find/ls 不带 path ＝ 工作目录）；bash 与非原生工具无目标 */
-export function sandboxTarget(tool: string, input: Record<string, unknown>, cwd: string): string | undefined {
+function sandboxTarget(tool: string, input: Record<string, unknown>, cwd: string): string | undefined {
 	const access = NATIVE_TOOL_ACCESS[tool as NativeToolName];
 	if (!access || access === "bash") return undefined;
 	const raw = typeof input.path === "string" && input.path.trim() ? input.path.trim() : ".";
@@ -162,7 +162,7 @@ export function sandboxScope(
  * 目标路径是否落在同一张卡下的其他独立子项目中（或者试图探测整个对话库根）。
  * 一张卡下每个子项目是独立的叙事/正文工程，绝对禁止跨项目访问（读写/列出均禁止）。
  */
-export function isOtherChatPath(cardDir: string | undefined, currentChatDir: string | undefined, target: string): boolean {
+function isOtherChatPath(cardDir: string | undefined, currentChatDir: string | undefined, target: string): boolean {
 	if (!cardDir || !currentChatDir) return false;
 	const cardRoot = realExisting(cardDir);
 	const currentRoot = realExisting(currentChatDir);
@@ -190,7 +190,7 @@ export function harnessManagedPath(cardDir: string | undefined, target: string):
 }
 
 /** 命令的免问前缀：默认取首词（`git status` 这种多词前缀由用户在 卡.json 里自己改窄） */
-export function commandPrefix(command: string): string {
+function commandPrefix(command: string): string {
 	const first = command.split(/[;&|\n\r]+/).map((s) => normalizeCommand(s)).find(Boolean) ?? "";
 	return first.split(" ")[0] ?? "";
 }
@@ -199,7 +199,7 @@ export function commandPrefix(command: string): string {
  * 免问判定：命令按段切、逐段归一化，**每一段**都要命中某个前缀。
  * 逐段（而不是整串前缀）是为了不让 `cd x && 任意命令` 被 `cd` 一把带走。
  */
-export function allowedByPrefix(command: string, prefixes: string[]): boolean {
+function allowedByPrefix(command: string, prefixes: string[]): boolean {
 	if (prefixes.length === 0) return false;
 	const segments = command.split(/[;&|\n\r]+/).map((s) => normalizeCommand(s)).filter(Boolean);
 	if (segments.length === 0) return false;
@@ -320,7 +320,7 @@ export function describeAsk(v: Exclude<SandboxVerdict, { kind: "allow" } | { kin
 	};
 }
 
-export interface SandboxGateDeps {
+interface SandboxGateDeps {
 	cwd: string;
 	config: { card: string; lorebook?: string; lorebooks?: string[] };
 	chatDir?: string;

@@ -16,16 +16,16 @@ import {
 	type MemoryStoreConfig,
 } from "./types.ts";
 
-export function memoryRoot(cwd: string): string {
+function memoryRoot(cwd: string): string {
 	return join(cwd, DIRS.memory);
 }
 
-export function memoryConfigPath(cwd: string): string {
+function memoryConfigPath(cwd: string): string {
 	return join(memoryRoot(cwd), "config.json");
 }
 
 /** 归一化角色卡路径，保证同一卡不同写法落到同一 hash */
-export function normalizeMemoryCardKey(card?: string): string {
+function normalizeMemoryCardKey(card?: string): string {
 	return (card || "").replace(/\\/g, "/").trim().toLowerCase();
 }
 
@@ -89,7 +89,7 @@ function normalizeCloud(raw: unknown): MemoryCloudEmbed {
 	};
 }
 
-export function normalizeMemoryConfig(raw: unknown): MemoryConfig {
+function normalizeMemoryConfig(raw: unknown): MemoryConfig {
 	const base = DEFAULT_MEMORY_CONFIG;
 	if (!raw || typeof raw !== "object") return structuredClone(base);
 	const o = raw as Record<string, unknown>;

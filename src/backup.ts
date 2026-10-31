@@ -80,7 +80,7 @@ const DOT_LIYUAN_DATA_FILES = [
 	"settings.json",
 ];
 
-export interface BackupManifest {
+interface BackupManifest {
 	format: "liyuan-backup";
 	version: 1;
 	appVersion: string;

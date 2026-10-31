@@ -13,7 +13,7 @@ import { worldlineTools, type WorldlineDeps } from "../worldline.ts";
 import { panelTools, type PanelDeps } from "../panels.ts";
 
 /** @liyuan/ai Tool 的结构子集（与 src/stage/tools.ts 的 StageTool 同形） */
-export interface StageToolShape {
+interface StageToolShape {
 	name: string;
 	description: string;
 	parameters: Record<string, unknown>;
@@ -35,13 +35,9 @@ const ctxFor = (language: string): ToolContext => ({ surface: "stage", language 
  */
 function availableSpecs(deps: UnifiedStageDeps): ToolSpec<UnifiedStageDeps>[] {
 	return STAGE_SPECS.filter((s) => {
-		if (s.name === "lorebook_write") return typeof deps.writeLore === "function";
-		if (s.name === "lorebook_update") return typeof deps.updateLore === "function";
-		if (s.name === "lorebook_delete") return typeof deps.deleteLore === "function";
 		if (s.name === "lorebook_list" || s.name === "lorebook_read") return typeof deps.listLore === "function" && typeof deps.fingerprint === "function";
 		if (s.name === "lorebook_toggle") return typeof deps.toggleLore === "function";
 		if (s.name === "lorebook_files") return typeof deps.listBooks === "function";
-		if (s.name === "lorebook_create") return typeof deps.createBook === "function";
 		if (s.name === "lorebook_mount") return typeof deps.mountBook === "function";
 		if (s.name === "memory_add") return typeof deps.addMemory === "function";
 		if (s.name === "memory_list") return typeof deps.listMemory === "function";
@@ -49,7 +45,6 @@ function availableSpecs(deps: UnifiedStageDeps): ToolSpec<UnifiedStageDeps>[] {
 		if (s.name === "memory_update") return typeof deps.updateMemory === "function";
 		if (s.name === "memory_delete") return typeof deps.deleteMemory === "function";
 		if (s.name === "card_read") return typeof deps.readCard === "function";
-		if (s.name === "card_update") return typeof deps.updateCard === "function";
 		if (s.name === "worldline_list") return typeof deps.loadWorldline === "function";
 		if (s.name === "worldline_store") return typeof deps.storeSave === "function";
 		if (s.name === "panel_write") return typeof deps.writePanel === "function";

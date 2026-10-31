@@ -176,8 +176,6 @@ export interface RpConfig {
 	sandboxAllow?: string[];
 	/** 工作模式沙箱：本卡永久免问的 bash 命令前缀（归一化形态；默认首词，可在 卡.json 里改窄成 `git status`） */
 	sandboxBashAllow?: string[];
-	/** 副编剧视野拍数：0 或省略＝跟随主模型视角（全部未压缩拍）；正整数＝仅看最近 N 拍 */
-	botViewBeats?: number;
 }
 
 export const DEFAULT_CONFIG: RpConfig = {

@@ -4,9 +4,9 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { memoryRoot, memoryScopeRoot } from "./config.ts";
+import { memoryScopeRoot } from "./config.ts";
 import { cosine, type EmbedContext, embedMany, embedOne } from "./embed.ts";
 import type {
 	MemoryChunk,
@@ -25,7 +25,7 @@ function chunksPath(cwd: string, scope: MemoryScope, storeId: string): string {
 	return join(storeDir(cwd, scope, storeId), "chunks.jsonl");
 }
 
-export function ensureStoreDir(cwd: string, scope: MemoryScope, storeId: string): void {
+function ensureStoreDir(cwd: string, scope: MemoryScope, storeId: string): void {
 	const d = storeDir(cwd, scope, storeId);
 	if (!existsSync(d)) mkdirSync(d, { recursive: true });
 }
@@ -336,19 +336,3 @@ export async function searchStore(
 	return scored;
 }
 
-export function listStoreIdsOnDisk(cwd: string, scope: MemoryScope): string[] {
-	const root = join(memoryScopeRoot(cwd, scope), "stores");
-	if (!existsSync(root)) return [];
-	return readdirSync(root, { withFileTypes: true })
-		.filter((d) => d.isDirectory())
-		.map((d) => d.name);
-}
-
-/** 列出磁盘上所有 scope 目录名（调试/清理用） */
-export function listScopeIdsOnDisk(cwd: string): string[] {
-	const root = join(memoryRoot(cwd), "scopes");
-	if (!existsSync(root)) return [];
-	return readdirSync(root, { withFileTypes: true })
-		.filter((d) => d.isDirectory())
-		.map((d) => d.name);
-}

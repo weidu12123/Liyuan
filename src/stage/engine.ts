@@ -18,37 +18,21 @@ import { projectToolContext } from "./context.ts";
 import { authoringHistory, authoringRequestIds, contextText, conversationMode, CONVERSATION_PROCESS_TYPE, type ConversationMode, type ContextMessage } from "../conversation-mode.ts";
 import { authoringTools, runAuthoringTool, AUTHORING_NATIVE_TOOLS } from "./authoring.ts";
 import { AGENT_ASK_TOOL, AGENT_SCREENSHOT_TOOL, agentSystemPrompt, buildAgentStateBlock } from "./agent.ts";
-import {
-	beatsOf,
-	botThreadPath,
-	botTools,
-	buildBotCardBrief,
-	buildBotSystemPrompt,
-	readBotPersona,
-	runBotTool,
-	type BotNativeTool,
-	type BotToolCallRecord,
-} from "./bot.ts";
-import type { BotSessionRun } from "./bot-session-types.ts";
-import { rulesAgentDir, readUserRules } from "../user-rules.ts";
+import { readUserRules } from "../user-rules.ts";
 import { describeChange, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, storyDirectory, type ChangeSet } from "./story-history.ts";
 import { agentHistory, buildDiscussionSummaryPrompt, discussionTokens, DISCUSSION_SUMMARY_TYPE, livePromptTokens, MANUAL_MIN_DISCUSSION_TOKENS, planDiscussionCompaction, promptTokensOfMessages } from "./discussion.ts";
 import { readFileSync } from "node:fs";
-import { createSandboxGate, NATIVE_TOOL_ACCESS, sandboxGrantsFromBranch, SANDBOX_GRANT_TYPE } from "../sandbox.ts";
+import { createSandboxGate, sandboxGrantsFromBranch, SANDBOX_GRANT_TYPE } from "../sandbox.ts";
 import { fileChangeOf } from "../activity-format.ts";
 import type { CardDeps } from "../tools/card.ts";
-import type { GateInput } from "../tools/gate.ts";
 import { extractDraftRules } from "../draft.ts";
 import {
-	appendOverlayEntry,
 	loreFingerprint,
-	overlayPathFor,
 	scanEntries,
 	searchEntries,
 } from "../lorebook.ts";
 import { formatPanelIndex, formatPanelSnapshot, loadPanels } from "../panels.ts";
 import { cardDirOfChatDir, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, readChatMemoryIndex, readChatSummary, writeChatSummary } from "../cardspace.ts";
-import { fitResidentSummary, loadResidentSummary } from "../card-memory.ts";
 import { changeCardMemory, changeChatMemory, listCardMemory, listChatMemory, readCardMemory, readChatMemory, searchCardMemory, searchChatMemory, writeChatMemoryDoc } from "../card-memory-tools.ts";
 import { classifyTag, scanTaggedBlocks } from "../postprocess.ts";
 import { formatRosterIndex, formatState, saveState } from "../state.ts";
@@ -109,7 +93,6 @@ import {
 import type { MemoryChunkLike, MemoryDocument, MemorySearchResult } from "../tools/memory.ts";
 import type { WorldlineViewLite } from "../tools/worldline.ts";
 import { defaultSaveName } from "../worldline.ts";
-import { extractDraftBody } from "../draft.ts";
 import {
 	createWorkspace,
 	commitWorkspace,
@@ -125,7 +108,7 @@ import {
 
 // ---------------- 依赖面（结构类型，不引 @liyuan/agent-runtime） ----------------
 
-export interface StageSessionManager {
+interface StageSessionManager {
 	getBranch(): unknown[];
 	getLeafId(): string | null;
 	appendMessage(message: unknown): string;
@@ -177,7 +160,7 @@ export interface StageStreamEvent {
 	error?: AssistantMsgLike;
 }
 
-export interface StageTurnEndInfo {
+interface StageTurnEndInfo {
 	/** Controls derived story writes; an authoring turn stays authoring even after switching back. */
 	mode?: ConversationMode;
 	aborted: boolean;
@@ -191,7 +174,7 @@ export interface StageTurnEndInfo {
 	checkpoint?: { id: string; changed: ChangeSet; added: Array<{ name: string; text: string }> };
 }
 
-export interface StageEvents {
+interface StageEvents {
 	onTurnStart?: () => void;
 	/** 流式增量（转 WS delta 帧；kind 对应正文/思考通道） */
 	/**
@@ -234,7 +217,7 @@ export interface StageEvents {
  * （`reasoning:"off"` 在 openai-completions 上会被化成「什么都不发」，端点按自己的默认开思考，
  * 见 openai-completions.ts:511 与 :698-702）。
  */
-export interface SideTextStat {
+interface SideTextStat {
 	/** 哪一路旁路 */
 	kind: "scribe" | "compact";
 	/** provider/id */
@@ -250,7 +233,7 @@ export interface SideTextStat {
 }
 
 /** 旁路回执的人话（活动条与服务端日志共用一份措辞） */
-export function sideStatLine(s: SideTextStat): string {
+function sideStatLine(s: SideTextStat): string {
 	const who = s.entry && s.entry !== s.model ? `${s.entry}（${s.model}）` : s.model;
 	return `${s.kind === "scribe" ? "记账" : "压缩"}旁路 ${who}｜${
 		s.thinking ? `档 ${s.thinking}` : "未发思考档"
@@ -258,33 +241,17 @@ export function sideStatLine(s: SideTextStat): string {
 }
 
 /** 由 pi 会话独占消息持久化与内存历史。 */
-export interface StageAgentSession {
+interface StageAgentSession {
 	sessionManager: StageSessionManager;
 	prompt(text: string, options: { expandPromptTemplates: false; reuseUserMessage: boolean }): Promise<void>;
 	abort(): Promise<void>;
 	appendMessage(message: unknown): string;
 	getAllTools(): Array<{ name: string; description?: string; parameters?: unknown }>;
-	/**
-	 * pi 的注册工具定义（副编剧面的原生工具取它的描述/schema 并借它执行）。
-	 * 台前的原生工具由 pi 自己执行、梨园只上门禁，从不走这里——**这是副编剧专用的一条执行口**
-	 * （docs/PLAN-COMPANION-BOT §4.2 刀 2 前置：自建小循环拿不到 pi 的循环，就拿 pi 的工具）。
-	 * 未注册的名字返回 undefined。
-	 */
-	getToolDefinition?(name: string): {
-		description?: string;
-		parameters?: unknown;
-		execute(toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal, onUpdate?: unknown, ctx?: unknown): Promise<{
-			content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-			details?: unknown;
-			isError?: boolean;
-		}>;
-	} | undefined;
 	setActiveToolsByName(names: string[]): void;
 	setTurnSystemPrompt(prompt: string): void;
 }
 
 export interface StageEngineDeps {
-	runBotSession?: (options: BotSessionRun) => Promise<{ text: string; tools?: BotToolCallRecord[] } | { error: string }>;
 	cwd: string;
 	getSession: () => StageAgentSession;
 	getModel: () => StageModelLike | undefined;
@@ -354,45 +321,16 @@ export interface StageEngineDeps {
 	 */
 	setDisabledLore?: (fingerprints: string[], enabled: boolean) => number;
 	/**
-	 * 世界书写侧宿主件（M-D7）：改/删条目、列书单、建书、挂载，以及带来源标记的列举。
+	 * 世界书宿主件：列书单、挂载，以及带来源标记的列举。
+	 * config 落盘与热重载都在 server/ 侧（引擎不碰 writeJsonWithBackup，与 setDisabledLore 同一条理由）。
 	 *
-	 * 为什么整包归宿主而不是引擎自己干：写的是**用户的书文件**，写完还要迁移
-	 * `config.disabledLore` 里的指纹、热重载素材、通知前端——config 落盘与热重载都在
-	 * server/ 侧（引擎不碰 writeJsonWithBackup，与 setDisabledLore 同一条理由）。
-	 *
-	 * 未注入 = 台上退回旧行为：写只落补充设定集、列举不带来源标记、无改/删/书一级工具。
+	 * 未注入 = 列举不带来源标记、无书一级工具。
 	 */
 	loreHost?: {
-		write: (input: { title: string; keys: string[]; content: string; constant?: boolean; book?: string }) => LorebookEntry | null;
-		update: (
-			fingerprint: string,
-			patch: { title?: string; keys?: string[]; content?: string; constant?: boolean },
-		) => { entry: LorebookEntry; newFingerprint: string; path: string } | null;
-		remove: (fingerprint: string) => { entry: LorebookEntry; path: string } | null;
 		listMarked: () => Array<LorebookEntry & { agentWritten?: boolean }>;
 		listBooks: () => { books: Array<{ path: string; name: string; entryCount: number }>; mounted: string[] };
-		createBook: (
-			name: string,
-			first: { title: string; keys: string[]; content: string; constant?: boolean },
-		) => { path: string; mounted: string[] } | null;
 		mountBook: (path: string, mounted: boolean) => string[];
 	};
-	/**
-	 * 改当前角色卡的字段（`card_update`，M-D7）。归宿主：卡字段进 system prompt，
-	 * 写完必须热重载（softRefreshConfig 在 server/ 侧）。未注入 = 台上无 card_update。
-	 */
-	updateCard?: (patch: {
-		name?: string;
-		description?: string;
-		personality?: string;
-		scenario?: string;
-		firstMes?: string;
-		mesExample?: string;
-		systemPrompt?: string;
-		postHistoryInstructions?: string;
-		creatorNotes?: string;
-		tags?: string[];
-	}) => void;
 	/**
 	 * MCP 外设（8/06 重新接线）：宿主注入 hub 的两个能力，台上据此挂 mcp__ 工具。
 	 * 未注入 = 台上无 MCP 工具（依赖缺失的工具不上清单）。
@@ -632,10 +570,7 @@ export class StageEngine {
 	#busy = false;
 	#queue: Array<{ text: string; note?: string }> = [];
 	#abort: AbortController | null = null;
-	/** 副编剧轮的独立中止（与台前各管各的；两者靠同一把 #busy 串行，互不打断） */
-	#botAbort: AbortController | null = null;
 	#warnedMacros = "";
-	#warnedAuditDrop = 0;
 	#warnedProtocolDrop = "";
 	#lastAssemblyJson = "";
 	#workspace?: { ws: TurnWorkspace; deps: WorkspaceDeps };
@@ -778,176 +713,7 @@ export class StageEngine {
 	/** 强制停止本拍：已流出的部分正文仍落树可见 */
 	abort(): void {
 		this.#abort?.abort();
-		this.#botAbort?.abort();
 		void this.#deps.getSession().abort();
-	}
-
-	abortBot(): void { this.#botAbort?.abort(); }
-
-	/**
-	 * 幕后副编剧的一轮（docs/PLAN-COMPANION-BOT.md 刀 1）：与台前完全隔离的第二个线程。
-	 * 送模内容＝闭合集合（见 bot.ts 文件头）：卡级 APPEND_SYSTEM.md＋BOT.md＋每轮视野块＋线程＋工具回执。
-	 * 线程落 <子项目>/副编剧.jsonl——不进会话树、不进场记/摘要/记忆/压缩；主 agent 不知道它存在。
-	 * 与台前串行（同一把 #busy）；模型默认跟主演条目（既有注入，不新增链路）。
-	 *
-	 * 刀 2：原生七工具（read/write/edit/bash/grep/find/ls）经 session.getToolDefinition 借 pi 的实现执行，
-	 * 沙箱门在这里自己跑一遍（台上那道门挂在 pi 的 tool_call 钩子上，副编剧不经 pi 的循环）。
-	 */
-	async botTurn(
-		text: string,
-		o: {
-			compact?: boolean;
-			onDelta?: (kind: "text" | "thinking", delta: string) => void;
-			onActivity?: (detail: string) => void;
-			onToolCall?: (record: BotToolCallRecord) => void;
-		} = {},
-	): Promise<{ text: string; tools?: BotToolCallRecord[] } | { error: string }> {
-		if (this.#busy) return { error: "台前正在生成——等这一拍结束（或先停止），再唤副编剧。" };
-		if (!this.#deps.runBotSession) return { error: "副编剧运行时未接入。" };
-		const trimmed = text.trim();
-		if (!trimmed) return { error: "说点什么再唤副编剧。" };
-		this.#busy = true;
-		const ac = new AbortController();
-		this.#botAbort = ac;
-		try {
-			const cwd = this.#deps.cwd;
-			const session = this.#deps.getSession();
-			const sm = session.sessionManager;
-			const materials = loadStageMaterials(cwd);
-			const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
-			const cardDir = chatDir ? cardDirOfChatDir(chatDir) : null;
-			const chatAppend = chatDir ? readUserRules(cardDir ?? "", chatDir).chat : undefined;
-			const chatMemoryIndex = readChatMemoryIndex(chatDir);
-			const macro = { charName: materials.card.name, userName: materials.config.userName };
-			const cardBrief = buildBotCardBrief({
-				card: materials.card,
-				userName: materials.config.userName,
-				userPersona: materials.config.userPersona,
-				macro,
-			});
-			const mcpTools = mcpStageTools(this.#deps.mcp);
-			const skills = materials.skillFiles
-				.filter((f) => f.mode !== "authoring")
-				.map((f) => ({ name: f.name, description: f.description }));
-			const envLines = [`工作目录：${cwd}`, `当前角色卡：${materials.config.card}`];
-			if (chatDir) envLines.push(`当前项目目录：${chatDir}`);
-			const systemPrompt = buildBotSystemPrompt({
-				cardAppend: materials.userRules.card,
-				...(chatAppend ? { chatAppend } : {}),
-				cardBrief,
-				...(chatMemoryIndex ? { chatMemoryIndex } : {}),
-				persona: readBotPersona(cardDir, rulesAgentDir()),
-				macro,
-				env: envLines.join("\n"),
-				...(mcpTools.length > 0 ? { mcpTools: mcpTools.map((t) => ({ name: t.name, description: t.description })) } : {}),
-				includeBaseRules: true,
-			});
-			const branch = sm.getBranch() as BranchEntryLike[];
-			const rebuilt = rebuildHistory(branch, materials.promptRules);
-			const beats = beatsOf(rebuilt.history);
-			const viewWindow = typeof materials.config.botViewBeats === "number" && materials.config.botViewBeats > 0 ? Math.floor(materials.config.botViewBeats) : 0;
-			const view = {
-				summary: rebuilt.summary || readChatSummary(chatDir),
-				state: formatState(stateFromBranch(branch)),
-				beats,
-				window: viewWindow,
-			};
-			const file = botThreadPath(cwd, sm.getSessionDir?.(), sm.getSessionId());
-			// 卡族依赖＝读侧 ∪ 宿主 authoring 件（与 agent 模式同一条并法：
-			// card_create/card_project 等只在 authoring 件里，缺了它们工具不上清单）
-			const deps: StageToolDeps = { ...this.#toolDeps("bot"), ...this.#deps.authoring };
-			// backendControl 关＝用户没给通用工具（与台上、agent 模式同一开关、同一语义）
-			const native = materials.config.backendControl === false ? [] : this.#botNativeTools(session, ac);
-			const tools = botTools(materials.config.language, deps, native, { skills, mcp: this.#deps.mcp });
-			const r = await this.#deps.runBotSession({
-				file,
-				cwd,
-				compact: o.compact,
-				systemPrompt,
-				userText: trimmed,
-				view,
-				tools,
-				execute: (name, args) =>
-					runBotTool({
-						deps,
-						tools,
-						native,
-						mcp: this.#deps.mcp,
-						name,
-						args,
-						language: materials.config.language,
-						beats,
-						signal: ac.signal,
-					}),
-				onDelta: o.onDelta,
-				onActivity: o.onActivity,
-				onToolCall: o.onToolCall,
-				signal: ac.signal,
-			});
-			if ("error" in r) return r;
-			await this.#deps.afterAuthoringTurn?.();
-			return r;
-		} catch (err) {
-			return { error: `副编剧这一轮出错：${err instanceof Error ? err.message : String(err)}` };
-		} finally {
-			this.#botAbort = null;
-			this.#busy = false;
-		}
-	}
-
-	/**
-	 * 副编剧的原生工具面（刀 2 前置）：pi 的原生七工具照抄它的描述/schema，执行借它的实现
-	 * （`session.getToolDefinition`）——梨园不包第二层。
-	 *
-	 * 沙箱门在这里自己关一遍：台上那道门挂在 pi 的 tool_call 钩子上，副编剧的循环不经过 pi。
-	 * 用的是**同一份** createSandboxGate 与同一份授权数据（本会话授权在会话树上、永久授权在 卡.json），
-	 * 所以「卡目录为界、卡外问用户」这条边界对副编剧与台上逐字同义。
-	 */
-	#botNativeTools(session: StageAgentSession, ac: AbortController): BotNativeTool[] {
-		const getDef = session.getToolDefinition?.bind(session);
-		if (!getDef) return [];
-		const cwd = this.#deps.cwd;
-		const sm = session.sessionManager;
-		const materials = loadStageMaterials(cwd);
-		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
-		const gate = createSandboxGate({
-			cwd,
-			config: materials.config,
-			chatDir: chatDir ?? undefined,
-			sessionGrants: () => sandboxGrantsFromBranch(sm.getBranch() as BranchEntryLike[]),
-			rememberSession: (grant) => { sm.appendCustomEntry(SANDBOX_GRANT_TYPE, grant); sm.flush(); },
-			ask: this.#deps.askUser ? (question, options) => this.#deps.askUser!(question, options, ac.signal) : undefined,
-			onStop: () => ac.abort(),
-			log: (line) => console.error(`[bot] sandbox ${line}`),
-		});
-		const infos = new Map(session.getAllTools().map((t) => [t.name, t]));
-		const out: BotNativeTool[] = [];
-		for (const name of AUTHORING_NATIVE_TOOLS) {
-			const def = getDef(name);
-			const info = infos.get(name);
-			if (!def || !info) continue;
-			out.push({
-				name,
-				mode: NATIVE_TOOL_ACCESS[name as keyof typeof NATIVE_TOOL_ACCESS] === "read" ? "read" : "write",
-				description: info.description ?? def.description ?? name,
-				parameters: (info.parameters ?? def.parameters ?? { type: "object", properties: {} }) as Record<string, unknown>,
-				run: async (args, signal) => {
-					const blocked = await gate(name, args);
-					if (blocked) return { text: blocked, isError: true };
-					try {
-						const r = await def.execute(`bot-${name}-${Date.now()}`, args, signal ?? ac.signal, undefined, undefined);
-						const text = r.content.filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
-						const images = r.content
-							.filter((c) => c.type === "image" && c.data && c.mimeType)
-							.map((c) => ({ data: c.data!, mimeType: c.mimeType! }));
-						return { text, ...(images.length > 0 ? { images } : {}), ...(r.isError ? { isError: true } : {}) };
-					} catch (err) {
-						return { text: `${name} 执行出错：${err instanceof Error ? err.message : String(err)}`, isError: true };
-					}
-				},
-			});
-		}
-		return out;
 	}
 
 	async #drain(): Promise<void> {
@@ -1305,7 +1071,7 @@ export class StageEngine {
 		const requestId = () => ws.userId ??= [...sm.getBranch() as BranchEntryLike[]].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.id;
 		const finishAuthoring = (): StageTurnEndInfo => {
 			const aborted = this.#abort?.signal.aborted === true || final?.stopReason === "aborted";
-			const liyuanMode = agentTurn ? "agent" : "authoring";
+			const liyuanMode = "agent" as const;
 			const timeline: TurnWorkspace["timeline"] = [];
 			for (const m of exchanges) {
 				if (m.role === "assistant" && Array.isArray(m.content)) for (const c of m.content) {
@@ -2003,28 +1769,7 @@ export class StageEngine {
 		}
 	}
 
-	/**
-	 * 卡的跨会话常驻摘要（第二步读侧）。当前会话住在 cards/ 的子项目里、卡里有
-	 * 记忆/常驻摘要.md 才有值；老布局/没建过记忆的卡返回 undefined（行为与今天一致）。
-	 * 预算封套＝常驻摘要＋本局前情＋【世界状态】＋【登场名录】：本局的账本优先，摘要让位。
-	 */
-	#residentSummary(
-		sm: StageSessionManager,
-		branchSummary: string | undefined,
-		state: WorldState,
-		rosterIndex: string | undefined,
-	): string | undefined {
-		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
-		if (!chatDir) return undefined;
-		const cardDir = cardDirOfChatDir(chatDir);
-		if (!cardDir) return undefined;
-		const text = loadResidentSummary(cardDir);
-		if (!text) return undefined;
-		const otherChars = (branchSummary?.length ?? 0) + formatState(state).length + (rosterIndex?.length ?? 0);
-		return fitResidentSummary(text, otherChars);
-	}
-
-	/** pi 负责校验、顺序执行与中断；这里仅派发一件 RP 工具及记录领域结果。 */
+		/** pi 负责校验、顺序执行与中断；这里仅派发一件 RP 工具及记录领域结果。 */
 	async #executeTool(
 		o: {
 			ws: TurnWorkspace; wsDeps: WorkspaceDeps; previousDraft: PreviousDraftEditor; language: string; readDeps: StageToolDeps;
@@ -2103,38 +1848,16 @@ export class StageEngine {
 
 
 	/**
-	 * 台上/幕后工具的执行依赖（每次取用现读素材/账本——工具看到的世界与装配同源）。
+	 * 台上工具的执行依赖（每次取用现读素材/账本——工具看到的世界与装配同源）。
 	 * 写入许可统一由 RP 扩展的 tool_call 钩子判断。
-	 *
-	 * side＝"stage"（默认，扮演与 agent 两个视图共用）：**不注入世界书写族与记忆写族**。
-	 * 写「用户的持久资料」是幕后的事（docs/PLAN-COMPANION-BOT.md §二）——撤依赖＝那几件工具
-	 * 按既有的 availableSpecs 机制自然下架，不新增名单、不加过滤分支。
-	 * side＝"bot"：副编剧面，两族照旧全给（能力改嫁，不是消失）。
 	 */
-	#toolDeps(side: "stage" | "bot" = "stage"): StageToolDeps {
+	#toolDeps(): StageToolDeps {
 		const cwd = this.#deps.cwd;
 		const sm = this.#deps.getSession().sessionManager;
-		/** 台上补充设定集路径（写侧落点；卡未装载时为空＝无 lorebook_write） */
 		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
 		const cardDir = chatDir ? cardDirOfChatDir(chatDir) : null;
 		const chatId = chatDir ? basename(chatDir) : undefined;
-		const overlayOf = (): string => {
-			try {
-				const m = loadStageMaterials(cwd);
-				return overlayPathFor(cwd, m.card.name, m.config.card);
-			} catch {
-				return "";
-			}
-		};
-		// 世界书写侧宿主件：给出则全族可用（含用户的书），不给则退回「只写补充设定集」的旧行为
 		const lh = this.#deps.loreHost;
-		const writeLore: StageToolDeps["writeLore"] = lh
-			? lh.write
-			: (input) => {
-					const overlay = overlayOf();
-					if (!overlay) return null;
-					return appendOverlayEntry(overlay, input);
-				};
 		return {
 			searchLore: (query, limit) => {
 				const m = loadStageMaterials(cwd);
@@ -2148,13 +1871,6 @@ export class StageEngine {
 			...(lh ? { listBooks: lh.listBooks, mountBook: lh.mountBook } : {}),
 			fingerprint: loreFingerprint,
 			...(this.#deps.setDisabledLore ? { toggleLore: this.#deps.setDisabledLore } : {}),
-			// ---- 世界书写族（write / update / delete / create）：幕后专属 ----
-			...(side === "bot"
-				? {
-						writeLore,
-						...(lh ? { updateLore: lh.update, deleteLore: (fp: string) => lh.remove(fp), createBook: lh.createBook } : {}),
-					}
-				: {}),
 			searchMemory: async (query) => {
 				const search = this.#deps.searchMemory;
 				let result: MemorySearchResult;
@@ -2194,7 +1910,7 @@ export class StageEngine {
 					return sessionList;
 				} }
 				: {}),
-			// ---- 记忆写族（add / update / delete）：主模型（stage）与副编剧（bot）共用，落入当前项目的 记忆/*.md ----
+			// ---- 记忆写族（add / update / delete）：落入当前项目的 记忆/*.md ----
 			...(chatDir || cardDir ? {
 				updateMemory: (ref: string, version: string, content: string) => {
 					if (chatDir && !ref.startsWith("card:")) return changeChatMemory(chatDir, ref, version, content)!;
@@ -2250,7 +1966,6 @@ export class StageEngine {
 					alternateGreetings: c.alternateGreetings,
 				};
 			},
-			...(this.#deps.updateCard ? { updateCard: this.#deps.updateCard } : {}),
 			// ---- M-D5 面板：读/写/关（依赖由宿主按 session 注入） ----
 			...(this.#deps.loadPanels
 				? {
@@ -2283,7 +1998,6 @@ export class StageEngine {
 			getState: () => stateFromBranch(sm.getBranch() as BranchEntryLike[]),
 			formatState,
 			getSkill: (name, file, start, end) => {
-				const m = loadStageMaterials(cwd);
 				// {{可用skill}} 动态表格随「skill指导」（8/19 拆循环时删除）一并退役——
 				// 标准形态下这张表就是 skill_read 的工具描述本身，不再由某条 skill 正文转发。
 				return readStageSkill(cwd, name, file, start, end);

@@ -184,20 +184,7 @@ const TOOL_WRITE_PREFIXES: Record<string, string[]> = {
 	memory_add: ["/api/memory"],
 	memory_delete: ["/api/memory"],
 	card_create: ["/api/card", "/api/cards", "/api/cardfront"],
-	card_update: ["/api/card", "/api/cards", "/api/cardfront"],
 	card_project: ["/api/card", "/api/cards", "/api/cardfront"],
-	card_switch: ["/api/card", "/api/cards", "/api/cardfront", "/api/config"],
-	card_greetings: ["/api/card", "/api/cards"],
-	persona_write: ["/api/personas", "/api/config"],
-	persona_use: ["/api/personas", "/api/config"],
-	persona_delete: ["/api/personas", "/api/config"],
-	preset_write: ["/api/preset", "/api/presets", "/api/card-agents", "/api/rules"],
-	preset_save: ["/api/preset", "/api/presets", "/api/card-agents", "/api/rules"],
-	preset_create: ["/api/preset", "/api/presets"],
-	preset_saveas: ["/api/preset", "/api/presets"],
-	preset_select: ["/api/preset", "/api/presets", "/api/card-agents", "/api/rules"],
-	stage_skill_write: ["/api/skills"],
-	stage_skill_delete: ["/api/skills"],
 };
 
 /**
@@ -280,16 +267,6 @@ export interface ModelsResponse {
 	models: ModelInfo[];
 }
 
-export interface AuthProviderInfo {
-	provider: string;
-	displayName: string;
-	configured: boolean;
-	ready: boolean;
-	source?: string;
-	label?: string;
-	modelCount: number;
-}
-
 /**
  * Agent 配置中的模型条目。
  * 同一个模型可以有多条条目（同 id、不同思考档）；条目的身份是 `label`，没起名就回落 id。
@@ -324,33 +301,6 @@ export interface AgentConfigResponse {
 	config: LiyuanAgentConfig;
 	text: string;
 	seeded?: boolean;
-}
-
-/** 渠道清单项（脱敏） */
-export interface ChannelInfo {
-	name: string;
-	baseUrl?: string;
-	api?: string;
-	hasKey: boolean;
-	keyKind: "none" | "literal" | "env" | "command" | "placeholder";
-	models: ModelEntry[];
-	modelCount: number;
-	modelIds: string[];
-	[key: string]: unknown;
-}
-
-export interface ChannelsResponse {
-	path: string;
-	configPath?: string;
-	channels: ChannelInfo[];
-	defaultProvider?: string | null;
-	defaultModel?: string | null;
-}
-
-export interface ChannelTestResult {
-	ok: boolean;
-	status: number;
-	detail: string;
 }
 
 // ---------- 其它面板类型（保持兼容） ----------
@@ -468,11 +418,6 @@ export interface PresetBlockPatch {
 	remove?: boolean;
 }
 
-/** GET /api/preset/block 单块全文（编辑用） */
-export interface PresetBlockDetail extends PresetBlockView {
-	content: string;
-}
-
 export interface PresetResponse {
 	path?: string;
 	missing?: string;
@@ -493,13 +438,6 @@ export interface CommandMeta {
 	description: string;
 	takesArgs: boolean;
 	mode?: "roleplay" | "agent" | "all";
-}
-
-export interface SkillInfo {
-	name: string;
-	description: string;
-	file: string;
-	disableModelInvocation: boolean;
 }
 
 export interface UploadInfo {
@@ -587,11 +525,10 @@ export interface PresetBlocksResponse {
 	blocks: Array<PresetBlockView & { content?: string }>;
 }
 
-/** 用户提示词：SYSTEM.md（全局系统提示词）+ 全局追加三份（扮演 APPEND_SYSTEM.md / 写作模式 AGENT_APPEND_SYSTEM.md / 助手 BOT.md）+ 这张卡的 APPEND_SYSTEM.md */
+/** 用户提示词：SYSTEM.md（全局系统提示词）+ 全局追加三份（扮演 APPEND_SYSTEM.md / 写作模式 AGENT_APPEND_SYSTEM.md）+ 这张卡的 APPEND_SYSTEM.md */
 export interface RulesResponse {
 	global: { content: string; path: string };
 	agent: { content: string; path: string };
-	bot: { content: string; path: string };
 	card: { content: string; path: string; cardName: string };
 	system: { content: string; path: string };
 }
@@ -600,20 +537,6 @@ export interface RulesSaveResponse {
 	ok: boolean;
 	path: string;
 	chars: number;
-}
-
-/** 预设一次性转译（刀2）：产物是卡级规矩文件 + config 迁移 + 报告 */
-export interface PresetTranslateResponse {
-	ok: boolean;
-	/** ok=false 且 exists=true：卡级规矩文件已存在，需 overwrite=true 重试 */
-	exists?: boolean;
-	path?: string;
-	chars?: number;
-	lines?: number;
-	prefillDropped?: number;
-	markersSkipped?: number;
-	samplersMoved?: number;
-	report?: string;
 }
 
 /** 卡档案 AGENTS.md（刀3）：文件为准 / 投影兜底两态 */
@@ -646,8 +569,6 @@ export interface LorebookFileInfo {
 export interface LorebooksResponse {
 	/** 多本同时挂载的路径列表（可为空） */
 	active: string[] | string | null;
-	/** @deprecated 旧单本字段 */
-	activeOne?: string | null;
 	books: LorebookFileInfo[];
 	/** 当前角色卡是否已保存专属世界书选择（`cards/<卡>/卡.json` 的 `lorebooks`） */
 	lockedForCard?: boolean;
@@ -659,9 +580,6 @@ export function normalizeActiveLorebooks(active: LorebooksResponse["active"]): s
 	if (typeof active === "string" && active) return [active];
 	return [];
 }
-
-/** @deprecated 用 AgentConfigResponse；保留别名避免旧引用炸 */
-export type ModelsJsonResponse = AgentConfigResponse & { content?: LiyuanAgentConfig };
 
 export const importCard = (file: File) =>
 	api<{ ok: true; path: string; name: string; embeddedLoreCount?: number }>(

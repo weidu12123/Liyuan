@@ -46,7 +46,7 @@ Liyuan's core architecture translates proven software engineering agent paradigm
 
 ### 2. High Customizability & Co-Creation
 - **Layered Prompt Architecture**: Exposes `SYSTEM.md` (engine protocol) and `AGENTS.md` (world rules and character lore) for transparent, file-level editing with entry-by-entry toggles.
-- **Collaborative Card Workshop & Sandbox**: Built-in card studio and work mode allow users and the Agent to co-author, debug, and preview character cards and custom front-end scripts in a secure sandbox.
+- **Collaborative Card Workshop & Sandbox**: Built-in card studio allows users and the Agent to co-author, debug, and preview character cards and custom front-end scripts in a secure sandbox.
 
 ![Split-view Card Studio](docs/images/card-studio.png)
 

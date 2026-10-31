@@ -1,32 +1,29 @@
 /**
  * 统一工具层地基（PLAN-RP-TOOLING M-D1，D-T1）。
  *
- * 三套注册表（台上 src/stage/tools.ts、幕后 server/assistant.ts、扩展 .liyuan/extensions/roleplay.ts）
- * 曾各写一份同名工具，文案/参数/兜底话术各不相同。此处是**唯一实现**，三面各取子集。
+ * 台上（src/stage/tools.ts）、agent 模式、扩展（.liyuan/extensions/roleplay.ts）
+ * 曾各写一份同名工具，文案/参数/兜底话术各不相同。此处是**唯一实现**，各面取子集。
  *
  * 形状取 stage（D-T1）：**纯数据 schema + 依赖注入**——
  *   - parameters 是裸 JSON Schema，`src/` 内**禁止 import typebox**（破了就失去离线单测能力）；
  *     typebox 侧消费者直接吃裸 schema 即可（packages/ai 的 Compile 对裸 schema 校验正常）。
  *   - 依赖只传**函数与数据**，不放模块级可变状态（jiti 二象性红线，见 liyuan-jiti-module-duality）。
  *
- * surfaces 决定合一之后仍能分发不同子集：台上不该见 config_write，助手不该见 draft_write。
+ * surfaces 决定合一之后仍能分发不同子集：台上不该见卡工程写工具，agent 模式不该见 draft_write。
  *
- * **合一的是实现，不是清单**（D-T2）：同一工具在不同面上服务不同 agent（台上在演，助手在诊断），
+ * **合一的是实现，不是清单**（D-T2）：同一工具在不同面上服务不同 agent（台上在演，agent 模式在写），
  * 描述与参数按面裁剪是正当的——但两版都住在同一个文件里，改一处就看得见另一处，不会再静默漂移。
  */
 
 /** 能力域——按板块分族，用于按消费者取子集 */
-export type ToolDomain =
+type ToolDomain =
 	| "lore"
 	| "memory"
 	| "card"
-	| "persona"
 	| "worldline"
 	| "draft"
 	| "state"
-	| "panel"
-	| "skill"
-	| "preset";
+	| "panel";
 
 /**
  * 消费者面。
@@ -36,18 +33,13 @@ export type ToolDomain =
  * 6 个 spec（lorebook_search/write、memory_search、panel_*）声明了这个面，
  * 那是**待接的设计意图**（测试里以「三面共用」钉着），不是已经接上的事实——
  * 别照着 surfaces 就以为扩展侧拿得到它们。
- *
- * ⚠ `"assistant"` 的消费者是**幕后副编剧**（2026-10-16 刀 1；此前自 09-12 右栏助手删除后空置）。
- * 只挂在这个面上的 spec（preset_* / persona_* / stage_skill_* / card_switch / card_update /
- * card_greetings / worldline_back）由它取用；要它们上台就把 `"stage"` 加进 surfaces，
- * 不要另起注册。工作模式（authoring）已随刀 2 退场，`"authoring"` 面继续供卡族给 agent 模式与副编剧。
  */
-export type ToolSurface = "stage" | "authoring" | "assistant" | "extension";
+type ToolSurface = "stage" | "authoring" | "extension";
 
 /** 装配上下文：描述/schema 按面与语言裁剪 */
 export interface ToolContext {
 	surface: ToolSurface;
-	/** 剧情语言（台上按它说话；助手面固定用配置语言即可） */
+	/** 剧情语言（台上按它说话；其余面固定用配置语言即可） */
 	language: string;
 }
 
@@ -72,7 +64,7 @@ export interface ToolSpec<Deps> {
 	/** 读/写——写侧受写入门禁与消费者白名单约束（D-T4） */
 	mode: "read" | "write";
 	surfaces: ToolSurface[];
-	/** UI 标签（助手/扩展面展示用；台上无展示位） */
+	/** UI 标签（扩展面展示用；台上无展示位） */
 	label: string;
 	description: (ctx: ToolContext) => string;
 	/** 裸 JSON Schema */

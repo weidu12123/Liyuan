@@ -3,7 +3,7 @@
  * 截成 PNG 回报。挂起形状与 CardPreviewHub 相同：广播一帧，等第一份回报或超时。
  * 截的是用户浏览器里真实渲染的那一页（含卡皮肤、mermaid、主题），不是服务端重渲。
  */
-export interface ScreenshotRequest {
+interface ScreenshotRequest {
 	id: string;
 	/** 只截这一章（文件名）；缺省＝整页稿子 */
 	file?: string;

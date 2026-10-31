@@ -179,34 +179,11 @@ export function ArtifactPanel({
 
 // ---------- 极简 markdown 渲染（面板够用的子集，输出 React 元素、不碰 innerHTML） ----------
 
-/** 点击刮开的黑幕标签（||剧透/悄悄话||） */
-function SpoilerSpan({ text }: { text: string }) {
-	const [revealed, setRevealed] = useState(false);
-	return (
-		<span
-			className={`md-spoiler ${revealed ? "revealed" : ""}`}
-			role="button"
-			tabIndex={0}
-			onClick={() => setRevealed((v) => !v)}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					setRevealed((v) => !v);
-				}
-			}}
-			title={revealed ? t("点击收起遮盖") : t("点击展开遮盖")}
-		>
-			{text}
-		</span>
-	);
-}
-
-/** 行内标记：**粗体**、*斜体*、`代码`、||遮盖||；[文字](链接) 默认呈现文字，传入 onLinkClick 时可响应内部文档跳转 */
+/** 行内标记：**粗体**、*斜体*、`代码`；[文字](链接) 默认呈现文字，传入 onLinkClick 时可响应内部文档跳转 */
 function inline(text: string, onLinkClick?: (href: string) => void) {
-	const parts = text.split(/(\*\*[^*\n]+\*\*|\|\|[^|\n]+\|\||\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\))/g);
+	const parts = text.split(/(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\))/g);
 	return parts.map((p, i) => {
 		if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2, -2)}</strong>;
-		if (p.startsWith("||") && p.endsWith("||") && p.length > 4) return <SpoilerSpan key={i} text={p.slice(2, -2)} />;
 		if (p.startsWith("*") && p.endsWith("*")) return <em key={i}>{p.slice(1, -1)}</em>;
 		if (p.startsWith("`") && p.endsWith("`")) return <code key={i}>{p.slice(1, -1)}</code>;
 		const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(p);

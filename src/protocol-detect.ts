@@ -36,7 +36,7 @@ interface ProtocolSignal {
  * 协议家族。新增家族＝往这里加一组签名——判定逻辑不必改。
  * 每条签名的注释写清「为什么它不会误伤正常世界观内容」。
  */
-export interface ProtocolFamily {
+interface ProtocolFamily {
 	/** 家族标识，进装配报告 */
 	key: string;
 	/** 人类可读名（报告与日志） */
@@ -44,7 +44,7 @@ export interface ProtocolFamily {
 	signals: ProtocolSignal[];
 }
 
-export const PROTOCOL_FAMILIES: ProtocolFamily[] = [
+const PROTOCOL_FAMILIES: ProtocolFamily[] = [
 	{
 		key: "mvu",
 		label: "MVU 变量插件",
@@ -79,7 +79,7 @@ export const PROTOCOL_FAMILIES: ProtocolFamily[] = [
 ];
 
 /** 一条内容的协议判定结果 */
-export interface ProtocolVerdict {
+interface ProtocolVerdict {
 	/** 命中的家族 key；null＝不是协议 */
 	family: string | null;
 	label?: string;
@@ -122,7 +122,7 @@ export interface ProtocolDrop {
 	signals: string[];
 }
 
-export interface LoreLike {
+interface LoreLike {
 	uid: number;
 	comment: string;
 	keys: string[];

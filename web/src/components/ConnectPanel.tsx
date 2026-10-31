@@ -1025,11 +1025,9 @@ export function ConnectEditorPane({
 	const rpConfig = usePanelData(() => apiGet<{ config: RpConfigView }>("/api/config"), { cacheKey: "/api/config" });
 	const { busy, run } = useAction(toast);
 
-	const current = modelsData.data?.current ?? null;
 	const allModels = modelsData.data?.models ?? [];
 	const activeConfig: LiyuanAgentConfig = agentCfg.data?.config ?? { version: 1, providers: {} };
 	const sideEntry = rpConfig.data?.config?.sideModel ?? null;
-	const storyKey = typeof activeConfig.defaultModelEntry === "string" ? activeConfig.defaultModelEntry.trim() : "";
 
 	const isGen = target.kind === "gen";
 	const isFile = target.kind === "file";

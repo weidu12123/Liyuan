@@ -18,7 +18,7 @@ import { DIRS } from "./paths.ts";
 import { extractZipFile } from "./ziplite.ts";
 
 /** 项目仓库（与主页 GitHub 徽标同源） */
-export const UPDATE_REPO = "weidu12123/Liyuan";
+const UPDATE_REPO = "weidu12123/Liyuan";
 /** 暂存根：下载/解压/标记都在这里，失败清目录即回到干净态 */
 export const UPDATE_DIR = `${DIRS.cache}/update`;
 /** 待应用标记文件名（启动脚本据此触发覆盖） */
@@ -146,7 +146,7 @@ export function expectedHashFromSums(sumsText: string, filename: string): string
 	return null;
 }
 
-export interface DownloadProgress {
+interface DownloadProgress {
 	/** 已下载字节 */
 	received: number;
 	/** 总字节（响应未带 content-length 时为 0） */

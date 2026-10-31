@@ -16,7 +16,7 @@ import { formatMvuTree } from "./mvu.ts";
 export { fillPanelTemplate } from "./panelTemplate.ts";
 
 export type PanelKind = "markdown" | "svg" | "html";
-export const PANEL_KINDS: readonly PanelKind[] = ["markdown", "svg", "html"];
+const PANEL_KINDS: readonly PanelKind[] = ["markdown", "svg", "html"];
 
 export interface RpPanel {
 	/** 稳定名（页签标题，同名写入即更新） */
@@ -55,7 +55,7 @@ export function activePanels(panels: PanelMap): RpPanel[] {
 	return Object.values(panels).filter((p) => !p.archived);
 }
 
-export type PanelWriteResult =
+type PanelWriteResult =
 	| {
 			ok: true;
 			panels: PanelMap;
@@ -98,7 +98,7 @@ export function writePanel(
 	};
 }
 
-export type PanelCloseResult = { ok: true; panels: PanelMap } | { ok: false; error: string };
+type PanelCloseResult = { ok: true; panels: PanelMap } | { ok: false; error: string };
 
 export function closePanel(panels: PanelMap, rawName: string): PanelCloseResult {
 	const name = rawName.trim();
@@ -119,9 +119,9 @@ export function formatPanelIndex(panels: PanelMap): string | null {
 }
 
 /** 单面板注入正文上限（字符）；超长截断并提示 panel_read */
-export const PANEL_INJECT_MAX_PER = 8_000;
+const PANEL_INJECT_MAX_PER = 8_000;
 /** 全部活跃面板注入总上限 */
-export const PANEL_INJECT_MAX_TOTAL = 24_000;
+const PANEL_INJECT_MAX_TOTAL = 24_000;
 
 /**
  * 末端注入用的活跃面板快照。

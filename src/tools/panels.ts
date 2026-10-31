@@ -17,17 +17,17 @@
  * 软上限 PANEL_SOFT_LIMIT=6 是纪律不是硬挡——工具回执会提醒，但不拒写。
  */
 
-import { errText, intArg, strArg, type ToolResult, type ToolSpec } from "./registry.ts";
+import { errText, strArg, type ToolResult, type ToolSpec } from "./registry.ts";
 
 /** 面板结构子集（不依赖 RpPanel 全形，便于离线单测） */
-export interface PanelLike {
+interface PanelLike {
 	name: string;
 	kind: "markdown" | "svg" | "html";
 	content: string;
 	archived?: boolean;
 }
 
-export type PanelWriteOutput = {
+type PanelWriteOutput = {
 	ok: true;
 	created: boolean;
 	reopened: boolean;
@@ -59,7 +59,7 @@ export const panelWrite: ToolSpec<PanelDeps> = {
 	name: "panel_write",
 	domain: "panel",
 	mode: "write",
-	surfaces: ["stage", "assistant", "extension"],
+	surfaces: ["stage", "extension"],
 	label: "写/更新面板",
 	description: () =>
 		"写/更新一个元信息面板（地图、装备库、线索板、关系图等），同名重写即更新。" +
@@ -122,11 +122,11 @@ export const panelWrite: ToolSpec<PanelDeps> = {
 /**
  * 调用情境：拿不准某个面板的当前内容（被压缩出上下文了），或增量更新前要先读回原文。
  */
-export const panelRead: ToolSpec<PanelDeps> = {
+const panelRead: ToolSpec<PanelDeps> = {
 	name: "panel_read",
 	domain: "panel",
 	mode: "read",
-	surfaces: ["stage", "assistant", "extension"],
+	surfaces: ["stage", "extension"],
 	label: "读取面板",
 	description: () =>
 		"读取一面板或全部活跃面板的当前内容。" +
@@ -184,11 +184,11 @@ export const panelRead: ToolSpec<PanelDeps> = {
 /**
  * 调用情境：某个面板不再需要（剧情推进后该场景/装备已过时）。
  */
-export const panelClose: ToolSpec<PanelDeps> = {
+const panelClose: ToolSpec<PanelDeps> = {
 	name: "panel_close",
 	domain: "panel",
 	mode: "write",
-	surfaces: ["stage", "assistant", "extension"],
+	surfaces: ["stage", "extension"],
 	label: "收起面板",
 	description: () =>
 		"归档（收起）一个不再需要的面板。归档后在页签中消失，但盘上保留——" +

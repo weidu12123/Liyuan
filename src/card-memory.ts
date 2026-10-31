@@ -27,7 +27,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { chatModeOfSessionDir, listChats, type ChatInfo } from "./cardspace.ts";
@@ -55,11 +55,11 @@ export const RESIDENT_ENVELOPE_CHARS = 4300;
 const RESIDENT_MIN_USEFUL_CHARS = 200;
 
 /** 局复盘旁路输入的正文预算：超出只裁最早的原文（既有摘要与既有复盘另行整份带入） */
-export const RECAP_INPUT_MAX_CHARS = 60000;
+const RECAP_INPUT_MAX_CHARS = 60000;
 
 // ---------------- 清单（harness 记账） ----------------
 
-export interface RecapRecord {
+interface RecapRecord {
 	/** 复盘时子项目的内容指纹（会话文件 名/长/时戳）；变了＝该局有新内容要重新复盘 */
 	sourceMark: string;
 	/** 复盘写于何时 */
@@ -264,7 +264,7 @@ export function collectChatEvidence(
 	return { transcript, omittedChars, beats, stateSnapshot: formatState(stateFromBranch(lastBranch)) };
 }
 
-export interface RecapPromptInput {
+interface RecapPromptInput {
 	evidence: ChatEvidence;
 	/** 这一局的名字（对话.json 的 name；缺省用 id） */
 	chatName: string;
@@ -317,7 +317,7 @@ export function buildRecapPrompt(input: RecapPromptInput): { systemPrompt: strin
 
 // ---------------- Phase 2：合并 ＋ 遗忘 ----------------
 
-export interface RecapDiff {
+interface RecapDiff {
 	/** 新出现或内容变了的复盘（chatId → 文件全文） */
 	changed: Array<{ chatId: string; name: string; text: string }>;
 	/** 上次合并见过、现在磁盘上没了的复盘（遗忘队列） */
@@ -354,7 +354,7 @@ export function diffRecaps(cardDir: string, manifest: MemoryManifest, nameOf: (c
 	return { changed, deleted, hashes };
 }
 
-export interface ConsolidatePromptInput {
+interface ConsolidatePromptInput {
 	diff: RecapDiff;
 	/** 既有手册（没有＝首次建立） */
 	handbook?: string;
@@ -453,14 +453,14 @@ export interface CardMemoryDeps {
 	now?: () => Date;
 }
 
-export interface CardMemorySyncInput {
+interface CardMemorySyncInput {
 	cardDir: string;
 	language: string;
 	userName: string;
 	charName: string;
 }
 
-export interface CardMemorySyncOutcome {
+interface CardMemorySyncOutcome {
 	/** 重新复盘了哪些局 */
 	recapped: string[];
 	/** 复盘失败的局（下次再试） */
@@ -597,7 +597,7 @@ function readOptional(file: string): string | undefined {
 }
 
 /** Detect manual edits/deletions and competing syncs across either awaited generation. */
-export function cardMemoryInputStamp(cardDir: string): string {
+function cardMemoryInputStamp(cardDir: string): string {
 	const p = memoryPaths(cardDir);
 	const paths = [p.manifest, p.handbook, p.resident];
 	if (existsSync(p.recapsDir)) for (const name of readdirSync(p.recapsDir).filter((s) => s.endsWith(".md")).sort()) paths.push(join(p.recapsDir, name));
@@ -606,23 +606,3 @@ export function cardMemoryInputStamp(cardDir: string): string {
 	}).join("\0"));
 }
 
-/** 遗忘一局（删它的复盘）；真正从手册/常驻摘要里清掉发生在下一次合并 */
-export function forgetChatRecap(cardDir: string, chatId: string): boolean {
-	if (!/^[a-zA-Z0-9_-]+$/.test(chatId)) throw new Error("非法局标识。");
-	const p = memoryPaths(cardDir), f = p.recapOf(chatId);
-	if (!existsSync(f)) return false;
-	const manifest = loadManifest(cardDir);
-	const control = manifest.manual ??= { protectedRefs: [], forgottenChats: [], supersededRecaps: {}, aggregatePinned: false, epoch: 0 };
-	if (!control.forgottenChats.includes(chatId)) control.forgottenChats.push(chatId);
-	control.epoch++;
-	for (const r of Object.values(manifest.recaps)) delete r.mergedHash;
-	saveManifest(cardDir, manifest);
-	rmSync(f, { force: true });
-	for (const [key, file] of [["card:handbook", p.handbook], ["card:resident", p.resident]]) {
-		if (!control.protectedRefs.includes(key) && existsSync(file)) {
-			const backupDir = join(p.root, ".history"); mkdirSync(backupDir, { recursive: true });
-			renameSync(file, join(backupDir, `${randomUUID()}-${basename(file)}`));
-		}
-	}
-	return true;
-}

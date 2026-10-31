@@ -450,12 +450,6 @@ export function chatDirOfSessionDir(sessionDir: string | undefined): string | nu
 	return parent && parent !== norm ? parent : null;
 }
 
-/** 会话文件 → 子项目目录（`<子项目>/会话/x.jsonl`） */
-export function chatDirOfSessionFile(sessionFile: string | undefined): string | null {
-	if (!sessionFile) return null;
-	return chatDirOfSessionDir(dirname(sessionFile));
-}
-
 /** 会话目录所属子项目的形态：`agent` 子项目返回 "agent"；扮演子项目、老布局、内存会话返回 undefined */
 export function chatModeOfSessionDir(sessionDir: string | undefined): "agent" | undefined {
 	const chatDir = chatDirOfSessionDir(sessionDir);
@@ -481,7 +475,7 @@ const CHAT_DATA_FILES = {
 
 const LEGACY_DIR_KEYS = { state: "state", worldline: "worldline", panels: "artifacts" } as const;
 
-export type ChatDataKind = keyof typeof CHAT_DATA_FILES;
+type ChatDataKind = keyof typeof CHAT_DATA_FILES;
 
 /**
  * 子项目级数据的落点：**全仓唯一一处**「新布局还是老布局」的分叉。
@@ -523,12 +517,12 @@ export const CARD_LEVEL_KEYS = [
 	"sandboxBashAllow",
 ] as const satisfies ReadonlyArray<keyof RpConfig>;
 
-export type CardLevelKey = (typeof CARD_LEVEL_KEYS)[number];
+type CardLevelKey = (typeof CARD_LEVEL_KEYS)[number];
 export type CardConfig = Partial<Pick<RpConfig, CardLevelKey>>;
 
 const CARD_LEVEL_SET = new Set<string>(CARD_LEVEL_KEYS);
 
-export function cardConfigPath(cardDir: string): string {
+function cardConfigPath(cardDir: string): string {
 	return join(cardDir, CARD_CONFIG_FILE);
 }
 

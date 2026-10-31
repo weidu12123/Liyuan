@@ -14,7 +14,7 @@
  */
 
 /** OpenAI Chat Completions 基线键（ST generate_data 默认始终带） */
-export const CORE_SAMPLER_KEYS = [
+const CORE_SAMPLER_KEYS = [
 	"temperature",
 	"top_p",
 	"frequency_penalty",
@@ -25,16 +25,14 @@ export const CORE_SAMPLER_KEYS = [
  * 扩展采样键（ST 只对 OpenRouter / Claude / 本地后端等追加）。
  * 自定义中转默认不发，避免 Kimi/部分代理因非标字段空回或 4xx。
  */
-export const EXTENDED_SAMPLER_KEYS = [
+const EXTENDED_SAMPLER_KEYS = [
 	"top_k",
 	"repetition_penalty",
 	"min_p",
 	"top_a",
 ] as const;
 
-export const ALL_SAMPLER_KEYS = [...CORE_SAMPLER_KEYS, ...EXTENDED_SAMPLER_KEYS] as const;
-
-export type SamplerMap = Record<string, number>;
+type SamplerMap = Record<string, number>;
 
 export type SamplerProfile =
 	/** 仅核心 4 键（OpenAI / DeepSeek / 默认自定义中转） */
@@ -48,7 +46,7 @@ export type SamplerProfile =
 	/** 不发任何采样（o 系列、部分 Kimi 等） */
 	| "none";
 
-export interface SamplerTarget {
+interface SamplerTarget {
 	/** 连接配置里的 provider id（cpa / deepseek / openrouter / moonshotai…） */
 	provider?: string;
 	/** 模型 id */
@@ -85,7 +83,7 @@ function lower(s: string | undefined): string {
  * 模型级：不接受（或固定）采样参数 → 请求体完全不带。
  * 匹配 id 本体与带前缀的中转名（如 moonshotai/kimi-k3、opencode 上的 kimi-k3）。
  */
-export function modelForbidsSampling(modelId: string | undefined): boolean {
+function modelForbidsSampling(modelId: string | undefined): boolean {
 	const id = lower(modelId);
 	if (!id) return false;
 	// OpenAI o 系列 / OpenRouter 上的 openai/o1…
@@ -209,7 +207,7 @@ function clamp(n: number, min: number, max: number): number {
 /**
  * 对单个键做 ST 风格规范化。返回 undefined 表示不要写入请求体。
  */
-export function normalizeSamplerValue(
+function normalizeSamplerValue(
 	key: string,
 	value: number,
 	target: SamplerTarget,

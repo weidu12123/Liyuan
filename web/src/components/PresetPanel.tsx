@@ -19,7 +19,6 @@ import {
 	apiDelete,
 	apiGet,
 	apiGetCacheClear,
-	apiGetPeek,
 	apiPost,
 	apiPut,
 	downloadJson,
@@ -47,7 +46,7 @@ import {
 	type PromptEntry,
 } from "../../../src/prompt-entries.ts";
 
-export type PromptScope = "system" | "global" | "agent" | "bot" | "card" | "agents";
+export type PromptScope = "system" | "global" | "agent" | "card" | "agents";
 
 export type PresetEditTarget =
 	| {
@@ -103,13 +102,6 @@ const GLOBAL_PROMPT_SLOTS: PromptSlotMeta[] = [
 		effect: "beat",
 		hint: () => t("写作模式全局常驻系统提示词（AGENT_APPEND_SYSTEM.md），对所有写作模式项目生效。"),
 	},
-	{
-		scope: "bot",
-		title: () => t("助手系统提示词"),
-		file: "BOT.md", // i18n-ignore
-		effect: "beat",
-		hint: () => t("幕后助手（副编剧）全局默认系统提示词与人设（BOT.md），下一拍生效。"),
-	},
 ];
 
 const LOCAL_PROMPT_SLOTS: PromptSlotMeta[] = [
@@ -144,7 +136,6 @@ function contentOfScope(
 	if (scope === "system") return rulesData.system?.content ?? "";
 	if (scope === "global") return rulesData.global?.content ?? "";
 	if (scope === "agent") return rulesData.agent?.content ?? "";
-	if (scope === "bot") return rulesData.bot?.content ?? "";
 	return rulesData.card?.content ?? "";
 }
 
@@ -208,7 +199,6 @@ export function PresetPanel({
 		system: false,
 		global: false,
 		agent: false,
-		bot: false,
 		card: false,
 		agents: false,
 	});

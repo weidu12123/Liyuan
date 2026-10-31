@@ -7,7 +7,7 @@
  * 数据作用域：角色卡 + 对话会话
  */
 
-export type MemoryStoreKind = "narrative" | "external" | "custom";
+type MemoryStoreKind = "narrative" | "external" | "custom";
 
 /**
  * 记忆数据作用域（与世界状态 / 面板同款：按会话隔离）。

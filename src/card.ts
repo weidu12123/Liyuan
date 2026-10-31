@@ -23,7 +23,7 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 export const coverSidecarOf = (cardPath: string): string => cardPath.replace(/\.json$/i, ".png");
 
 /** 从 PNG buffer 中提取全部 tEXt 键值对 */
-export function extractPngTextChunks(buf: Buffer): Record<string, string> {
+function extractPngTextChunks(buf: Buffer): Record<string, string> {
 	if (buf.length < 8 || !buf.subarray(0, 8).equals(PNG_SIGNATURE)) {
 		throw new Error("不是有效的 PNG 文件（签名不匹配）");
 	}
@@ -165,11 +165,6 @@ export function updateCardFields(path: string, patch: CardFieldPatch): void {
 		// V1 顶层卡：不强制升 V2，避免破坏用户习惯
 	}
 	writeCardRaw(path, isPng, raw);
-}
-
-/** @deprecated 使用 updateCardFields（已支持 PNG） */
-export function updateJsonCardFields(path: string, patch: CardFieldPatch): void {
-	updateCardFields(path, patch);
 }
 
 // ---------- PNG tEXt 回写 + 开场白 CRUD ----------
@@ -391,7 +386,7 @@ export function mergeExportLore(embedded: CardExportEntry[], active: CardExportE
  * 导出时在原条目上回写变化，保留书级、条目级和插件扩展。
  * 只有没有原始来源的新条目才创建标准外壳。
  */
-export function entriesToCharacterBook(entries: CardExportEntry[], original?: unknown): Record<string, unknown> {
+function entriesToCharacterBook(entries: CardExportEntry[], original?: unknown): Record<string, unknown> {
 	const book = original && typeof original === "object" ? original as Record<string, unknown> : {};
 	const candidates = loreEntriesForExport(book.entries);
 	const used = new Set<number>();
@@ -436,7 +431,7 @@ export function entriesToCharacterBook(entries: CardExportEntry[], original?: un
  * 组装导出用原始卡 JSON（保留 V2/V3 外壳；可替换 character_book）。
  * @param bookEntries 若提供则写入/覆盖 data.character_book；null=去掉内嵌书；undefined=保留磁盘上的原书
  */
-export function buildExportCardJson(
+function buildExportCardJson(
 	path: string,
 	bookEntries?: CardExportEntry[] | null,
 ): Record<string, unknown> {
@@ -477,7 +472,7 @@ export function minimalPngBuffer(): Buffer {
 	);
 }
 
-export interface CardExportResult {
+interface CardExportResult {
 	/** 建议文件名（不含路径） */
 	filename: string;
 	mime: string;

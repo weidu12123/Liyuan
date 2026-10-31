@@ -1,6 +1,6 @@
 # agent 模式二版：照 coding agent 的样子重做
 
-2026-09-22。前身是 [PLAN-AGENT-MODE.md](PLAN-AGENT-MODE.md)（一版设计）与 [AGENT-MODE-STATUS.md](AGENT-MODE-STATUS.md)（一版落地后的现状与差距）。本文是二版的计划，取代一版 §五的形状；一版 §一的用户定案（不替代扮演、只有一个输入框、对话不进正文、账本走旁路）全部保留。
+2026-09-22。前身是 [PLAN-AGENT-MODE.md](PLAN-AGENT-MODE.md)（一版设计）与 AGENT-MODE-STATUS.md（一版落地后的现状与差距）。本文是二版的计划，取代一版 §五的形状；一版 §一的用户定案（不替代扮演、只有一个输入框、对话不进正文、账本走旁路）全部保留。
 
 ## 一、参照物（用户 2026-09-22 定，不得改写）
 

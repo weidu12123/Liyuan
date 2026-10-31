@@ -33,7 +33,7 @@ interface Manifest {
 }
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-export const cardSourceHash = (v: string | Buffer): string => createHash("sha256").update(v).digest("hex");
+const cardSourceHash = (v: string | Buffer): string => createHash("sha256").update(v).digest("hex");
 const manifestFile = (root: string) => join(root, "manifest.json");
 const changesFile = (root: string) => join(root, "changes.json");
 
@@ -589,7 +589,7 @@ export function outlineCardProject(cwd: string, cardPath: string): CardOutline {
 }
 
 /** 把一项归入板块；传空板块＝撤销声明回到默认。声明落在工程目录，需要先展开。 */
-export function assignCardSection(cwd: string, cardPath: string, key: string, section: string | null): CardOutline {
+function assignCardSection(cwd: string, cardPath: string, key: string, section: string | null): CardOutline {
 	const root = cardAuthoringDirectory(cwd, cardPath);
 	if (!existsSync(manifestFile(root))) throw new Error("请先展开创作工程再归位");
 	const outline = outlineCardProject(cwd, cardPath);
@@ -615,7 +615,7 @@ export function previewCardProject(cwd: string, cardPath: string, userName: stri
  * 写卡手册：全局技能根里的 card-authoring（用户可改），缺失时读发行版。
  * file 是包内相对路径（如 references/mvu.md，省略读 SKILL.md）；SKILL.md 去掉 frontmatter，参考文件原样。
  */
-export function readAuthoringGuide(cwd: string, file?: string): string {
+function readAuthoringGuide(cwd: string, file?: string): string {
 	if (file !== undefined && (isAbsolute(file) || file.includes("\\") || file.includes(":") || file.split("/").some(p => p === ".." || p === "." || p === ""))) {
 		throw new Error("手册文件必须是包内相对路径，例如 references/mvu.md");
 	}

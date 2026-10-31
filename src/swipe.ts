@@ -20,7 +20,7 @@ export interface SwipeEntry {
 	timestamp?: string;
 }
 
-export interface SwipeVariant {
+interface SwipeVariant {
 	/** 用户消息的直接子节点（该变体子树根） */
 	rootId: string;
 	/** 该变体子树当前应导航到的叶（优先当前 leaf 所在路径，否则时间最新叶） */
@@ -51,7 +51,7 @@ const byTime = (a: SwipeEntry, b: SwipeEntry) => {
 	return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 };
 
-export function childrenOf(entries: SwipeEntry[], parentId: string | null): SwipeEntry[] {
+function childrenOf(entries: SwipeEntry[], parentId: string | null): SwipeEntry[] {
 	return entries.filter((e) => e.parentId === parentId).sort(byTime);
 }
 
@@ -84,8 +84,7 @@ export function leafOfVariant(entries: SwipeEntry[], rootId: string, currentLeaf
 	if (currentLeaf && ids.has(currentLeaf)) return currentLeaf;
 
 	const inTree = entries.filter((e) => ids.has(e.id));
-	const hasChild = new Set(inTree.map((e) => e.parentId).filter((p): p is string => !!p && ids.has(p)));
-	// parentId 在子树内 ⇒ 该 parent 有子；leaf = 子树内且没有任何子树内 child 的节点
+		// parentId 在子树内 ⇒ 该 parent 有子；leaf = 子树内且没有任何子树内 child 的节点
 	const childParent = new Set<string>();
 	for (const e of inTree) {
 		if (e.parentId && ids.has(e.parentId)) childParent.add(e.parentId);
@@ -143,7 +142,7 @@ export function lastStoryUserEntryId(
 	return null;
 }
 
-export interface SwipeMeta {
+interface SwipeMeta {
 	/** 0-based */
 	index: number;
 	total: number;

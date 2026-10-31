@@ -157,7 +157,7 @@ test("预览只返回稿件与初值，原包快照不能被当作资源改写",
 	assert.deepEqual(readFileSync(card), original);
 	assert.throws(() => writeCardResource(cwd, card, "raw", "{}", ""), /只读/);
 	assert.throws(() => readCardResource(cwd, card, "../../other"), /找不到资源/);
-	assert.deepEqual(cardProject.surfaces, ["authoring", "assistant"]);
+	assert.deepEqual(cardProject.surfaces, ["authoring"]);
 });
 
 test("active 导出保留原书元数据、重复项与挂载书原始扩展", t => {

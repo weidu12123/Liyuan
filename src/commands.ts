@@ -47,6 +47,13 @@ export const RP_COMMANDS: CommandMeta[] = [
 		mode: "roleplay",
 	},
 	{
+		name: "btw",
+		usage: "/btw [问题或指令 | clear | stop]",
+		description: "旁路助手：不污染剧情历史地讨论点评剧情、检索设定或修改角色卡与项目文档（clear 关闭清空）",
+		takesArgs: true,
+		mode: "roleplay",
+	},
+	{
 		name: "swipe",
 		usage: "/swipe [prev|next|new]",
 		description: "切换回复变体（prev/next；在末条 next=再生成；new=强制再生成）。不产生世界线",

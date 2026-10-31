@@ -8,6 +8,7 @@ export type {
 	ServerFrame,
 	UpdateWire,
 	WireActivity,
+	WireBtwMsg,
 	WireChannel,
 	WireCheckpoint,
 	WireChatInfo,

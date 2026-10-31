@@ -28,10 +28,10 @@ import {
 	toAttachmentView,
 	type AttachmentView,
 } from "./attachments.ts";
-import { ArtifactPanel } from "./components/ArtifactPanel.tsx";
+import { ArtifactPanel, renderMarkdown } from "./components/ArtifactPanel.tsx";
 import { DraftPanel } from "./components/DraftPanel.tsx";
 import { workspaceSegments } from "./draft-view.ts";
-import type { DraftView } from "./wire.ts";
+import type { DraftView, WireBtwMsg } from "./wire.ts";
 import { BrandLogo } from "./components/BrandLogo.tsx";
 import { ComposerModelSwitch, ConnectEditorPane, ConnectPanel, type ConnectEditTarget } from "./components/ConnectPanel.tsx";
 import { FloatWindow } from "./components/FloatWindow.tsx";
@@ -344,6 +344,12 @@ export default function App() {
 	 * 前端先发 `/note`（多条＝一个命令多行）再发动作；不进入剧情历史，用完即清。
 	 */
 	const [noteRows, setNoteRows] = useState<string[]>([]);
+	const [btwProfile, setBtwProfile] = useState<{ name: string; avatar?: string; bust: number }>(() => ({
+		name: t("助手"),
+		bust: 0,
+	}));
+	const [btwMessages, setBtwMessages] = useState<WireBtwMsg[]>([]);
+	const [btwStreaming, setBtwStreaming] = useState(false);
 	const [sessions, setSessions] = useState<WireSessionInfo[] | null>(null);
 	/** 两层布局的子项目清单（null＝老布局/未下发 ⇒ 面板回落扁平列表） */
 	const [chats, setChats] = useState<WireChatInfo[] | null>(null);
@@ -955,6 +961,18 @@ export default function App() {
 						setDraftWorkspace(frame.workspace);
 						setDraftHistory(undefined);
 						setBusy(frame.streaming === true);
+						if (frame.btw) {
+							setBtwProfile((prev) => ({
+								name: frame.btw!.name || t("助手"),
+								avatar: frame.btw!.avatar,
+								bust: prev.avatar !== frame.btw!.avatar ? Date.now() : prev.bust,
+							}));
+							setBtwStreaming(frame.btw.streaming === true);
+							setBtwMessages(frame.btw.messages ?? []);
+						} else {
+							setBtwStreaming(false);
+							setBtwMessages([]);
+						}
 						if (frame.streaming && frame.workspace && !frame.workspace.entryId) {
 							const segs = workspaceSegments(frame.workspace);
 							setSegs(segs);
@@ -1199,6 +1217,43 @@ export default function App() {
 					}
 					break;
 				}
+				case "btw_user":
+					setBtwMessages((ms) => [...ms, { role: "user", text: frame.text }, { role: "assistant", text: "", thinking: "", tools: [] }]);
+					break;
+				case "btw_state":
+					if (frame.state === "start") {
+						setBtwStreaming(true);
+					} else if (frame.state === "end") {
+						setBtwStreaming(false);
+						apiGetCacheClear("/api/card");
+						apiGetCacheClear("/api/lorebook");
+						apiGetCacheClear("/api/chats/assets");
+						setAgentTick((x) => x + 1);
+					} else if (frame.state === "clear") {
+						setBtwStreaming(false);
+						setBtwMessages([]);
+					}
+					break;
+				case "btw_delta":
+					setBtwMessages((ms) => {
+						if (ms.length === 0) return ms;
+						const last = ms[ms.length - 1]!;
+						if (last.role !== "assistant") return ms;
+						const updated: WireBtwMsg =
+							frame.kind === "text"
+								? { ...last, text: last.text + frame.delta }
+								: { ...last, thinking: `${last.thinking ?? ""}${frame.delta}` };
+						return [...ms.slice(0, -1), updated];
+					});
+					break;
+				case "btw_tool":
+					setBtwMessages((ms) => {
+						if (ms.length === 0) return ms;
+						const last = ms[ms.length - 1]!;
+						if (last.role !== "assistant") return ms;
+						return [...ms.slice(0, -1), { ...last, tools: [...(last.tools ?? []), frame.detail] }];
+					});
+					break;
 				case "notify":
 					pushToast(frame.level, frame.text);
 					if (frame.level !== "info") {
@@ -1408,12 +1463,59 @@ export default function App() {
 		return true;
 	}, [conversationMode, noteRows, ws]);
 
+	const btwName = btwProfile.name.trim() || t("助手");
+
+	/** 解析输入框是否正以 @助手名（或 /btw）向旁路助手发话；命中返回剥除前缀后的正文 */
+	const parseBtwText = useCallback(
+		(raw: string): string | null => {
+			const s = raw.trimStart();
+			const prefix = `@${btwName}`;
+			if (s.toLowerCase().startsWith(prefix.toLowerCase())) {
+				const rest = s.slice(prefix.length);
+				if (rest === "" || /^\s/.test(rest)) return rest.trim();
+			}
+			const slash = /^\/btw(?:[ \t]+([\s\S]*))?$/i.exec(s);
+			if (slash) return (slash[1] ?? "").trim();
+			return null;
+		},
+		[btwName],
+	);
+
+	const isAddressingBtw = conversationMode === "roleplay" && parseBtwText(input) !== null;
+
 	const send = useCallback(() => {
 		const typed = input.trim();
 		// 附件随消息：路径清单作为尾行附在正文后（这一行即持久记录，重放同路径解析）
 		const attachLine = pending.length > 0 ? buildAttachmentLine(pending.map((p) => p.file)) : "";
 		const text = attachLine ? (typed ? `${typed}\n${attachLine}` : attachLine) : typed;
 		if (!text) return;
+		if (conversationMode === "roleplay") {
+			const btwBody = parseBtwText(text);
+			if (btwBody !== null) {
+				if (!btwBody) {
+					inputRef.current?.focus();
+					return;
+				}
+				const cmdText = /^(clear|close)$/i.test(btwBody)
+					? "/btw clear"
+					: /^(stop|abort)$/i.test(btwBody)
+						? "/btw stop"
+						: `/btw ${btwBody}`;
+				if (!ws.send({ type: "prompt", text: cmdText })) {
+					pushToast("warning", t("连接还没好，内容还在输入框里"));
+					return;
+				}
+				setWelcome(false);
+				setAtHome(false);
+				touchVisit();
+				setInput("");
+				setPending([]);
+				atBottomRef.current = true;
+				setAtBottom(true);
+				if (inputRef.current) inputRef.current.style.height = "auto";
+				return;
+			}
+		}
 		if (conversationMode === "agent") {
 			const saveMatch = /^\/(?:save|store)(?:\s+(.*))?$/i.exec(typed);
 			if (saveMatch && pending.length === 0) {
@@ -1479,7 +1581,7 @@ export default function App() {
 		atBottomRef.current = true;
 		setAtBottom(true);
 		if (inputRef.current) inputRef.current.style.height = "auto";
-	}, [input, pending, ws, openStoreModal, pushToast, toggleRight, conversationMode, saveAgentCheckpoint, rewindAgentTurn, sendNotes]);
+	}, [input, pending, ws, openStoreModal, pushToast, toggleRight, conversationMode, saveAgentCheckpoint, rewindAgentTurn, sendNotes, parseBtwText]);
 
 
 	// 卡 HTML（如 某卡 开场表单）调用 triggerSlash(`/send …|/trigger`)
@@ -1682,6 +1784,21 @@ export default function App() {
 		return activeCommands.filter((c) => c.name.startsWith(m[1]));
 	}, [input, activeCommands, cmdDismissed]);
 
+	/** 输入 @ 时弹出 @助手名 补全条（仅扮演模式） */
+	const showBtwMentionPop = useMemo(() => {
+		if (conversationMode !== "roleplay" || cmdDismissed) return false;
+		const m = /^@([^\s@]*)$/.exec(input);
+		if (!m) return false;
+		const q = (m[1] ?? "").toLowerCase();
+		return !q || btwName.toLowerCase().startsWith(q);
+	}, [conversationMode, cmdDismissed, input, btwName]);
+
+	const completeBtwMention = useCallback(() => {
+		setInput(`@${btwName} `);
+		setCmdIndex(0);
+		inputRef.current?.focus();
+	}, [btwName]);
+
 	const argHint = useMemo(() => {
 		const m = /^\/(\w+)\s/.exec(input);
 		if (!m || !activeCommands.length) return null;
@@ -1854,6 +1971,7 @@ export default function App() {
 							setRolesTab(t);
 						}}
 						toast={pushToast}
+						onBtwProfileChange={setBtwProfile}
 						studioOpen={studioOpen}
 						onOpenStudio={() => {
 							setCardLoreOpen(false);
@@ -2130,6 +2248,16 @@ export default function App() {
 									}}
 								>
 									{t("用户角色")}
+								</button>
+								<button
+									type="button"
+									className={`panel-head-tab ${rolesTab === "btw" ? "active" : ""}`}
+									onClick={() => {
+										setCardLoreOpen(false);
+										setRolesTab("btw");
+									}}
+								>
+									{t("助手")}
 								</button>
 							</div>
 						) : (
@@ -3045,6 +3173,106 @@ export default function App() {
 									{(streamText || streamThinking) && <span className="caret" />}
 								</div>
 							)}
+							{!welcome && conversationMode === "roleplay" && (btwMessages.length > 0 || btwStreaming) && (
+								<div className="btw-inline-block" role="region" aria-label={btwName}>
+									<div className="btw-inline-head">
+										<div className="btw-inline-identity">
+											<span className="btw-inline-avatar" aria-hidden="true">
+												{btwProfile.avatar ? (
+													<img src={personaAvatarUrl("__btw__", btwProfile.bust)} alt="" />
+												) : (
+													btwName.slice(0, 1)
+												)}
+											</span>
+											<span className="btw-inline-name">{btwName}</span>
+											<span className="btw-inline-badge">{t("旁路协作 · 不入剧情历史")}</span>
+										</div>
+										<div className="btw-inline-head-acts">
+											{btwStreaming && (
+												<button
+													type="button"
+													className="btw-inline-btn"
+													onClick={() => ws.send({ type: "prompt", text: "/btw stop" })}
+												>
+													{t("停止")}
+												</button>
+											)}
+											<button
+												type="button"
+												className="btw-inline-close"
+												onClick={() => ws.send({ type: "prompt", text: "/btw clear" })}
+												title={t("关闭并清空旁路对话")}
+												aria-label={t("关闭并清空旁路对话")}
+											>
+												<IconClose size={14} />
+											</button>
+										</div>
+									</div>
+									<div className="btw-inline-body">
+										{btwMessages.map((m, idx) =>
+											m.role === "user" ? (
+												<div key={idx} className="btw-turn btw-turn-user">
+													<span className="btw-mention-pill">@{btwName}</span>
+													<span className="btw-user-text">{m.text}</span>
+												</div>
+											) : (
+												<div key={idx} className="btw-turn btw-turn-assistant">
+													{m.tools && m.tools.length > 0 && (
+														<div className="btw-tool-chips">
+															{m.tools.map((tl, ti) => (
+																<span key={ti} className="btw-tool-chip">
+																	{tl}
+																</span>
+															))}
+														</div>
+													)}
+													{m.thinking && m.thinking.trim().length > 0 && (
+														<details className="btw-thinking">
+															<summary>{t("思考过程")}</summary>
+															<div className="btw-thinking-body">{m.thinking}</div>
+														</details>
+													)}
+													{m.text.trim() ? (
+														<div className="btw-reply-md">{renderMarkdown(m.text)}</div>
+													) : btwStreaming && idx === btwMessages.length - 1 ? (
+														<div className="info-line pulse">{t("正在思考…")}</div>
+													) : null}
+													{m.text.trim() && !(btwStreaming && idx === btwMessages.length - 1) && (
+														<div className="btw-turn-foot">
+															<button
+																type="button"
+																className="btw-inline-btn"
+																onClick={() => {
+																	const lines = m.text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+																	const noteLine = lines.find((l) => /导演备注/.test(l)) ?? lines.find((l) => l.startsWith(">")) ?? m.text.trim();
+																	const cleaned = noteLine
+																		.replace(/^>\s*/, "")
+																		.replace(/^\*\*【?导演备注】?\*\*[：:]?\s*/, "")
+																		.replace(/^【?导演备注】?[：:]?\s*/, "")
+																		.trim();
+																	if (cleaned) {
+																		setNoteRows((rs) => [...rs.filter((x) => x.trim()), cleaned]);
+																		pushToast("info", t("已填入备注行"));
+																	}
+																}}
+															>
+																{t("填入备注")}
+															</button>
+															<button
+																type="button"
+																className="btw-inline-btn"
+																onClick={() => doCopy(m.text)}
+															>
+																{t("复制")}
+															</button>
+														</div>
+													)}
+												</div>
+											),
+										)}
+									</div>
+								</div>
+							)}
 								{!welcome && draftWorkspace && <DraftPanel workspace={draftWorkspace} busy={busy}
 									revisions={draftHistory?.id === draftWorkspace.id ? draftHistory.revisions : undefined}
 									onInspect={() => ws.send({ type: "draft_history", id: draftWorkspace.id })}
@@ -3170,6 +3398,30 @@ export default function App() {
 							</div>
 						)}
 						<div className="composer-shell composer-box">
+							{showBtwMentionPop && (
+								<div className="cmd-pop">
+									<button
+										type="button"
+										className="cmd-item active"
+										onMouseDown={(e) => {
+											e.preventDefault();
+											completeBtwMention();
+										}}
+									>
+										<span className="cmd-name btw-pop-name">
+											<span className="btw-pop-avatar" aria-hidden="true">
+												{btwProfile.avatar ? (
+													<img src={personaAvatarUrl("__btw__", btwProfile.bust)} alt="" />
+												) : (
+													btwName.slice(0, 1)
+												)}
+											</span>
+											@{btwName}
+										</span>
+										<span className="cmd-desc">{t("向旁路助手提问、点评剧情或修改设定（不进入剧情历史）")}</span>
+									</button>
+								</div>
+							)}
 							{suggestions.length > 0 && (
 								<div className="cmd-pop">
 									{suggestions.map((c, i) => (
@@ -3258,6 +3510,17 @@ export default function App() {
 									e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
 								}}
 								onKeyDown={(e) => {
+									if (showBtwMentionPop) {
+										if (e.key === "Escape") {
+											setCmdDismissed(true);
+											return;
+										}
+										if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing)) {
+											e.preventDefault();
+											completeBtwMention();
+											return;
+										}
+									}
 									if (suggestions.length > 0) {
 										const sel = suggestions[cmdIndex] ?? suggestions[0];
 										if (e.key === "ArrowDown") {
@@ -3409,6 +3672,27 @@ export default function App() {
 											</button>
 											<button
 												type="button"
+												className={`dock-btn ${isAddressingBtw ? "active" : ""}`}
+												title={t("在输入框插入 @{name}，向旁路助手提问或修改设定（不进入剧情历史）", { name: btwName })}
+												aria-label={t("唤出助手")}
+												onClick={() => {
+													setInput((prev) => {
+														const s = prev.trimStart();
+														const prefix = `@${btwName}`;
+														if (s.toLowerCase().startsWith(prefix.toLowerCase()) && (s.length === prefix.length || /^\s/.test(s.slice(prefix.length)))) {
+															return s.slice(prefix.length).replace(/^\s+/, "");
+														}
+														return `@${btwName} ${s}`;
+													});
+													setComposerTools(false);
+													requestAnimationFrame(() => inputRef.current?.focus());
+												}}
+											>
+												<span className="btw-at-glyph" aria-hidden="true">@</span>
+												<span className="composer-tool-label">{btwName}</span>
+											</button>
+											<button
+												type="button"
 												className="dock-btn"
 												title={t("上传图片/文件（也可拖入或粘贴）")}
 												aria-label={t("上传图片或文件")}
@@ -3427,7 +3711,28 @@ export default function App() {
 									toast={pushToast}
 									onOpenConnect={() => openLeft("connect")}
 								/>
-								{busy ? (
+								{isAddressingBtw ? (
+									btwStreaming ? (
+										<button
+											className="btn btn-stop"
+											onClick={() => ws.send({ type: "prompt", text: "/btw stop" })}
+											title={t("停止")}
+											aria-label={t("停止生成")}
+										>
+											<IconStop size={18} />
+										</button>
+									) : (
+										<button
+											className="btn btn-send"
+											onClick={send}
+											disabled={!parseBtwText(input) || conn !== "open"}
+											title={t("发送")}
+											aria-label={t("发送")}
+										>
+											<IconSend size={17} />
+										</button>
+									)
+								) : busy ? (
 									<button
 										className="btn btn-stop"
 										onClick={() => {

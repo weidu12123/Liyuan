@@ -24,6 +24,8 @@ import type { PresetDoc } from "./preset-doc.ts";
 export const USER_RULES_FILE = "APPEND_SYSTEM.md";
 /** agent 模式的全局追加槽：与 APPEND_SYSTEM.md 平级、二选一——扮演轮读前者，agent 轮读本文件 */
 const AGENT_RULES_FILE = "AGENT_APPEND_SYSTEM.md";
+/** 旁路助手（/btw）的全局追加槽：与 APPEND_SYSTEM.md、AGENT_APPEND_SYSTEM.md 平级 */
+export const BTW_RULES_FILE = "BTW_APPEND_SYSTEM.md";
 
 /** agentDir：与 paths.ts preferLiyuanAgentHome 同一约定（启动时写 env；只认 LIYUAN_*，PI_* 不当输入） */
 export function rulesAgentDir(): string {
@@ -36,6 +38,10 @@ export function globalRulesPath(): string {
 
 export function agentRulesPath(): string {
 	return join(rulesAgentDir(), AGENT_RULES_FILE);
+}
+
+export function btwRulesPath(): string {
+	return join(rulesAgentDir(), BTW_RULES_FILE);
 }
 
 /**
@@ -60,6 +66,8 @@ export interface UserRules {
 	global: string;
 	/** agent 模式的全局追加（AGENT_APPEND_SYSTEM.md）；扮演轮不读 */
 	agent: string;
+	/** 旁路助手的全局追加（BTW_APPEND_SYSTEM.md）；台前与写作轮不读 */
+	btw?: string;
 	card: string;
 	/** 项目级局部守则（cards/<卡>/对话/<chatId>/APPEND_SYSTEM.md） */
 	chat?: string;
@@ -77,6 +85,7 @@ export function readUserRules(cardDir: string, chatDir?: string | null): UserRul
 	return {
 		global: read(globalRulesPath()),
 		agent: read(agentRulesPath()),
+		btw: read(btwRulesPath()),
 		card: read(cardRulesPath(cardDir)),
 		...(chatDir ? { chat: read(chatRulesPath(chatDir)) } : {}),
 	};

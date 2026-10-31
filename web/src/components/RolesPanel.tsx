@@ -8,15 +8,16 @@
 import { CardPanel } from "./CardPanel.tsx";
 import { CardStudio } from "./CardStudio.tsx";
 import { IconEdit } from "./icons.tsx";
-import { PersonaPanel } from "./PersonaPanel.tsx";
+import { BtwRolePanel, PersonaPanel } from "./PersonaPanel.tsx";
 import { t } from "../i18n/index.ts";
 
-export type RolesTab = "card" | "persona";
+export type RolesTab = "card" | "persona" | "btw";
 
 export interface RolesPanelProps {
 	tab: RolesTab;
 	onTab?: (tab: RolesTab) => void;
 	toast: (level: "info" | "warning" | "error", text: string) => void;
+	onBtwProfileChange?: (profile: { name: string; avatar?: string; bust: number }) => void;
 	/** 是否处于 00–09 写卡工坊视图 */
 	studioOpen?: boolean;
 	/** 打开角色卡工坊视图 */
@@ -42,6 +43,7 @@ export function RolesPanel({
 	tab,
 	onTab,
 	toast,
+	onBtwProfileChange,
 	studioOpen = false,
 	onOpenStudio,
 	onBackFromStudio,
@@ -64,6 +66,9 @@ export function RolesPanel({
 					</button>
 					<button type="button" aria-pressed={tab === "persona"} onClick={() => onTab?.("persona")}>
 						{t("用户角色")}
+					</button>
+					<button type="button" aria-pressed={tab === "btw"} onClick={() => onTab?.("btw")}>
+						{t("助手")}
 					</button>
 					{tab === "card" && onOpenStudio && (
 						<button
@@ -91,7 +96,7 @@ export function RolesPanel({
 				</div>
 			) : (
 				<>
-					{/* 两侧都常挂：切回来时不重新「读取中」，与侧栏保活同规矩 */}
+					{/* 三侧都常挂：切回来时不重新「读取中」，与侧栏保活同规矩 */}
 					<div className="roles-view" hidden={tab !== "card"} style={tab === "card" ? undefined : { display: "none" }}>
 						<CardPanel
 							toast={toast}
@@ -106,6 +111,9 @@ export function RolesPanel({
 					</div>
 					<div className="roles-view" hidden={tab !== "persona"} style={tab === "persona" ? undefined : { display: "none" }}>
 						<PersonaPanel toast={toast} />
+					</div>
+					<div className="roles-view" hidden={tab !== "btw"} style={tab === "btw" ? undefined : { display: "none" }}>
+						<BtwRolePanel toast={toast} onProfileChange={onBtwProfileChange} />
 					</div>
 				</>
 			)}

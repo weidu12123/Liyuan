@@ -57,6 +57,7 @@ import { StageEngine, type AssistantMsgLike, type StageModelLike, type StageStre
 import { displayConversationBranch, storyBranch, messageMode } from "../src/conversation-mode.ts";
 import { cardProjectOperation, previewCardProject } from "../src/card-authoring.ts";
 import { buildCardPreviewRequest, CardPreviewHub } from "./card-preview.ts";
+import { createBtwRunner, type BtwRunner } from "./btw.ts";
 import { ScreenshotHub } from "./screenshot.ts";
 import { stateFromBranch, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
 import {
@@ -367,6 +368,8 @@ let runtime = await createAgentSessionRuntime(createRuntime, {
 
 let session: AgentSession = runtime.session;
 let stage: StageEngine;
+let btw: BtwRunner | undefined;
+let lastBoundChatDir: string | null = null;
 let unsubscribe: (() => void) | undefined;
 
 // ---------- WS 广播 ----------
@@ -771,6 +774,13 @@ const takeDirectorNote = (): string | undefined => {
 	return note ?? undefined;
 };
 
+/** 推进下一拍台前剧情或重 roll 时：若存在已聊完的旁路草稿则自动关闭销毁（流式进行中的不打断） */
+const closeBtwBeforeBeat = async (): Promise<void> => {
+	if (stage?.mode === "roleplay" && btw?.hasSession && !btw.isStreaming) {
+		await btw.close();
+	}
+};
+
 /** 当前分支上最后一条用户消息 entry id（agent 模式查全部分支 user；roleplay 模式查剧情轮） */
 const lastStoryUserId = (): string | null => {
 	const isAgent = stage?.mode === "agent";
@@ -955,9 +965,10 @@ const helloFrame = (): ServerFrame => {
 	 * 前端拿清单算指纹，只在换卡/换预设（指纹变了）时才去拉一次正文。
 	 */
 	const { scripts, ...cardfrontLite } = cardfront;
+	const cfg = loadConfig(cwd);
 	return {
 		type: "hello",
-		uiLanguage: loadConfig(cwd).uiLanguage,
+		uiLanguage: cfg.uiLanguage,
 		sessionId: session.sessionId,
 		charName: names.charName,
 		userName: names.userName,
@@ -970,6 +981,12 @@ const helloFrame = (): ServerFrame => {
 		conversationMode: stage?.mode ?? "roleplay",
 		turnMode: stage?.turnMode,
 		...(stage?.mode === "agent" ? { story: storyOutline() } : {}),
+		btw: {
+			name: cfg.btwName?.trim() || t("助手"),
+			...(cfg.btwAvatar ? { avatar: cfg.btwAvatar } : {}),
+			streaming: btw?.isStreaming ?? false,
+			messages: btw?.snapshot() ?? [],
+		},
 		// 一档皮肤与消息同帧:首屏不得依赖二次 REST(缓存/竞态会让 StatusBlock 回落统一面板)
 		cardfront: { ...cardfrontLite, scriptManifest: authorScriptManifest(scripts) },
 	};
@@ -1152,6 +1169,7 @@ const regenerateSwipe = async (): Promise<void> => {
 	}
 	// 展示层立刻去掉旧回复（只显示到 user）
 	resyncAll();
+	await closeBtwBeforeBeat();
 	await stage.regenerate(takeDirectorNote());
 };
 
@@ -1266,9 +1284,17 @@ const askChoice = (question: string, options: string[], placeholder: string | un
 function createCliFrontend() {
 	const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: process.stdin.isTTY === true });
 	const queued: string[] = [];
+	const askQueue: string[] = [];
 	let waiter: ((v: string | null) => void) | null = null;
+	const askWaiters: Array<{ resolve: (v: string | null) => void; allowBtwBypass: boolean }> = [];
 	let closed = false;
 	rl.on("line", (l) => {
+		const topAsk = askWaiters[askWaiters.length - 1];
+		if (topAsk && !(topAsk.allowBtwBypass && /^\/btw(?:\s|$)/i.test(l.trim()))) {
+			askWaiters.pop();
+			topAsk.resolve(l);
+			return;
+		}
 		const w = waiter;
 		if (w) {
 			waiter = null;
@@ -1277,6 +1303,9 @@ function createCliFrontend() {
 	});
 	rl.on("close", () => {
 		closed = true;
+		while (askWaiters.length > 0) {
+			askWaiters.pop()!.resolve(null);
+		}
 		const w = waiter;
 		if (w) {
 			waiter = null;
@@ -1292,6 +1321,26 @@ function createCliFrontend() {
 		return new Promise((res) => {
 			waiter = res;
 		});
+	};
+
+	/** 选择卡专用读行：不与主循环 readLine 争抢同一 waiter */
+	const readAskLine = (allowBtwBypass = true): { promise: Promise<string | null>; cancel: () => void } => {
+		const next = askQueue.shift();
+		if (next !== undefined) return { promise: Promise.resolve(next), cancel: () => {} };
+		if (closed) return { promise: Promise.resolve(null), cancel: () => {} };
+		let entry: { resolve: (v: string | null) => void; allowBtwBypass: boolean } | undefined;
+		const promise = new Promise<string | null>((resolve) => {
+			entry = { resolve, allowBtwBypass };
+			askWaiters.push(entry);
+		});
+		return {
+			promise,
+			cancel: () => {
+				if (!entry) return;
+				const idx = askWaiters.indexOf(entry);
+				if (idx >= 0) askWaiters.splice(idx, 1);
+			},
+		};
 	};
 
 	// 半成品行：流式打到一半时别让别的输出插进同一行
@@ -1329,8 +1378,14 @@ function createCliFrontend() {
 			process.stdout.write(`\n${question}\n`);
 			options.forEach((o, i) => process.stdout.write(`  ${i + 1}. ${o}\n`));
 			process.stdout.write("  0. 停止\n"); // i18n-ignore：终端日志
-			const aborted = new Promise<null>((res) => signal?.addEventListener("abort", () => res(null), { once: true }));
-			const line = (await Promise.race([readLine(), aborted]))?.trim();
+			const askHandle = readAskLine();
+			const aborted = new Promise<null>((res) => {
+				signal?.addEventListener("abort", () => {
+					askHandle.cancel();
+					res(null);
+				}, { once: true });
+			});
+			const line = (await Promise.race([askHandle.promise, aborted]))?.trim();
 			if (!line || line === "0" || /^(stop|停止)$/i.test(line)) {
 				out("[选择] 停止"); // i18n-ignore：终端日志
 				return undefined;
@@ -1538,6 +1593,11 @@ const bindSession = async () => {
 	session = runtime.session;
 	// 换会话/换子项目/新建/回档重挂——凡重绑必到：待生效的导演备注不带过去（PLAN-DIRECTOR-NOTE）
 	pendingDirectorNote = null;
+	const nextChatDir = chatDirOfSessionDir(session.sessionManager.getSessionDir());
+	if (lastBoundChatDir !== null && nextChatDir !== lastBoundChatDir) {
+		await btw?.close();
+	}
+	lastBoundChatDir = nextChatDir;
 	// 账本/面板的落点跟着会话走（子项目一份）：换会话/换子项目后要重挂目录监听
 	stateWatcher.rearm();
 	panelsWatcher.rearm();
@@ -1863,6 +1923,7 @@ const restHost: RestHost = {
 		resyncAll();
 	},
 	async switchToCard(opts?: { switchSession?: boolean }) {
+		await btw?.close();
 		refreshNamesFromConfig(); // rest.ts 已写盘新 card，先让会话过滤对准新卡
 		// 换卡：装载中的预设要按新卡（宏按卡求值）重新落条目；声明全局留档（assets/presets/.liyuan/），
 		// 换卡不再重复问模型。后台跑，不挡切会话：链条自带串行（presetSyncChain）与跑完通知；
@@ -2956,6 +3017,40 @@ stage = new StageEngine({
 /** 台上或旧循环任一在流式中（守卫共用） */
 const storyStreaming = (): boolean => session.isStreaming || stage.isStreaming;
 
+btw = createBtwRunner({
+	cwd,
+	agentDir: agentHome,
+	stage,
+	getServices: () => ({ modelRuntime: session.modelRuntime, settingsManager: session.settingsManager }),
+	getModelState: () => ({ model: session.model, thinkingLevel: session.thinkingLevel }),
+	events: {
+		onUser: (text) => broadcast({ type: "btw_user", text }),
+		onStart: () => {
+			cli?.out("");
+			broadcast({ type: "btw_state", state: "start" });
+		},
+		onDelta: (kind, delta) => {
+			cli?.stream(kind === "thinking" ? "btw:思考" : "btw", delta); // i18n-ignore：CLI 终端输出
+			broadcast({ type: "btw_delta", kind, delta });
+		},
+		onTool: (detail) => {
+			cli?.out(`[btw:tool] ${detail}`); // i18n-ignore：CLI 终端输出
+			broadcast({ type: "btw_tool", detail });
+		},
+		onNotify: (level, text) => {
+			cli?.out(`[btw:${level}] ${text}`); // i18n-ignore：CLI 终端输出
+			broadcast({ type: "notify", level, text });
+		},
+		onEnd: (info) => {
+			cli?.out(`[btw:end]${info.aborted ? " aborted" : ""}${info.error ? ` error=${info.error}` : ""}`); // i18n-ignore：CLI 终端输出
+			broadcast({ type: "btw_state", state: "end", ...(info.aborted ? { aborted: true } : {}), ...(info.error ? { error: info.error } : {}) });
+		},
+		onClear: () => {
+			broadcast({ type: "btw_state", state: "clear" });
+		},
+	},
+});
+
 /**
  * 手动压缩（/compact 与 WS compact 帧共用）：走台上引擎自管压缩（M4）。
  * 摘要落树后 resyncAll——重放时被覆盖的楼层照旧全在（树只追加），
@@ -3002,6 +3097,42 @@ const handlePrompt = async (text: string) => {
 			level: "info",
 			text: note ? t("导演备注已就位，将影响下一拍：{note}", { note }) : t("已清除导演备注"),
 		});
+		return;
+	}
+	const btwMatch = /^\/btw(?:[ \t]+([\s\S]*))?$/i.exec(trimmed);
+	if (btwMatch) {
+		if (stage?.mode === "agent") {
+			const msg = t("旁路助手仅扮演模式可用");
+			cli?.out(`[btw] ${msg}`); // i18n-ignore：CLI 终端输出
+			broadcast({ type: "notify", level: "warning", text: msg });
+			return;
+		}
+		const sub = (btwMatch[1] ?? "").trim();
+		if (!sub) {
+			if (btw?.hasSession) {
+				cli?.out(`[btw] 当前草稿会话进行中（已对话 ${btw.userTurnCount} 轮；/btw <内容> 继续，/btw clear 关闭清空）`); // i18n-ignore：CLI 终端输出
+			} else {
+				cli?.out("[btw] 当前无活跃草稿（用法：/btw <问题或指令>｜/btw clear 关闭清空｜/btw stop 停止当前回复）"); // i18n-ignore：CLI 终端输出
+			}
+			return;
+		}
+		if (/^(clear|close)$/i.test(sub)) {
+			await btw?.close();
+			const msg = t("已关闭并清空旁路对话");
+			cli?.out(`[btw] ${msg}`); // i18n-ignore：CLI 终端输出
+			broadcast({ type: "notify", level: "info", text: msg });
+			return;
+		}
+		if (/^(stop|abort)$/i.test(sub)) {
+			if (btw?.isStreaming) {
+				await btw.abort();
+				cli?.out("[btw] 已停止当前旁路回复"); // i18n-ignore：CLI 终端输出
+			} else {
+				cli?.out("[btw] 当前没有正在生成的旁路回复"); // i18n-ignore：CLI 终端输出
+			}
+			return;
+		}
+		await btw?.prompt(sub);
 		return;
 	}
 	// CLI / 宿主命令：/project（列出项目、新建项目、切换项目）与 /session（同项目新建会话、列出会话、切换会话）与 /assets（项目级 .md 资产）
@@ -3189,6 +3320,7 @@ const handlePrompt = async (text: string) => {
 		session.appendMessage({ role: "user", content: [{ type: "text", text: rerollArgMatch[1].trim() }], timestamp: Date.now() });
 		sm.flush();
 		resyncAll();
+		await closeBtwBeforeBeat();
 		await stage.regenerate(takeDirectorNote());
 		return;
 	}
@@ -3298,6 +3430,7 @@ const handlePrompt = async (text: string) => {
 	const commandName = trimmed.startsWith("/") ? trimmed.slice(1).split(" ", 1)[0] : undefined;
 	const isCommand = !!commandName && !!session.extensionRunner.getCommand(commandName);
 	if (!isCommand) {
+		await closeBtwBeforeBeat();
 		broadcast({
 			type: "message",
 			message: { channel: "user", name: names.userName, text: trimmed, ...(stage.mode !== "roleplay" ? { mode: stage.mode } : {}) },
@@ -3953,6 +4086,7 @@ const shutdown = async () => {
 			wss.close();
 			httpServer.close();
 		}
+		await btw?.close();
 		await runtime.dispose();
 	} finally {
 		process.exit(0);
@@ -3975,6 +4109,11 @@ async function runCliLoop(): Promise<void> {
 	// Ctrl+C 在 CLI 下先当「停本拍」，不直接杀进程（停了再按一次才退）
 	process.removeAllListeners("SIGINT");
 	process.on("SIGINT", () => {
+		if (btw?.isStreaming) {
+			console.log("[liyuan] 已请求停止旁路回复"); // i18n-ignore：终端日志
+			void btw.abort();
+			return;
+		}
 		if (stage.isStreaming) {
 			console.log("[liyuan] 已请求停止本拍"); // i18n-ignore：终端日志
 			stage.abort();
@@ -3983,13 +4122,29 @@ async function runCliLoop(): Promise<void> {
 		void shutdown();
 	});
 	bootSideEffects();
+	let inFlightStage: Promise<void> | null = null;
 	for (;;) {
 		const raw = await cli!.readLine();
-		if (raw === null) break;
+		if (raw === null) {
+			if (inFlightStage) await inFlightStage;
+			break;
+		}
 		const trimmed = raw.trim();
 		if (!trimmed) continue;
-		if (trimmed === "/exit" || trimmed === "/quit") break;
-		await handlePrompt(trimmed);
+		if (trimmed === "/exit" || trimmed === "/quit") {
+			if (inFlightStage) await inFlightStage;
+			break;
+		}
+		// /btw 在台前流式期间可随时并发提问，不等待当前拍结束；其余指令按拍串行。
+		if (/^\/btw(?:\s|$)/i.test(trimmed)) {
+			await handlePrompt(trimmed);
+			continue;
+		}
+		if (inFlightStage) await inFlightStage;
+		const run = handlePrompt(trimmed).finally(() => {
+			if (inFlightStage === run) inFlightStage = null;
+		});
+		inFlightStage = run;
 	}
 	await shutdown();
 }

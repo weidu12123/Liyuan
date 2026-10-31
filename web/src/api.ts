@@ -325,6 +325,8 @@ export interface RpConfigView {
 	disabledLore?: string[];
 	backendControl?: boolean;
 	creationMode?: "ask" | "silent";
+	btwName?: string;
+	btwAvatar?: string;
 	/** 固定楼层压缩：每 N 个叙事轮主动压缩早期正文；0=仅被动压缩 */
 	compactEveryNTurns?: number;
 	/** 旁路模型（记账/压缩）：指向连接配置里的一条模型条目；缺省=跟随剧情模型 */
@@ -529,6 +531,7 @@ export interface PresetBlocksResponse {
 export interface RulesResponse {
 	global: { content: string; path: string };
 	agent: { content: string; path: string };
+	btw?: { content: string; path: string };
 	card: { content: string; path: string; cardName: string };
 	system: { content: string; path: string };
 }

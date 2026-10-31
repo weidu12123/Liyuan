@@ -16,6 +16,7 @@ const makeEnv = () => {
 	copyFileSync(join(repoRoot, "assets", "SYSTEM.md"), join(root, "assets", "SYSTEM.md"));
 	copyFileSync(join(repoRoot, "assets", "APPEND_SYSTEM.md"), join(root, "assets", "APPEND_SYSTEM.md"));
 	copyFileSync(join(repoRoot, "assets", "AGENT_APPEND_SYSTEM.md"), join(root, "assets", "AGENT_APPEND_SYSTEM.md"));
+	copyFileSync(join(repoRoot, "assets", "BTW_APPEND_SYSTEM.md"), join(root, "assets", "BTW_APPEND_SYSTEM.md"));
 	const agentDir = join(root, "agent");
 	return { root, agentDir };
 };
@@ -97,6 +98,21 @@ test("agent 模式追加槽：全新环境播种 AGENT_APPEND_SYSTEM.md；用户
 		writeFileSync(join(agentDir, "AGENT_APPEND_SYSTEM.md"), "用户自己的 agent 规矩。", "utf8");
 		seedStageSystemPrompt(root, agentDir);
 		assert.equal(readFileSync(join(agentDir, "AGENT_APPEND_SYSTEM.md"), "utf8"), "用户自己的 agent 规矩。");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("旁路助手追加槽：全新环境播种 BTW_APPEND_SYSTEM.md；用户已有的不覆盖", () => {
+	const { root, agentDir } = makeEnv();
+	try {
+		seedStageSystemPrompt(root, agentDir);
+		const btw = readFileSync(join(agentDir, "BTW_APPEND_SYSTEM.md"), "utf8");
+		assert.ok(btw.includes("# 旁路助手"), "旁路助手定义在 BTW_APPEND_SYSTEM.md");
+		assert.ok(btw.includes("【当前台前剧情】"), "说明台前视野块语义");
+		writeFileSync(join(agentDir, "BTW_APPEND_SYSTEM.md"), "毒舌副编剧风格。", "utf8");
+		seedStageSystemPrompt(root, agentDir);
+		assert.equal(readFileSync(join(agentDir, "BTW_APPEND_SYSTEM.md"), "utf8"), "毒舌副编剧风格。");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

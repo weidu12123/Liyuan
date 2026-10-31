@@ -110,7 +110,7 @@ export const rest: Record<string, string> = {
 	"同名预设文件已存在：{file}": "A preset file with this name already exists: {file}",
 	"缺少新名字": "Missing new name",
 	"缺少预设 JSON": "Missing preset JSON",
-	"scope 必须是 system、global、agent 或 card": "scope must be system, global, agent or card",
+	"scope 必须是 system、global、agent、btw 或 card": "scope must be system, global, agent, btw or card",
 	"{title}（{label}）": "{title} ({label})",
 	"不是有效的世界书文件：{path}": "Not a valid lorebook file: {path}",
 	"缺少 path 或 paths": "Missing path or paths",

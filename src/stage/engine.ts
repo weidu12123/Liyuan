@@ -18,6 +18,7 @@ import { projectToolContext } from "./context.ts";
 import { authoringHistory, authoringRequestIds, contextText, conversationMode, CONVERSATION_PROCESS_TYPE, type ConversationMode, type ContextMessage } from "../conversation-mode.ts";
 import { authoringTools, runAuthoringTool, AUTHORING_NATIVE_TOOLS } from "./authoring.ts";
 import { AGENT_ASK_TOOL, AGENT_SCREENSHOT_TOOL, agentSystemPrompt, buildAgentStateBlock } from "./agent.ts";
+import { btwSystemPrompt, buildBtwStageBlock } from "./btw.ts";
 import { readUserRules } from "../user-rules.ts";
 import { describeChange, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, storyDirectory, type ChangeSet } from "./story-history.ts";
 import { agentHistory, buildDiscussionSummaryPrompt, discussionTokens, DISCUSSION_SUMMARY_TYPE, livePromptTokens, MANUAL_MIN_DISCUSSION_TOKENS, planDiscussionCompaction, promptTokensOfMessages } from "./discussion.ts";
@@ -32,7 +33,7 @@ import {
 	searchEntries,
 } from "../lorebook.ts";
 import { formatPanelIndex, formatPanelSnapshot, loadPanels } from "../panels.ts";
-import { cardDirOfChatDir, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, readChatMemoryIndex, readChatSummary, writeChatSummary } from "../cardspace.ts";
+import { cardDirOfChatDir, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, readChatMemoryIndex, readChatSummary, resolveCardSpace, writeChatSummary } from "../cardspace.ts";
 import { changeCardMemory, changeChatMemory, listCardMemory, listChatMemory, readCardMemory, readChatMemory, searchCardMemory, searchChatMemory, writeChatMemoryDoc } from "../card-memory-tools.ts";
 import { classifyTag, scanTaggedBlocks } from "../postprocess.ts";
 import { formatRosterIndex, formatState, saveState } from "../state.ts";
@@ -714,6 +715,105 @@ export class StageEngine {
 	abort(): void {
 		this.#abort?.abort();
 		void this.#deps.getSession().abort();
+	}
+
+	/**
+	 * 旁路助手（/btw）只读装配：从当前扮演主会话分支现算干净剧情视野与 system，
+	 * 不占 #busy、不改会话树；台前流式进行中也能安全读取已落树的历史拍。
+	 */
+	btwAssembly(): { systemPrompt: string; stageBlock: string; cardDir: string | null; chatDir: string | null; config: ReturnType<typeof loadStageConfig> } {
+		const cwd = this.#deps.cwd;
+		const sm = this.#deps.getSession().sessionManager;
+		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
+		const materials = loadStageMaterials(cwd);
+		const { config, card } = materials;
+		const cardDir = (chatDir ? cardDirOfChatDir(chatDir) : null) ?? resolveCardSpace(cwd, config.card)?.dir ?? null;
+		const branch = sm.getBranch() as BranchEntryLike[];
+		const state = stateFromBranch(branch);
+		const { history, summary: branchSummary } = rebuildHistory(branch, materials.promptRules);
+		const summary = branchSummary || readChatSummary(chatDir);
+		const chatAppend = chatDir ? readUserRules(cardDir ?? "", chatDir).chat : undefined;
+		const userRules = chatAppend ? { ...materials.userRules, chat: chatAppend } : materials.userRules;
+		const chatMemoryIndex = readChatMemoryIndex(chatDir);
+		const systemPrompt = btwSystemPrompt({
+			cwd,
+			cardPath: config.card,
+			cardDir,
+			chatDir,
+			userRules,
+			chatMemoryIndex,
+			cardAgents: materials.cardAgents,
+			macro: { charName: card.name, userName: config.userName },
+		});
+		const stageBlock = buildBtwStageBlock({
+			state,
+			rosterIndex: formatRosterIndex(state),
+			summary,
+			history,
+			charName: card.name,
+			userName: config.userName,
+		});
+		return { systemPrompt, stageBlock, cardDir, chatDir, config };
+	}
+
+	/**
+	 * 旁路助手（/btw）工具集与派发器：与写作模式（agentTurn）共用同一套工具定义与执行链
+	 * （去掉截章节稿的 screenshot 与绑台前树节点的 worldline_*）。
+	 */
+	btwToolkit(hooks?: { onActivity?: (detail: string) => void; onAskStop?: () => void }): {
+		tools: StageTool[];
+		nativeNames: string[];
+		askUser?: StageEngineDeps["askUser"];
+		afterTurn?: () => void | Promise<void>;
+		execute: (name: string, id: string, input: Record<string, unknown>, signal?: AbortSignal) => Promise<StageToolResult>;
+	} {
+		const cwd = this.#deps.cwd;
+		const materials = loadStageMaterials(cwd);
+		const { config } = materials;
+		const skillList = materials.skillFiles.filter((f) => f.mode !== "authoring").map((f) => ({ name: f.name, description: f.description }));
+		const readDeps = this.#toolDeps();
+		const mcpTools = mcpStageTools(this.#deps.mcp);
+		const mediaOpts = { tts: this.#deps.ttsAvailable?.() === true };
+		const mediaTools = this.#deps.media ? mediaStageTools(config.language, mediaOpts) : [];
+		const askEnabled = !!this.#deps.askUser;
+		const cardDeps: CardDeps = { ...readDeps, ...this.#deps.authoring };
+		const tools: StageTool[] = [
+			...stageTools(config.language, readDeps).filter((t) => !t.name.startsWith("worldline_")),
+			...(skillList.length ? [skillReadTool(config.language, skillList)] : []),
+			...(askEnabled ? [AGENT_ASK_TOOL] : []),
+			...mediaTools,
+			...mcpTools,
+			...authoringTools(config.language, cardDeps),
+		];
+		const nativeNames = config.backendControl === false ? [] : [...AUTHORING_NATIVE_TOOLS];
+		const readNames = new Set([...unifiedStageToolNames(readDeps), "world_state_get", "skill_read"]);
+		const mcpNames = mcpStageToolNames(this.#deps.mcp);
+		const mediaNames = this.#deps.media ? mediaStageToolNames(mediaOpts) : new Set<string>();
+		return {
+			tools,
+			nativeNames,
+			askUser: this.#deps.askUser,
+			afterTurn: this.#deps.afterAuthoringTurn,
+			execute: (name, id, input, signal) =>
+				this.#executeCollaboratorTool(
+					{
+						language: config.language,
+						readDeps,
+						readNames,
+						mcpNames,
+						mediaNames,
+						cardDeps,
+						allowScreenshot: false,
+						modeLabel: "旁路助手",
+						onActivity: hooks?.onActivity,
+						onAskStop: () => hooks?.onAskStop?.(),
+					},
+					name,
+					id,
+					input,
+					signal,
+				),
+		};
 	}
 
 	async #drain(): Promise<void> {
@@ -1448,42 +1548,25 @@ export class StageEngine {
 			},
 			execute: async (name, id, input, signal) => {
 				if (agentTurn) {
-					if (name === "ask" && this.#deps.askUser) {
-						const question = String(input.question ?? "").trim() || "请你定夺";
-						const options = Array.isArray(input.options) ? input.options.map((v) => String(v).trim()).filter(Boolean) : [];
-						const answer = await this.#deps.askUser(question, options, signal);
-						if (answer === undefined) {
-							ev.onActivity?.(`ask「${question.slice(0, 24)}」· 用户停止`);
-							userStopped = true; void session.abort();
-							return { content: [] };
-						}
-						ev.onActivity?.(`ask「${question.slice(0, 24)}」· 用户作答`);
-						return { content: [{ type: "text", text: `用户已作答：「${answer}」。` }] };
-					}
-					if (agentTurn && name === "screenshot" && this.#deps.screenshot) {
-						const file = typeof input.file === "string" && input.file.trim() ? input.file.trim() : undefined;
-						const shot = await this.#deps.screenshot(file, signal);
-						if (!shot) return { content: [{ type: "text", text: "没有截到画面：没有打开的页面，或页面没有在限时内回报。请让用户在浏览器里打开梨园后重试。" }], isError: true };
-						ev.onActivity?.(`截图${file ? `「${file}」` : "（整页正文）"} · ${shot.width}×${shot.height}`);
-						return { content: [{ type: "text", text: `已截取${file ? `「${file}」` : "整页正文"}的当前画面（${shot.width}×${shot.height}）。` }, { type: "image", data: shot.png, mimeType: "image/png" }] };
-					}
-					if (mcpNames.has(name)) {
-						const result = await runMcpStageTool(this.#deps.mcp!, name, input, signal);
-						return { content: [{ type: "text", text: result?.text ?? "MCP 工具不可用。" }], isError: result?.isError ?? !result };
-					}
-					if (name === "skill_read" || (agentTurn && readNames.has(name))) {
-						const result = await runStageTool(readDeps, name, input, config.language);
-						if (agentTurn && result.activity) ev.onActivity?.(result.activity);
-						return { content: [{ type: "text", text: result.text }], isError: result.isError };
-					}
-					if (agentTurn && mediaNames.has(name)) {
-						const result = (await runMediaStageTool(this.#deps.cwd, name, input)) ?? { text: `未知工具「${name}」。`, isError: true };
-						if (result.details && result.isError !== true) agentMedia.push({ toolName: name, toolCallId: id, details: result.details, text: result.text });
-						if (result.activity) ev.onActivity?.(result.activity);
-						return { content: [{ type: "text", text: result.text }], ...(result.details ? { details: result.details } : {}), ...(result.isError ? { isError: true } : {}) };
-					}
-					const result = await runAuthoringTool(name, input, config.language, cardDeps);
-					return result ? { content: [{ type: "text", text: result.text }], details: result.details, isError: result.isError } : { content: [{ type: "text", text: `当前${agentTurn ? "agent" : "工作"}模式没有此工具。` }], isError: true };
+					return this.#executeCollaboratorTool(
+						{
+							language: config.language,
+							readDeps,
+							readNames,
+							mcpNames,
+							mediaNames,
+							cardDeps,
+							allowScreenshot: true,
+							modeLabel: "agent",
+							onActivity: (d) => ev.onActivity?.(d),
+							onAskStop: () => { userStopped = true; void session.abort(); },
+							onMedia: (m) => agentMedia.push(m),
+						},
+						name,
+						id,
+						input,
+						signal,
+					);
 				}
 				if (name === "ask" && roundText.trim() && ws.mode === "write") {
 					runWriteTool(ws, wsDeps, ws.draft ? "draft_append" : "draft_write", { content: roundText, version: ws.version }, "capture");
@@ -1829,6 +1912,64 @@ export class StageEngine {
 		};
 	}
 
+
+	async #executeCollaboratorTool(
+		o: {
+			language: string;
+			readDeps: StageToolDeps;
+			readNames: Set<string>;
+			mcpNames: Set<string>;
+			mediaNames: Set<string>;
+			cardDeps: CardDeps;
+			allowScreenshot: boolean;
+			modeLabel: string;
+			onActivity?: (detail: string) => void;
+			onAskStop: () => void;
+			onMedia?: (item: { toolName: string; toolCallId: string; details: Record<string, unknown>; text: string }) => void;
+		},
+		name: string,
+		id: string,
+		input: Record<string, unknown>,
+		signal?: AbortSignal,
+	): Promise<StageToolResult> {
+		if (name === "ask" && this.#deps.askUser) {
+			const question = String(input.question ?? "").trim() || "请你定夺";
+			const options = Array.isArray(input.options) ? input.options.map((v) => String(v).trim()).filter(Boolean) : [];
+			const answer = await this.#deps.askUser(question, options, signal);
+			if (answer === undefined) {
+				o.onActivity?.(`ask「${question.slice(0, 24)}」· 用户停止`);
+				o.onAskStop();
+				return { content: [] };
+			}
+			o.onActivity?.(`ask「${question.slice(0, 24)}」· 用户作答`);
+			return { content: [{ type: "text", text: `用户已作答：「${answer}」。` }] };
+		}
+		if (o.allowScreenshot && name === "screenshot" && this.#deps.screenshot) {
+			const file = typeof input.file === "string" && input.file.trim() ? input.file.trim() : undefined;
+			const shot = await this.#deps.screenshot(file, signal);
+			if (!shot) return { content: [{ type: "text", text: "没有截到画面：没有打开的页面，或页面没有在限时内回报。请让用户在浏览器里打开梨园后重试。" }], isError: true };
+			o.onActivity?.(`截图${file ? `「${file}」` : "（整页正文）"} · ${shot.width}×${shot.height}`);
+			return { content: [{ type: "text", text: `已截取${file ? `「${file}」` : "整页正文"}的当前画面（${shot.width}×${shot.height}）。` }, { type: "image", data: shot.png, mimeType: "image/png" }] };
+		}
+		if (o.mcpNames.has(name)) {
+			const result = await runMcpStageTool(this.#deps.mcp!, name, input, signal);
+			return { content: [{ type: "text", text: result?.text ?? "MCP 工具不可用。" }], isError: result?.isError ?? !result };
+		}
+		if (name === "skill_read" || o.readNames.has(name)) {
+			const result = await runStageTool(o.readDeps, name, input, o.language);
+			if (result.activity) o.onActivity?.(result.activity);
+			return { content: [{ type: "text", text: result.text }], isError: result.isError };
+		}
+		if (o.mediaNames.has(name)) {
+			const result = (await runMediaStageTool(this.#deps.cwd, name, input)) ?? { text: `未知工具「${name}」。`, isError: true };
+			if (result.details && result.isError !== true) o.onMedia?.({ toolName: name, toolCallId: id, details: result.details, text: result.text });
+			if (result.activity) o.onActivity?.(result.activity);
+			return { content: [{ type: "text", text: result.text }], ...(result.details ? { details: result.details } : {}), ...(result.isError ? { isError: true } : {}) };
+		}
+		const result = await runAuthoringTool(name, input, o.language, o.cardDeps);
+		if (result?.activity) o.onActivity?.(result.activity);
+		return result ? { content: [{ type: "text", text: result.text }], details: result.details, isError: result.isError } : { content: [{ type: "text", text: `当前${o.modeLabel}模式没有此工具。` }], isError: true };
+	}
 
 	/**
 	 * 台上读侧工具，并把「查过世界」记进工作区。

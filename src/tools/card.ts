@@ -243,7 +243,8 @@ export const cardProject: ToolSpec<CardDeps> = {
 		if (!deps.project) return { text: "本环境不支持卡创作工程", isError: true };
 		try {
 			const result = await deps.project(args);
-			return { text: JSON.stringify(result, null, 2), details: result, activity: "卡创作工程" };
+			const act = typeof args.action === "string" && args.action.trim() ? `卡创作工程 · ${args.action.trim()}` : "卡创作工程";
+			return { text: JSON.stringify(result, null, 2), details: result, activity: act };
 		} catch (error) {
 			return { text: errText(error), isError: true };
 		}

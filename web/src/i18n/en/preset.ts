@@ -90,6 +90,8 @@ export const preset: Record<string, string> = {
 	"扮演模式全局常驻系统提示词（APPEND_SYSTEM.md），对所有角色卡的扮演会话生效。": "Global standing system prompt for roleplay mode (APPEND_SYSTEM.md); applies to roleplay sessions across all cards.",
 	"写作模式系统提示词": "Writing mode system prompt",
 	"写作模式全局常驻系统提示词（AGENT_APPEND_SYSTEM.md），对所有写作模式项目生效。": "Global standing system prompt for writing mode (AGENT_APPEND_SYSTEM.md); applies to all writing mode projects.",
+	"助手系统提示词": "Assistant system prompt",
+	"扮演模式旁路助手的系统提示词（BTW_APPEND_SYSTEM.md），与「角色 → 助手」中的身份提示词同步。": "System prompt for the roleplay side assistant (BTW_APPEND_SYSTEM.md); synced with the Identity Prompt under Roles → Assistant.",
 	"{count} 条 · {n} 字": "{count} entries · {n} chars",
 	"在右侧展开整份文件查看或编辑": "Open the full file in the right-hand editor to view or edit",
 	"全文": "Full file",

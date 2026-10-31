@@ -278,6 +278,14 @@ export interface UpdateWire {
 	desktopDeploy?: boolean;
 }
 
+/** 旁路助手（/btw）单条内存消息（仅活在当前内存草稿槽，不落盘、不进主会话树） */
+export interface WireBtwMsg {
+	role: "user" | "assistant";
+	text: string;
+	thinking?: string;
+	tools?: string[];
+}
+
 /** Server → Client 帧 */
 export type ServerFrame =
 	| {
@@ -298,6 +306,13 @@ export type ServerFrame =
 			stats: WireStats | null;
 			/** agent 自建面板（柱 2）：当前活跃面板全量（页签序） */
 			panels: RpPanel[];
+			/** 旁路助手（/btw）配置与当前内存草稿快照 */
+			btw?: {
+				name: string;
+				avatar?: string;
+				streaming: boolean;
+				messages: WireBtwMsg[];
+			};
 			/**
 			 * 一档卡皮肤(与 GET /api/cardfront 同源)。
 			 * 随 hello 同步下发,保证首屏消息与规则同帧到达——避免 REST 缓存/竞态导致 StatusBlock 回落统一面板。
@@ -346,6 +361,10 @@ export type ServerFrame =
 	| { type: "screenshot"; id: string; file?: string }
 	/** 在线更新状态变化（发现新版/下载进度/就绪）：全量状态推送 */
 	| { type: "update"; update: UpdateWire }
+	| { type: "btw_user"; text: string }
+	| { type: "btw_state"; state: "start" | "end" | "clear"; aborted?: boolean; error?: string }
+	| { type: "btw_delta"; kind: "text" | "thinking"; delta: string }
+	| { type: "btw_tool"; detail: string }
 	| { type: "error"; text: string };
 
 /** Client → Server 帧 */

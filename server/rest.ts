@@ -138,6 +138,7 @@ import {
 } from "../src/preset-doc.ts";
 import {
 	agentRulesPath,
+	btwRulesPath,
 	cardRulesPath,
 	globalRulesPath,
 	readUserRules,
@@ -517,6 +518,8 @@ const CONFIG_EDITABLE = new Set([
 	"creationMode",
 	"sideModel",
 	"compactEveryNTurns",
+	"btwName",
+	"btwAvatar",
 ]);
 
 export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown>): RpConfig {
@@ -3277,6 +3280,18 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			case "POST /api/personas/avatar": {
 				const id = (query.get("id") ?? "").trim();
 				if (!id) throw new Error(t("缺少 id"));
+				if (id === "__btw__") {
+					const data = await readBodyRaw(req, 8 * 1024 * 1024);
+					const rel = "assets/personas/__btw__.png"; // i18n-ignore
+					const abs = resolvePath(host.cwd, rel);
+					mkdirSync(dirname(abs), { recursive: true });
+					writeFileSync(abs, data);
+					const nextCfg = applyConfigPatch(loadConfig(host.cwd), { btwAvatar: rel });
+					writeJsonWithBackup(configPath(host.cwd), nextCfg);
+					await host.softRefreshConfig();
+					sendJson(res, 200, { ok: true, avatar: rel });
+					return true;
+				}
 				const store = loadPersonas(host.cwd);
 				if (!findPersona(store, id)) throw new Error(t("身份不存在"));
 				const data = await readBodyRaw(req, 8 * 1024 * 1024); // 裁后头像上限 8MB
@@ -3290,14 +3305,13 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			case "GET /api/personas/avatar": {
 				const id = (query.get("id") ?? "").trim();
 				if (!id) throw new Error(t("缺少 id"));
-				const store = loadPersonas(host.cwd);
-				const p = findPersona(store, id);
-				if (!p?.avatar) {
+				const avatarRel = id === "__btw__" ? loadConfig(host.cwd).btwAvatar : findPersona(loadPersonas(host.cwd), id)?.avatar;
+				if (!avatarRel) {
 					res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
 					res.end(JSON.stringify({ error: t("无头像") }));
 					return true;
 				}
-				const abs = resolvePath(host.cwd, p.avatar);
+				const abs = resolvePath(host.cwd, avatarRel);
 				if (!existsSync(abs)) {
 					res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
 					res.end(JSON.stringify({ error: t("头像文件缺失") }));
@@ -3334,6 +3348,18 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			case "DELETE /api/personas/avatar": {
 				const id = (query.get("id") ?? "").trim();
 				if (!id) throw new Error(t("缺少 id"));
+				if (id === "__btw__") {
+					const cfg = loadConfig(host.cwd);
+					if (cfg.btwAvatar) {
+						const abs = resolvePath(host.cwd, cfg.btwAvatar);
+						try { if (existsSync(abs)) unlinkSync(abs); } catch { /* ignore */ }
+					}
+					const nextCfg = applyConfigPatch(cfg, { btwAvatar: "" });
+					writeJsonWithBackup(configPath(host.cwd), nextCfg);
+					await host.softRefreshConfig();
+					sendJson(res, 200, { ok: true });
+					return true;
+				}
 				const store = loadPersonas(host.cwd);
 				if (!findPersona(store, id)) throw new Error(t("身份不存在"));
 				const next = clearPersonaAvatar(host.cwd, store, id);
@@ -3527,6 +3553,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				sendJson(res, 200, {
 					global: { content: readGlobalSlot(globalRulesPath(), "APPEND_SYSTEM.md"), path: globalRulesPath() },
 					agent: { content: readGlobalSlot(agentRulesPath(), "AGENT_APPEND_SYSTEM.md"), path: agentRulesPath() },
+					btw: { content: readGlobalSlot(btwRulesPath(), "BTW_APPEND_SYSTEM.md"), path: btwRulesPath() },
 					card: { content: rules.card, path: cardRulesPath(cardDir), cardName: config.displayName ?? basename(config.card).replace(/\.(png|json)$/i, "") },
 					system: { content: readGlobalSlot(systemPromptPath(), "SYSTEM.md"), path: systemPromptPath() },
 				});
@@ -3547,13 +3574,16 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				} else if (body.scope === "agent") {
 					abs = agentRulesPath();
 					mkdirSync(rulesAgentDir(), { recursive: true });
+				} else if (body.scope === "btw") {
+					abs = btwRulesPath();
+					mkdirSync(rulesAgentDir(), { recursive: true });
 				} else if (body.scope === "card") {
 					const cardDir = dirname(resolvePath(host.cwd, config.card));
 					mkdirSync(cardDir, { recursive: true });
 					abs = cardRulesPath(cardDir);
 					syncBackFromCardPrompts(host.cwd, "card", body.content);
 				} else {
-					throw new Error(t("scope 必须是 system、global、agent 或 card"));
+					throw new Error(t("scope 必须是 system、global、agent、btw 或 card"));
 				}
 				writeFileSync(abs, body.content, "utf8");
 				await host.softRefreshConfig();

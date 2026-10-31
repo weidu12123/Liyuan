@@ -176,6 +176,10 @@ export interface RpConfig {
 	sandboxAllow?: string[];
 	/** 工作模式沙箱：本卡永久免问的 bash 命令前缀（归一化形态；默认首词，可在 卡.json 里改窄成 `git status`） */
 	sandboxBashAllow?: string[];
+	/** 旁路助手显示名称（缺省为「助手」；用于 @名称 唤出与内联卡片展示） */
+	btwName?: string;
+	/** 旁路助手头像相对路径（如 assets/personas/btw.png） */
+	btwAvatar?: string;
 }
 
 export const DEFAULT_CONFIG: RpConfig = {

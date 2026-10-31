@@ -7,15 +7,19 @@ import { useEffect, useRef, useState } from "react";
 import {
 	apiDelete,
 	apiGet,
+	apiGetCacheClear,
 	apiPost,
 	apiPut,
 	personaAvatarUrl,
 	type PersonaInfo,
 	type PersonasResponse,
+	type RpConfigView,
+	type RulesResponse,
+	type RulesSaveResponse,
 } from "../api.ts";
 import { IconPlus, IconTrash } from "./icons.tsx";
 import { AvatarCropModal } from "./AvatarCropModal.tsx";
-import { ConfirmButton, PanelStatus, Toggle, useAction, usePanelData } from "./kit.tsx";
+import { bumpWatchPanels, ConfirmButton, PanelStatus, Toggle, useAction, usePanelData } from "./kit.tsx";
 import { t } from "../i18n/index.ts";
 
 function PersonaAvatar({
@@ -415,6 +419,261 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 						</div>
 					)}
 				</>
+			)}
+		</div>
+	);
+}
+
+export function BtwRolePanel({
+	toast,
+	onProfileChange,
+}: {
+	toast: (level: "info" | "warning" | "error", text: string) => void;
+	onProfileChange?: (profile: { name: string; avatar?: string; bust: number }) => void;
+}) {
+	const cfg = usePanelData(() => apiGet<{ config: RpConfigView }>("/api/config"), { cacheKey: "/api/config", watchPanels: true });
+	const rules = usePanelData(() => apiGet<RulesResponse>("/api/rules"), { cacheKey: "/api/rules", watchAgent: true, watchPanels: true });
+	const { busy, run } = useAction(toast);
+
+	const btwName = cfg.data?.config.btwName?.trim() || t("助手");
+	const btwAvatar = cfg.data?.config.btwAvatar;
+	const promptText = rules.data?.btw?.content ?? "";
+
+	const [editingName, setEditingName] = useState(false);
+	const [nameDraft, setNameDraft] = useState("");
+	const [editingPrompt, setEditingPrompt] = useState(false);
+	const [promptDraft, setPromptDraft] = useState("");
+	const [avatarBust, setAvatarBust] = useState(0);
+	const fileRef = useRef<HTMLInputElement>(null);
+	const [cropFile, setCropFile] = useState<File | null>(null);
+	const [uploading, setUploading] = useState(false);
+
+	useEffect(() => {
+		if (!editingPrompt) setPromptDraft(promptText);
+	}, [promptText, editingPrompt]);
+
+	const saveName = () =>
+		run(async () => {
+			const trimmed = nameDraft.trim() || t("助手");
+			await apiPut("/api/config", { btwName: trimmed });
+			setEditingName(false);
+			apiGetCacheClear("/api/config");
+			cfg.reload();
+			bumpWatchPanels();
+			onProfileChange?.({ name: trimmed, avatar: btwAvatar, bust: avatarBust });
+		}, t("已保存"));
+
+	const savePrompt = () =>
+		run(async () => {
+			const r = await apiPut<RulesSaveResponse>("/api/rules", { scope: "btw", content: promptDraft });
+			setEditingPrompt(false);
+			apiGetCacheClear("/api/rules");
+			rules.reload();
+			bumpWatchPanels();
+			toast("info", t("已保存（{n} 字），下一拍生效", { n: r.chars.toLocaleString() }));
+		});
+
+	const onPickFile = (file: File | undefined) => {
+		if (!file) return;
+		if (!/^image\/(png|jpeg|jpg|webp|gif)$/i.test(file.type) && !/\.(png|jpe?g|webp|gif)$/i.test(file.name)) {
+			toast("error", t("请选择图片文件（PNG / JPG / WebP）"));
+			return;
+		}
+		setCropFile(file);
+	};
+
+	const uploadCropped = async (blob: Blob) => {
+		setUploading(true);
+		try {
+			const res = await fetch("/api/personas/avatar?id=__btw__", {
+				method: "POST",
+				headers: { "content-type": "image/png" },
+				body: blob,
+			});
+			const resData = (await res.json().catch(() => ({}))) as { error?: string; avatar?: string };
+			if (!res.ok || resData.error) throw new Error(resData.error || t("上传失败（HTTP {status}）", { status: res.status }));
+			const nextBust = Date.now();
+			setCropFile(null);
+			setAvatarBust(nextBust);
+			apiGetCacheClear("/api/config");
+			cfg.reload();
+			bumpWatchPanels();
+			onProfileChange?.({ name: btwName, avatar: resData.avatar || "assets/personas/__btw__.png", bust: nextBust });
+			toast("info", t("头像已更新"));
+		} catch (e) {
+			toast("error", e instanceof Error ? e.message : String(e));
+		} finally {
+			setUploading(false);
+		}
+	};
+
+	const clearAvatar = () =>
+		run(async () => {
+			await apiDelete("/api/personas/avatar?id=__btw__");
+			const nextBust = Date.now();
+			setAvatarBust(nextBust);
+			apiGetCacheClear("/api/config");
+			cfg.reload();
+			bumpWatchPanels();
+			onProfileChange?.({ name: btwName, avatar: undefined, bust: nextBust });
+		}, t("已清除头像"));
+
+	return (
+		<div className="panel-body rc-panel-body">
+			{cropFile && (
+				<AvatarCropModal
+					file={cropFile}
+					busy={uploading}
+					onCancel={() => !uploading && setCropFile(null)}
+					onConfirm={(blob) => void uploadCropped(blob)}
+				/>
+			)}
+			<input
+				ref={fileRef}
+				type="file"
+				accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp"
+				hidden
+				onChange={(e) => {
+					onPickFile(e.target.files?.[0]);
+					e.target.value = "";
+				}}
+			/>
+			<PanelStatus loading={cfg.loading || rules.loading} error={cfg.error || rules.error} hasData={!!cfg.data && !!rules.data} />
+			{cfg.data && rules.data && (
+				<div className="rc-dossier">
+					<section className="rc-hero-card">
+						<div className="rc-hero-main">
+							<PersonaAvatar p={{ id: "__btw__", name: btwName, avatar: btwAvatar }} bust={avatarBust} size="lg" />
+							<div className="rc-hero-info">
+								{!editingName ? (
+									<div className="rc-hero-head-row">
+										<h3 className="rc-hero-name" title={btwName}>{btwName}</h3>
+										<button
+											type="button"
+											className="rc-link-btn"
+											onClick={() => {
+												setNameDraft(btwName);
+												setEditingName(true);
+											}}
+											title={t("在输入框输入 @{name} 即可唤出旁路助手", { name: btwName })}
+										>
+											{t("编辑")}
+										</button>
+									</div>
+								) : (
+									<div className="rc-display-edit">
+										<input
+											className="rc-inline-input"
+											value={nameDraft}
+											autoFocus
+											onChange={(e) => setNameDraft(e.target.value)}
+											onKeyDown={(e) => {
+												if (e.key === "Enter" && nameDraft.trim()) void saveName();
+												if (e.key === "Escape") setEditingName(false);
+											}}
+										/>
+										<button
+											type="button"
+											className="rc-btn rc-btn-primary"
+											disabled={busy || !nameDraft.trim()}
+											onClick={() => void saveName()}
+										>
+											{t("保存")}
+										</button>
+										<button type="button" className="rc-btn" onClick={() => setEditingName(false)}>
+											{t("取消")}
+										</button>
+									</div>
+								)}
+
+								<div className="up-avatar-row">
+									<button
+										type="button"
+										className="rc-btn"
+										disabled={busy || uploading}
+										onClick={() => fileRef.current?.click()}
+										title={t("从相册选图 → 拖动/缩放裁剪 → 保存为圆形头像")}
+									>
+										{btwAvatar ? t("更换头像") : t("导入头像")}
+									</button>
+									{btwAvatar && (
+										<button
+											type="button"
+											className="rc-btn"
+											disabled={busy || uploading}
+											onClick={() => void clearAvatar()}
+										>
+											{t("清除头像")}
+										</button>
+									)}
+								</div>
+							</div>
+						</div>
+
+						<div className="rc-hero-foot">
+							<span className="rc-skin-toggle">
+								{t("在输入框输入 @{name} 即可向助手提问或下达指令（与「提示词」板块同步）", { name: btwName })}
+							</span>
+						</div>
+					</section>
+
+					<section className="rc-sheet-card">
+						<div className="rc-sheet-pane">
+							<div className="rc-field-subhead">
+								<span className="up-sheet-title">
+									{t("身份提示词")}
+									<span className="rc-char-count" style={{ marginLeft: 6 }}>
+										{promptText.trim() ? t("（{n} 字）", { n: promptText.length }) : t("（空）")}
+									</span>
+								</span>
+								{!editingPrompt && (
+									<button
+										type="button"
+										className="rc-link-btn"
+										onClick={() => {
+											setPromptDraft(promptText);
+											setEditingPrompt(true);
+										}}
+									>
+										{t("编辑")}
+									</button>
+								)}
+							</div>
+
+							{editingPrompt ? (
+								<div className="rc-editor-box">
+									<textarea
+										className="panel-search ta"
+										rows={12}
+										placeholder={t("助手的身份定位、点评风格与工作边界（BTW_APPEND_SYSTEM.md，留空自动回退默认）")}
+										value={promptDraft}
+										onChange={(e) => setPromptDraft(e.target.value)}
+									/>
+									<div className="rc-editor-actions">
+										<button
+											type="button"
+											className="rc-btn rc-btn-primary"
+											disabled={busy}
+											onClick={() => void savePrompt()}
+										>
+											{t("保存")}
+										</button>
+										<button
+											type="button"
+											className="rc-btn"
+											disabled={busy}
+											onClick={() => setEditingPrompt(false)}
+										>
+											{t("取消")}
+										</button>
+									</div>
+								</div>
+							) : (
+								<div className="rc-prose">{promptText}</div>
+							)}
+						</div>
+					</section>
+				</div>
 			)}
 		</div>
 	);

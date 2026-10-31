@@ -46,7 +46,7 @@ import {
 	type PromptEntry,
 } from "../../../src/prompt-entries.ts";
 
-export type PromptScope = "system" | "global" | "agent" | "card" | "agents";
+export type PromptScope = "system" | "global" | "agent" | "btw" | "card" | "agents";
 
 export type PresetEditTarget =
 	| {
@@ -102,6 +102,13 @@ const GLOBAL_PROMPT_SLOTS: PromptSlotMeta[] = [
 		effect: "beat",
 		hint: () => t("写作模式全局常驻系统提示词（AGENT_APPEND_SYSTEM.md），对所有写作模式项目生效。"),
 	},
+	{
+		scope: "btw",
+		title: () => t("助手系统提示词"),
+		file: "BTW_APPEND_SYSTEM.md", // i18n-ignore
+		effect: "beat",
+		hint: () => t("扮演模式旁路助手的系统提示词（BTW_APPEND_SYSTEM.md），与「角色 → 助手」中的身份提示词同步。"),
+	},
 ];
 
 const LOCAL_PROMPT_SLOTS: PromptSlotMeta[] = [
@@ -136,6 +143,7 @@ function contentOfScope(
 	if (scope === "system") return rulesData.system?.content ?? "";
 	if (scope === "global") return rulesData.global?.content ?? "";
 	if (scope === "agent") return rulesData.agent?.content ?? "";
+	if (scope === "btw") return rulesData.btw?.content ?? "";
 	return rulesData.card?.content ?? "";
 }
 
@@ -189,7 +197,7 @@ export function PresetPanel({
 	onChangeEditorTarget?: (target: PresetEditTarget | null) => void;
 }) {
 	const files = usePanelData(() => apiGet<PresetsResponse>("/api/presets"), { cacheKey: "/api/presets", watchAgent: true });
-	const rules = usePanelData(() => apiGet<RulesResponse>("/api/rules"), { cacheKey: "/api/rules", watchAgent: true });
+	const rules = usePanelData(() => apiGet<RulesResponse>("/api/rules"), { cacheKey: "/api/rules", watchAgent: true, watchPanels: true });
 	const agents = usePanelData(() => apiGet<CardAgentsResponse>("/api/card-agents"), { cacheKey: "/api/card-agents", watchAgent: true });
 	const { busy, run } = useAction(toast);
 
@@ -199,6 +207,7 @@ export function PresetPanel({
 		system: false,
 		global: false,
 		agent: false,
+		btw: false,
 		card: false,
 		agents: false,
 	});
@@ -1408,7 +1417,7 @@ function PromptSlotEditorSubPane({
 	onClose: () => void;
 	toast: (level: "info" | "warning" | "error", text: string) => void;
 }) {
-	const rules = usePanelData(() => apiGet<RulesResponse>("/api/rules"), { cacheKey: "/api/rules", watchAgent: true });
+	const rules = usePanelData(() => apiGet<RulesResponse>("/api/rules"), { cacheKey: "/api/rules", watchAgent: true, watchPanels: true });
 	const agents = usePanelData(() => apiGet<CardAgentsResponse>("/api/card-agents"), { cacheKey: "/api/card-agents", watchAgent: true });
 	const { busy, run } = useAction(toast);
 

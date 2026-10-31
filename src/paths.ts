@@ -360,6 +360,13 @@ export function seedStageSystemPrompt(cwd: string, agentDir: string): void {
 			copyFileSync(shipped("AGENT_APPEND_SYSTEM.md"), agentAppendTarget);
 			lastAgentMergeLog.push(`已播种 agent 模式定义默认值 AGENT_APPEND_SYSTEM.md → ${agentAppendTarget}`);
 		}
+
+		// 旁路助手（/btw）的追加槽：同一规则，缺失才播种
+		const btwAppendTarget = join(agentDir, "BTW_APPEND_SYSTEM.md");
+		if (!existsSync(btwAppendTarget) && existsSync(shipped("BTW_APPEND_SYSTEM.md"))) {
+			copyFileSync(shipped("BTW_APPEND_SYSTEM.md"), btwAppendTarget);
+			lastAgentMergeLog.push(`已播种旁路助手定义默认值 BTW_APPEND_SYSTEM.md → ${btwAppendTarget}`);
+		}
 	} catch (err) {
 		console.error(`[liyuan] 播种提示词槽位失败：${err instanceof Error ? err.message : String(err)}`);
 	}

@@ -71,8 +71,6 @@ export const lore: Record<string, string> = {
 	"查看条目：{path}": "View entries: {path}",
 	"{n} 条条目": "{n} entry|{n} entries",
 	"已挂": "mounted",
-	"agent 补充设定": "Agent additions",
-	"按卡自动": "per card, automatic",
 	"还没有世界书——可以「＋ 新建」自己写，也可以导入 JSON": "No lorebooks yet. Write your own with “+ New”, or import a JSON file",
 	"书名": "Book name",
 	"文件名同名；建完可直接加条目": "Used as the file name; add entries right after creating",

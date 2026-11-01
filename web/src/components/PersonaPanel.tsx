@@ -14,8 +14,6 @@ import {
 	type PersonaInfo,
 	type PersonasResponse,
 	type RpConfigView,
-	type RulesResponse,
-	type RulesSaveResponse,
 } from "../api.ts";
 import { IconPlus, IconTrash } from "./icons.tsx";
 import { AvatarCropModal } from "./AvatarCropModal.tsx";
@@ -424,6 +422,27 @@ export function PersonaPanel({ toast }: { toast: (level: "info" | "warning" | "e
 	);
 }
 
+const BTW_PERSONA_TEMPLATES = [
+	{
+		id: "sharp",
+		label: () => t("犀利搭子"),
+		content:
+			"你是用户的看戏搭子与幕后共创朋友，和用户站在同一边聊戏。\n眼光敏锐、直率真诚，有一说一，不端着架子也不说客服套话。\n用自然直接的聊天口吻交流，不用括号或星号演动作旁白；闲聊吐槽时简短利落，拆解剧情或查改设定时条理清晰、直奔重点。", // i18n-ignore：模型提示词模板
+	},
+	{
+		id: "gentle",
+		label: () => t("温柔共创"),
+		content:
+			"你是陪伴用户沉浸看戏与共创故事的贴心搭子，温柔真诚、善解人意。\n无论用户想吐槽剧情、放飞脑洞还是微调设定，都会温和接住并捕捉其中的闪光点往下推演。\n用自然亲切的聊天口吻交流，不用括号或星号演动作旁白，聊起天来轻松温暖、细致周到。", // i18n-ignore：模型提示词模板
+	},
+	{
+		id: "scholar",
+		label: () => t("严谨考据"),
+		content:
+			"你是本局故事的幕后设定顾问与世界观考据搭档，逻辑严密、实事求是。\n对时间线冲突、人物弧光与设定前后一致性极其敏锐；说话干脆利落不讲废话，擅长把零散灵感整理成结构严密的设定与大纲。", // i18n-ignore：模型提示词模板
+	},
+] as const;
+
 export function BtwRolePanel({
 	toast,
 	onProfileChange,
@@ -432,12 +451,12 @@ export function BtwRolePanel({
 	onProfileChange?: (profile: { name: string; avatar?: string; bust: number }) => void;
 }) {
 	const cfg = usePanelData(() => apiGet<{ config: RpConfigView }>("/api/config"), { cacheKey: "/api/config", watchPanels: true });
-	const rules = usePanelData(() => apiGet<RulesResponse>("/api/rules"), { cacheKey: "/api/rules", watchAgent: true, watchPanels: true });
 	const { busy, run } = useAction(toast);
 
 	const btwName = cfg.data?.config.btwName?.trim() || t("助手");
 	const btwAvatar = cfg.data?.config.btwAvatar;
-	const promptText = rules.data?.btw?.content ?? "";
+	const savedPersona = cfg.data?.config.btwPersona?.trim() ?? "";
+	const effectivePersona = savedPersona || BTW_PERSONA_TEMPLATES[0].content;
 
 	const [editingName, setEditingName] = useState(false);
 	const [nameDraft, setNameDraft] = useState("");
@@ -449,8 +468,8 @@ export function BtwRolePanel({
 	const [uploading, setUploading] = useState(false);
 
 	useEffect(() => {
-		if (!editingPrompt) setPromptDraft(promptText);
-	}, [promptText, editingPrompt]);
+		if (!editingPrompt) setPromptDraft(effectivePersona);
+	}, [effectivePersona, editingPrompt]);
 
 	const saveName = () =>
 		run(async () => {
@@ -463,14 +482,15 @@ export function BtwRolePanel({
 			onProfileChange?.({ name: trimmed, avatar: btwAvatar, bust: avatarBust });
 		}, t("已保存"));
 
-	const savePrompt = () =>
+	const savePersonaText = (text: string) =>
 		run(async () => {
-			const r = await apiPut<RulesSaveResponse>("/api/rules", { scope: "btw", content: promptDraft });
+			const trimmed = text.trim();
+			await apiPut("/api/config", { btwPersona: trimmed });
 			setEditingPrompt(false);
-			apiGetCacheClear("/api/rules");
-			rules.reload();
+			apiGetCacheClear("/api/config");
+			cfg.reload();
 			bumpWatchPanels();
-			toast("info", t("已保存（{n} 字），下一拍生效", { n: r.chars.toLocaleString() }));
+			toast("info", t("已保存"));
 		});
 
 	const onPickFile = (file: File | undefined) => {
@@ -538,8 +558,8 @@ export function BtwRolePanel({
 					e.target.value = "";
 				}}
 			/>
-			<PanelStatus loading={cfg.loading || rules.loading} error={cfg.error || rules.error} hasData={!!cfg.data && !!rules.data} />
-			{cfg.data && rules.data && (
+			<PanelStatus loading={cfg.loading} error={cfg.error} hasData={!!cfg.data} />
+			{cfg.data && (
 				<div className="rc-dossier">
 					<section className="rc-hero-card">
 						<div className="rc-hero-main">
@@ -612,7 +632,7 @@ export function BtwRolePanel({
 
 						<div className="rc-hero-foot">
 							<span className="rc-skin-toggle">
-								{t("在输入框输入 @{name} 即可向助手提问或下达指令（与「提示词」板块同步）", { name: btwName })}
+								{t("在输入框输入 @{name} 即可唤出旁路助手", { name: btwName })}
 							</span>
 						</div>
 					</section>
@@ -621,9 +641,9 @@ export function BtwRolePanel({
 						<div className="rc-sheet-pane">
 							<div className="rc-field-subhead">
 								<span className="up-sheet-title">
-									{t("身份提示词")}
+									{t("性格设定")}
 									<span className="rc-char-count" style={{ marginLeft: 6 }}>
-										{promptText.trim() ? t("（{n} 字）", { n: promptText.length }) : t("（空）")}
+										{t("（{n} 字）", { n: effectivePersona.length })}
 									</span>
 								</span>
 								{!editingPrompt && (
@@ -631,7 +651,7 @@ export function BtwRolePanel({
 										type="button"
 										className="rc-link-btn"
 										onClick={() => {
-											setPromptDraft(promptText);
+											setPromptDraft(effectivePersona);
 											setEditingPrompt(true);
 										}}
 									>
@@ -640,12 +660,35 @@ export function BtwRolePanel({
 								)}
 							</div>
 
+							<div className="up-avatar-row" style={{ marginBottom: 10 }}>
+								{BTW_PERSONA_TEMPLATES.map((tpl) => {
+									const isCurrent = effectivePersona.trim() === tpl.content.trim();
+									return (
+										<button
+											key={tpl.id}
+											type="button"
+											className={`rc-btn ${isCurrent ? "rc-btn-primary" : ""}`}
+											disabled={busy}
+											onClick={() => {
+												if (editingPrompt) {
+													setPromptDraft(tpl.content);
+												} else {
+													void savePersonaText(tpl.content);
+												}
+											}}
+										>
+											{tpl.label()}
+										</button>
+									);
+								})}
+							</div>
+
 							{editingPrompt ? (
 								<div className="rc-editor-box">
 									<textarea
 										className="panel-search ta"
-										rows={12}
-										placeholder={t("助手的身份定位、点评风格与工作边界（BTW_APPEND_SYSTEM.md，留空自动回退默认）")}
+										rows={8}
+										placeholder={t("助手的性格特点、说话口吻与点评风格（留空恢复默认性格）")}
 										value={promptDraft}
 										onChange={(e) => setPromptDraft(e.target.value)}
 									/>
@@ -654,7 +697,7 @@ export function BtwRolePanel({
 											type="button"
 											className="rc-btn rc-btn-primary"
 											disabled={busy}
-											onClick={() => void savePrompt()}
+											onClick={() => void savePersonaText(promptDraft)}
 										>
 											{t("保存")}
 										</button>
@@ -669,7 +712,7 @@ export function BtwRolePanel({
 									</div>
 								</div>
 							) : (
-								<div className="rc-prose">{promptText}</div>
+								<div className="rc-prose">{effectivePersona}</div>
 							)}
 						</div>
 					</section>

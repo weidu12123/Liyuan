@@ -8,7 +8,7 @@ import { chatModeOfSessionDir, createChat } from "../src/cardspace.ts";
 import { CONVERSATION_PROCESS_TYPE } from "../src/conversation-mode.ts";
 import { collectChatEvidence, loadManifest, memoryPaths, saveManifest } from "../src/card-memory.ts";
 import { listCardMemory } from "../src/card-memory-tools.ts";
-import { harnessManagedPath, sandboxScope, sandboxVerdict } from "../src/sandbox.ts";
+import { filterSandboxResultText, harnessManagedPath, sandboxScope, sandboxVerdict } from "../src/sandbox.ts";
 import { buildAgentStateBlock } from "../src/stage/agent.ts";
 import { SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
 import { historyTokens, planCompaction } from "../src/stage/compact.ts";
@@ -233,12 +233,42 @@ test("多项目物理隔离：第二个项目绝对禁止读取或修改第一�
 		// 列出对话总根（探测其他项目）：拒绝
 		assert.equal(sandboxVerdict("ls", { path: join(cardDir, "对话") }, scope2, grants).kind, "deny");
 
-		// 读写 chat2 自己的正文：放行
+		// 读写 chat2 自己的正文与项目记忆资产：放行
 		assert.equal(sandboxVerdict("read", { path: join(chat2.dir, "正文", "001-长街.md") }, scope2, grants).kind, "allow");
 		assert.equal(sandboxVerdict("write", { path: join(chat2.dir, "正文", "002-夜雨.md") }, scope2, grants).kind, "allow");
+		assert.equal(sandboxVerdict("write", { path: join(chat2.dir, "记忆", "大纲.md") }, scope2, grants).kind, "allow");
+
+		// 读写已废除的卡根目录 记忆/：一律拒绝并引导至当前项目的 记忆/
+		assert.equal(sandboxVerdict("read", { path: join(cardDir, "记忆", "记忆.md") }, scope2, grants).kind, "deny");
+		assert.equal(sandboxVerdict("write", { path: join(cardDir, "记忆", "大纲.md") }, scope2, grants).kind, "deny");
 
 		// 读卡级公共配置（卡本体）：放行
 		assert.equal(sandboxVerdict("read", { path: join(cardDir, "某卡.json") }, scope2, grants).kind, "allow");
+
+		// 从卡根目录调用 ls / find / grep 时，结果过滤自动剥离其他子项目与旧卡根 记忆/，保留本卡公共文件与当前子项目
+		const lsFiltered = filterSandboxResultText(
+			"ls",
+			{ path: "cards/某卡" },
+			"某卡.json\nAGENTS.md\n对话/\n记忆/\n创作/",
+			scope2,
+		);
+		assert.equal(lsFiltered, "某卡.json\nAGENTS.md\n创作/");
+
+		const findFiltered = filterSandboxResultText(
+			"find",
+			{ path: "cards/某卡" },
+			`某卡.json\n对话/${chat1.id}/正文/001-初雪.md\n对话/${chat2.id}/正文/001-长街.md\n记忆/常驻摘要.md`,
+			scope2,
+		);
+		assert.equal(findFiltered, `某卡.json\n对话/${chat2.id}/正文/001-长街.md`);
+
+		const grepFiltered = filterSandboxResultText(
+			"grep",
+			{ path: "cards/某卡" },
+			`对话/${chat1.id}/正文/001-初雪.md:1: 项目1机密\n对话/${chat1.id}/正文/001-初雪.md-2- 上下文\n对话/${chat2.id}/正文/001-长街.md:1: 项目2公开\n记忆/记忆.md:3: 旧卡根记忆`,
+			scope2,
+		);
+		assert.equal(grepFiltered, `对话/${chat2.id}/正文/001-长街.md:1: 项目2公开`);
 
 		// 状态块装配：chat2 的状态块只带 chat2 的正文，无 residentSummary 时绝不出跨项目前情
 		const block2 = buildAgentStateBlock({ state: defaultState(), files: listStoryFiles(join(chat2.dir, "正文")) });

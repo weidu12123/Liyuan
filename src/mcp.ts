@@ -623,6 +623,7 @@ export class McpHub {
 	readonly cwd: string;
 	private live = new Map<string, LiveConnection>();
 	private syncing: Promise<void> | null = null;
+	private generation = 0;
 	/** 本会话启用的 id（agent 绑定对话） */
 	private sessionEnabled: string[] = [];
 
@@ -632,6 +633,22 @@ export class McpHub {
 
 	getSessionEnabled(): string[] {
 		return [...this.sessionEnabled];
+	}
+
+	/**
+	 * 仅更新本会话启用集并返回当前已就绪的工具（同步、零 I/O，不触发子进程启停）。
+	 * 供 session_start / session_tree 立即挂载已连接工具，随后再后台 sync 未连接的服务器。
+	 */
+	setSessionEnabled(sessionEnabled: string[]): McpToolDescriptor[] {
+		this.sessionEnabled = [...new Set(sessionEnabled.map(sanitizeServerId).filter(Boolean))];
+		return this.listActiveTools();
+	}
+
+	/** 显式断开单个 MCP 服务器连接（用户手动关闭或删除服务器时调用） */
+	async disconnect(id: string): Promise<void> {
+		const sid = sanitizeServerId(id);
+		if (!sid) return;
+		await this.drop(sid);
 	}
 
 	/**
@@ -656,23 +673,33 @@ export class McpHub {
 	}
 
 	private async doSync(): Promise<void> {
+		const catalog = discoverMcpCatalog(this.cwd);
+		const catalogById = new Map(catalog.map((e) => [e.id, e]));
 		const wantList = resolveSessionServers(this.cwd, this.sessionEnabled);
 		const want = new Map(wantList.map((s) => [s.id, s]));
 
+		// 仅当服务器从目录移除或 endpoint 配置发生变化时才断开连接；
+		// 切换会话导致某服务器暂不在本会话启用集时保留热连接（listActiveTools/statusList 已按 sessionEnabled 过滤），
+		// 避免跨会话切换时反复杀死并重拉 MCP 子进程造成数秒卡顿。
 		for (const [id, conn] of [...this.live.entries()]) {
-			const next = want.get(id);
-			if (!next || !sameEndpoint(conn.config, next)) {
+			const catEntry = catalogById.get(id);
+			if (!catEntry || !sameEndpoint(conn.config, catEntry)) {
 				await this.drop(id);
 			}
 		}
 
+		const toConnect: McpServerConfig[] = [];
 		for (const [id, server] of want) {
 			if (this.live.has(id) && this.live.get(id)!.status === "connected") continue;
-			await this.connectOne(server);
+			toConnect.push(server);
+		}
+		if (toConnect.length > 0) {
+			await Promise.all(toConnect.map((server) => this.connectOne(server)));
 		}
 	}
 
 	private async connectOne(server: McpServerConfig): Promise<void> {
+		const gen = this.generation;
 		const v = validateServerConfig(server);
 		if (v) {
 			this.live.set(server.id, { config: server, client: null, tools: [], status: "error", error: v });
@@ -681,7 +708,23 @@ export class McpHub {
 		this.live.set(server.id, { config: server, client: null, tools: [], status: "connecting" });
 		try {
 			const { client } = await openConnection(server, 25_000);
+			if (this.generation !== gen) {
+				try {
+					await client.close();
+				} catch {
+					// ignore
+				}
+				return;
+			}
 			const listed = await withTimeout(client.listTools(), 15_000, "listTools 超时");
+			if (this.generation !== gen) {
+				try {
+					await client.close();
+				} catch {
+					// ignore
+				}
+				return;
+			}
 			const tools: McpToolDescriptor[] = (listed.tools ?? []).map((t) => ({
 				serverId: server.id,
 				serverName: server.name,
@@ -702,6 +745,7 @@ export class McpHub {
 			}
 			this.live.set(server.id, { config: server, client, tools, status: "connected" });
 		} catch (e) {
+			if (this.generation !== gen) return;
 			const msg = e instanceof Error ? e.message : String(e);
 			this.live.set(server.id, { config: server, client: null, tools: [], status: "error", error: msg });
 		}
@@ -720,8 +764,18 @@ export class McpHub {
 	}
 
 	async closeAll(): Promise<void> {
+		this.generation++;
+		const inflight = this.syncing;
 		for (const id of [...this.live.keys()]) await this.drop(id);
 		this.sessionEnabled = [];
+		if (inflight) {
+			try {
+				await inflight;
+			} catch {
+				// ignore
+			}
+			for (const id of [...this.live.keys()]) await this.drop(id);
+		}
 	}
 
 	listActiveTools(): McpToolDescriptor[] {

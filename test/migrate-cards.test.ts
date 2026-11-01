@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { appendSessionCardRebind, listCardSpaces, listChats, readChatMeta } from "../src/cardspace.ts";
+import { appendSessionCardRebind, createChat, listCardSpaces, listChatMarkdownAssets, listChats, readChatMeta, readChatSummary } from "../src/cardspace.ts";
 import { ensureStorySessionDir } from "../src/story-guide.ts";
 import { parseCardFromSessionHead, readSessionCardInfo } from "../src/session-scan.ts";
 import {
 	alreadyMigrated,
 	applyCardMigration,
 	chatIdFromSessionFile,
+	migrateLegacyCardMemoryToChatAssets,
 	planCardMigration,
 	planOrphanSessions,
 	promoteStagedCard,
@@ -391,3 +392,62 @@ test("readSessionCardInfo：重绑定行漂到文件中部（远超 64KB）也�
 		rmSync(sessionDir, { recursive: true, force: true });
 	}
 });
+
+test("migrateLegacyCardMemoryToChatAssets：旧卡根 记忆/局/<chatId>.md 与会话 rp-summary 迁入对应子项目资产，卡根 记忆/ 彻底清除", () => {
+	const { cwd, sessionDir } = mkProject();
+	try {
+		const cardDir = join(cwd, "cards", "大夏");
+		mkdirSync(cardDir, { recursive: true });
+		writeCard(join(cardDir, "daxia.json"), "大夏");
+		const chat1 = createChat(cardDir, { id: "20261010-225230-8ffd", mode: "agent", name: "旧局" });
+		const chat2 = createChat(cardDir, { id: "20261031-165646-06a8", name: "新局" });
+
+		// 在旧卡根 记忆/ 下写入局复盘与跨局汇总
+		const legacyMem = join(cardDir, "记忆");
+		mkdirSync(join(legacyMem, "局"), { recursive: true });
+		writeFileSync(join(legacyMem, "局", `${chat1.id}.md`), "# 剑破伪佛正储君位\n\n## 既定事实\n- 萧无缺入主未央宫。\n", "utf8");
+		writeFileSync(join(legacyMem, "常驻摘要.md"), "旧常驻摘要", "utf8");
+		writeFileSync(join(legacyMem, "记忆.md"), "旧手册", "utf8");
+
+		// 在旧局会话 .jsonl 中写入 rp-summary 与 lorebook_write 记录，并在 .liyuan-lore 下写入遗留设定集
+		mkdirSync(join(cwd, ".liyuan-lore"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".liyuan-lore", "大夏.json"),
+			JSON.stringify({
+				entries: [
+					{ uid: 9000, keys: ["大朝试"], comment: "剧情大纲：大朝试篇", content: "萧无缺大朝试夺魁。", constant: false, enabled: true },
+				],
+			}),
+			"utf8",
+		);
+		writeFileSync(
+			join(chat1.sessionsDir, "2026-10-10T14-52-30-960Z_01a1264d.jsonl"),
+			[
+				JSON.stringify({ type: "session", id: "s1" }),
+				JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "lorebook_write" }] } }),
+				JSON.stringify({ type: "custom", customType: "rp-summary", id: "sum1", data: { summary: "## 前情提要\n\n- 大朝试夺魁。" } }),
+			].join("\n") + "\n",
+			"utf8",
+		);
+
+		const log = migrateLegacyCardMemoryToChatAssets(cwd);
+		assert.ok(log.length >= 1, "产生了迁移日志");
+		assert.equal(existsSync(legacyMem), false, "卡根目录下的旧 记忆/ 已物理清除");
+		assert.equal(existsSync(join(cwd, ".liyuan-lore")), false, "旧 .liyuan-lore/ 已迁入项目资产并物理清除");
+
+		// 旧局 chat1 获得了 剧情复盘.md、补充设定.md、MEMORY.md 与 前情提要.md
+		const assets1 = listChatMarkdownAssets(chat1.dir).map((a) => a.relPath).sort();
+		assert.deepEqual(assets1, ["前情提要.md", "记忆/MEMORY.md", "记忆/剧情复盘.md", "记忆/补充设定.md"].sort());
+		assert.match(readFileSync(join(chat1.dir, "记忆", "MEMORY.md"), "utf8"), /\[剧情复盘\]\(剧情复盘\.md\) — 剑破伪佛正储君位/);
+		assert.match(readFileSync(join(chat1.dir, "记忆", "MEMORY.md"), "utf8"), /\[补充设定\]\(补充设定\.md\)/);
+		assert.match(readFileSync(join(chat1.dir, "记忆", "补充设定.md"), "utf8"), /剧情大纲：大朝试篇/);
+		assert.match(readChatSummary(chat1.dir) ?? "", /大朝试夺魁/);
+
+		// 新局 chat2 保持空白，不被旧局污染
+		assert.deepEqual(listChatMarkdownAssets(chat2.dir), []);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+		rmSync(sessionDir, { recursive: true, force: true });
+	}
+});
+

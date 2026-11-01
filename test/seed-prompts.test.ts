@@ -108,7 +108,7 @@ test("旁路助手追加槽：全新环境播种 BTW_APPEND_SYSTEM.md；用户�
 	try {
 		seedStageSystemPrompt(root, agentDir);
 		const btw = readFileSync(join(agentDir, "BTW_APPEND_SYSTEM.md"), "utf8");
-		assert.ok(btw.includes("# 旁路助手"), "旁路助手定义在 BTW_APPEND_SYSTEM.md");
+		assert.ok(btw.includes("# 身份与边界"), "旁路助手规则定义在 BTW_APPEND_SYSTEM.md");
 		assert.ok(btw.includes("【当前台前剧情】"), "说明台前视野块语义");
 		writeFileSync(join(agentDir, "BTW_APPEND_SYSTEM.md"), "毒舌副编剧风格。", "utf8");
 		seedStageSystemPrompt(root, agentDir);

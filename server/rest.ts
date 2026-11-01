@@ -107,7 +107,6 @@ import {
 	mergeEntries,
 	mountedLorebookPaths,
 	normalizeEntries,
-	overlayPathFor,
 	patchLorebookFileEntry,
 	searchEntries,
 	setMountedLorebooks,
@@ -520,6 +519,7 @@ const CONFIG_EDITABLE = new Set([
 	"compactEveryNTurns",
 	"btwName",
 	"btwAvatar",
+	"btwPersona",
 ]);
 
 export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown>): RpConfig {
@@ -611,11 +611,8 @@ function loadMergedLoreWithSource(
 		if (existsSync(abs)) fileGroups.push(loadLorebookFile(abs));
 	}
 	const fileEntries = mergeEntries(...fileGroups);
-	const overlayPath = overlayPathFor(cwd, card.name, config.card);
-	const overlayEntries = existsSync(overlayPath) ? loadLorebookFile(overlayPath) : [];
-	const fileSet = new Set(fileEntries.map((e) => e.content.trim()));
-	const entries = applyDisabledLore(mergeEntries(fileEntries, overlayEntries), config.disabledLore);
-	const sourceOf = (e: LorebookEntry): LoreSource => (fileSet.has(e.content.trim()) ? "file" : "agent");
+	const entries = applyDisabledLore(fileEntries, config.disabledLore);
+	const sourceOf = (_e: LorebookEntry): LoreSource => "file";
 	return { entries, sourceOf, cardName: card.name, paths };
 }
 
@@ -624,17 +621,16 @@ export function loadMergedLore(cwd: string, config: RpConfig): LorebookEntry[] {
 }
 
 /**
- * 导出用活跃世界书：挂载书 + 补充设定 + 卡原内嵌（指纹去重）+ 用户停用清单。
+ * 导出用活跃世界书：挂载书 + 卡原内嵌（指纹去重）+ 用户停用清单。
  * 即「改过角色卡/世界书之后」的创作态，便于分享回 ST / 再导入梨园。
  */
 export function collectActiveLoreForExport(cwd: string, config: RpConfig): CardExportEntry[] {
-	const card = loadCardFile(resolvePath(cwd, config.card));
 	const { raw } = readCardRawJson(resolvePath(cwd, config.card));
 	const data = (raw.data && typeof raw.data === "object" ? raw.data : raw) as Record<string, unknown>;
 	const book = data.character_book as { entries?: unknown } | undefined;
 	const embedded = loreEntriesForExport(book?.entries);
-	const paths = [...mountedLorebookPaths(config).map(p => resolvePath(cwd, p)), overlayPathFor(cwd, card.name, config.card)];
-	const active = mergeEntries(...paths.filter(p => existsSync(p)).map(p => {
+	const paths = mountedLorebookPaths(config).map((p) => resolvePath(cwd, p));
+	const active = mergeEntries(...paths.filter((p) => existsSync(p)).map((p) => {
 		const source = readJsonFile(p) as { entries?: unknown };
 		return loreEntriesForExport(source.entries, true);
 	})) as CardExportEntry[];
@@ -1641,16 +1637,13 @@ function relToCwd(cwd: string, abs: string): string {
  * （**不接受任意文件路径**——书单与面板展示同源，越界即报错）。
  */
 export function loreWriteTargets(cwd: string, config: RpConfig, scope?: string): string[] {
-	const card = loadCardFile(resolvePath(cwd, config.card));
-	const overlay = overlayPathFor(cwd, card.name, config.card);
 	const p = (scope ?? "").replace(/\\/g, "/").trim();
-	if (p === "agent") return [overlay];
 	const known = listLorebookFiles(cwd, config).map((b) => b.path);
 	if (p) {
 		if (!known.includes(p)) throw new Error(t("不是已知的世界书文件"));
 		return [resolvePath(cwd, p)];
 	}
-	return [...known.map((k) => resolvePath(cwd, k)), overlay];
+	return known.map((k) => resolvePath(cwd, k));
 }
 
 /**
@@ -1783,13 +1776,13 @@ export function createLorebookWithEntry(
 
 /** 合并语料及来源；内容指纹用于精确读取。 */
 export function loadMergedLoreMarked(cwd: string, config: RpConfig): Array<LorebookEntry & { agentWritten?: boolean; source?: string }> {
-	const { entries, sourceOf } = loadMergedLoreWithSource(cwd, config);
+	const { entries } = loadMergedLoreWithSource(cwd, config);
 	const sources = new Map<string, string>();
 	for (const rel of mountedLorebookPaths(config)) {
 		const abs = resolvePath(cwd, rel);
 		if (existsSync(abs)) for (const entry of loadLorebookFile(abs)) sources.set(loreFingerprint(entry.content), rel);
 	}
-	return entries.map((e) => ({ ...e, source: sources.get(loreFingerprint(e.content)) ?? t("补充设定集"), ...(sourceOf(e) === "agent" ? { agentWritten: true } : {}) }));
+	return entries.map((e) => ({ ...e, ...(sources.get(loreFingerprint(e.content)) ? { source: sources.get(loreFingerprint(e.content)) } : {}) }));
 }
 
 // ---------- persona 投影（PLAN-PANELS-V2 §2.5：config.userName/userPersona=当前 persona 的镜像） ----------
@@ -3150,14 +3143,6 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 						try {
 							rmSync(space.dir, { recursive: true, force: true });
 							deletedSessions += spaceChatCount;
-						} catch {
-							/* 不挡 */
-						}
-					}
-					const overlay = overlayPathFor(host.cwd, cardName, p);
-					if (existsSync(overlay)) {
-						try {
-							unlinkSync(overlay);
 						} catch {
 							/* 不挡 */
 						}
@@ -4663,7 +4648,6 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			case "GET /api/lorebook": {
 				const config = loadConfig(host.cwd);
 				const pathQ = (query.get("path") ?? "").replace(/\\/g, "/").trim();
-				const sourceQ = (query.get("source") ?? "").trim();
 				const mounted = mountedLorebookPaths(config);
 				const mapEntries = (entries: LorebookEntry[], source: LoreSource) =>
 					entries.map((e) => ({
@@ -4679,23 +4663,6 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 						source,
 						preview: previewText(e.content, 160),
 					}));
-
-				if (sourceQ === "agent") {
-					const card = loadCardFile(resolvePath(host.cwd, config.card));
-					const overlayPath = overlayPathFor(host.cwd, card.name, config.card);
-					const raw = existsSync(overlayPath) ? loadLorebookFile(overlayPath) : [];
-					const entries = applyDisabledLore(raw, config.disabledLore);
-					sendJson(res, 200, {
-						lorebookPath: null,
-						lorebookPaths: mounted,
-						viewPath: null,
-						viewSource: "agent" as const,
-						viewName: t("agent 补充设定"),
-						total: entries.length,
-						entries: mapEntries(entries, "agent"),
-					});
-					return true;
-				}
 
 				if (pathQ) {
 					const abs = resolvePath(host.cwd, pathQ);
@@ -4739,13 +4706,11 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			case "GET /api/lorebook/entry": {
 				const fp = query.get("fp") ?? "";
 				const config = loadConfig(host.cwd);
-				// 在全部库文件 + 补充设定里找（浏览未挂载书时也能展开正文）
-				const card = loadCardFile(resolvePath(host.cwd, config.card));
+				// 在全部库文件里找（浏览未挂载书时也能展开正文）
 				const candidates: Array<{ abs: string; source: LoreSource }> = [];
 				for (const b of listLorebookFiles(host.cwd, config)) {
 					candidates.push({ abs: resolvePath(host.cwd, b.path), source: "file" });
 				}
-				candidates.push({ abs: overlayPathFor(host.cwd, card.name, config.card), source: "agent" });
 				let found: LorebookEntry | null = null;
 				let source: LoreSource = "file";
 				for (const c of candidates) {
@@ -4775,7 +4740,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				return true;
 			}
 			/**
-			 * 新增条目：写进指定世界书文件（body.path=书路径，或 "agent"=本卡补充设定）。
+			 * 新增条目：写进指定世界书文件（body.path=书路径）。
 			 * 面板只必填标题 + 正文；关键词留空则从标题派生——绿灯条目没有 key 永远不会触发。
 			 */
 			case "POST /api/lorebook/entry": {
@@ -4797,21 +4762,12 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				if (!comment) throw new Error(t("标题不能为空"));
 				if (!content) throw new Error(t("正文不能为空"));
 				const config = loadConfig(host.cwd);
-				const card = loadCardFile(resolvePath(host.cwd, config.card));
 				const target = (body.path ?? "").replace(/\\/g, "/").trim();
-				let abs: string;
-				let targetLabel: string;
-				if (!target || target === "agent") {
-					abs = overlayPathFor(host.cwd, card.name, config.card);
-					targetLabel = t("补充设定");
-				} else {
-					// 与 DELETE 同源：只认书单里的路径
-					const known = listLorebookFiles(host.cwd, config);
-					const hit = known.find((b) => b.path === target);
-					if (!hit) throw new Error(t("不是已知的世界书文件"));
-					abs = resolvePath(host.cwd, target);
-					targetLabel = hit.name;
-				}
+				const known = listLorebookFiles(host.cwd, config);
+				const hit = known.find((b) => b.path === target);
+				if (!hit) throw new Error(t("不是已知的世界书文件"));
+				const abs = resolvePath(host.cwd, target);
+				const targetLabel = hit.name;
 				const rawKeys = Array.isArray(body.keys)
 					? body.keys.filter((k): k is string => typeof k === "string").map((k) => k.trim()).filter(Boolean)
 					: [];
@@ -4942,12 +4898,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				// 启用方向：光摘 disabledLore 恢复不了源文件里本就 disabled 的条目（导入即关闭是常态），
 				// 必须把 enable 写回源文件——否则「启用」对这类条目是空操作。
 				const enableCandidates = body.enabled
-					? (() => {
-							const card = loadCardFile(resolvePath(host.cwd, config.card));
-							const paths = listLorebookFiles(host.cwd, config).map((b) => resolvePath(host.cwd, b.path));
-							paths.push(overlayPathFor(host.cwd, card.name, config.card));
-							return paths;
-						})()
+					? listLorebookFiles(host.cwd, config).map((b) => resolvePath(host.cwd, b.path))
 					: null;
 				for (const fp of fps) {
 					if (body.enabled) {

@@ -18,12 +18,12 @@ import { projectToolContext } from "./context.ts";
 import { authoringHistory, authoringRequestIds, contextText, conversationMode, CONVERSATION_PROCESS_TYPE, type ConversationMode, type ContextMessage } from "../conversation-mode.ts";
 import { authoringTools, runAuthoringTool, AUTHORING_NATIVE_TOOLS } from "./authoring.ts";
 import { AGENT_ASK_TOOL, AGENT_SCREENSHOT_TOOL, agentSystemPrompt, buildAgentStateBlock } from "./agent.ts";
-import { btwSystemPrompt, buildBtwStageBlock } from "./btw.ts";
+import { btwSystemPrompt, buildBtwCardBrief, buildBtwStageBlock } from "./btw.ts";
 import { readUserRules } from "../user-rules.ts";
 import { describeChange, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, storyDirectory, type ChangeSet } from "./story-history.ts";
 import { agentHistory, buildDiscussionSummaryPrompt, discussionTokens, DISCUSSION_SUMMARY_TYPE, livePromptTokens, MANUAL_MIN_DISCUSSION_TOKENS, planDiscussionCompaction, promptTokensOfMessages } from "./discussion.ts";
 import { readFileSync } from "node:fs";
-import { createSandboxGate, sandboxGrantsFromBranch, SANDBOX_GRANT_TYPE } from "../sandbox.ts";
+import { createSandboxGate, filterSandboxToolContent, sandboxGrantsFromBranch, sandboxScope, SANDBOX_GRANT_TYPE } from "../sandbox.ts";
 import { fileChangeOf } from "../activity-format.ts";
 import type { CardDeps } from "../tools/card.ts";
 import { extractDraftRules } from "../draft.ts";
@@ -34,7 +34,7 @@ import {
 } from "../lorebook.ts";
 import { formatPanelIndex, formatPanelSnapshot, loadPanels } from "../panels.ts";
 import { cardDirOfChatDir, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, readChatMemoryIndex, readChatSummary, resolveCardSpace, writeChatSummary } from "../cardspace.ts";
-import { changeCardMemory, changeChatMemory, listCardMemory, listChatMemory, readCardMemory, readChatMemory, searchCardMemory, searchChatMemory, writeChatMemoryDoc } from "../card-memory-tools.ts";
+import { changeChatMemory, listChatMemory, readChatMemory, searchChatMemory, writeChatMemoryDoc } from "../card-memory-tools.ts";
 import { classifyTag, scanTaggedBlocks } from "../postprocess.ts";
 import { formatRosterIndex, formatState, saveState } from "../state.ts";
 import { isBackstageText } from "../stance.ts";
@@ -742,7 +742,13 @@ export class StageEngine {
 			chatDir,
 			userRules,
 			chatMemoryIndex,
-			cardAgents: materials.cardAgents,
+			cardBrief: buildBtwCardBrief({
+				card,
+				userName: config.userName,
+				userPersona: config.userPersona,
+				macro: { charName: card.name, userName: config.userName },
+			}),
+			btwPersona: config.btwPersona,
 			macro: { charName: card.name, userName: config.userName },
 		});
 		const stageBlock = buildBtwStageBlock({
@@ -995,7 +1001,7 @@ export class StageEngine {
 		const rpNames = rpTools.map((t) => t.name);
 		const agentNames = [...new Set([...agentTools.map((t) => t.name), ...nativeNames])];
 		const tools = [...new Map([...agentTools, ...rpTools].map((t) => [t.name, t])).values()];
-		const agentPrompt = agentSystemPrompt({ cwd, cardPath: config.card, storyDir: storyDir!, userRules, chatMemoryIndex, cardAgents: materials.cardAgents, macro: { charName: card.name, userName: config.userName } });
+		const agentPrompt = agentSystemPrompt({ cwd, cardPath: config.card, chatDir, storyDir: storyDir!, userRules, chatMemoryIndex, cardAgents: materials.cardAgents, macro: { charName: card.name, userName: config.userName } });
 		const ws = createWorkspace({ sessionId: sm.getSessionId(), parentId: sm.getLeafId(),
 			...(userText === null ? { userId: [...branch].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.id } : {}) });
 		const draftStore = new DraftStore(draftDirectory(cwd, sm.getSessionDir?.(), sm.getSessionId()), ws.id);
@@ -1489,11 +1495,23 @@ export class StageEngine {
 				blog("tool_call", `${name}: ${JSON.stringify(input)}`);
 				let blockReason = !hooks.toolNames.includes(name) ? "此工具在当前会话模式不可用。" :
 					agentTurn ? undefined : workspaceToolBlock(ws, name, tools.find((t) => t.name === name)?.mode);
-				if (!blockReason && nativeNames.includes(name)) blockReason = await sandboxGate(name, input);
+				if (!blockReason && nativeNames.includes(name)) {
+					if (
+						(name === "ls" || name === "find" || name === "grep") &&
+						(input.path === undefined || (typeof input.path === "string" && input.path.trim() === ""))
+					) {
+						const defaultDir = chatDir ?? (chatDir ? cardDirOfChatDir(chatDir) : resolveCardSpace(cwd, config.card)?.dir);
+						if (defaultDir) input.path = defaultDir;
+					}
+					blockReason = await sandboxGate(name, input);
+				}
 				return { toolName: name, lastUserText, creationMode: loadStageConfig(cwd).creationMode, ...(blockReason ? { blockReason } : {}) };
 			},
-			toolResult: (name, content) => {
-				blog("tool_result", `${name}: ${content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("")}`);
+			toolResult: (name, content, input) => {
+				const nextContent = filterSandboxToolContent(name, input ?? {}, content, sandboxScope(cwd, config, chatDir ?? undefined));
+				const effective = nextContent ?? content;
+				blog("tool_result", `${name}: ${effective.filter((part) => part.type === "text").map((part) => part.text ?? "").join("")}`);
+				return nextContent;
 			},
 			turnEnd: (withdrawTools) => {
 				if (final?.stopReason === "error") return;
@@ -1996,8 +2014,6 @@ export class StageEngine {
 		const cwd = this.#deps.cwd;
 		const sm = this.#deps.getSession().sessionManager;
 		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
-		const cardDir = chatDir ? cardDirOfChatDir(chatDir) : null;
-		const chatId = chatDir ? basename(chatDir) : undefined;
 		const lh = this.#deps.loreHost;
 		return {
 			searchLore: (query, limit) => {
@@ -2022,27 +2038,22 @@ export class StageEngine {
 				if (chatDir) {
 					try { result.hits.push(...searchChatMemory(chatDir, query, 6)); result.sources.push({ scope: "chat", status: "ok" }); }
 					catch (e) { result.sources.push({ scope: "chat", status: "error", error: String(e) }); }
-				} else if (cardDir && this.mode !== "agent") {
-					try { result.hits.push(...searchCardMemory(cardDir, query, 6, chatId)); result.sources.push({ scope: "card", status: "ok" }); }
-					catch (e) { result.sources.push({ scope: "card", status: "error", error: String(e) }); }
 				} else {
 					result.sources.push({ scope: "chat", status: "unavailable" });
 				}
 				return result;
 			},
-			...(this.#deps.readMemory || chatDir || (cardDir && this.mode !== "agent") ? { readMemory: (ref: string) => {
+			...(this.#deps.readMemory || chatDir ? { readMemory: (ref: string) => {
 				if (chatDir && (ref.startsWith("chat:") || !ref.includes(":"))) {
 					const chatDoc = readChatMemory(chatDir, ref);
 					if (chatDoc) return chatDoc;
 				}
-				if (ref.startsWith("card:")) return cardDir ? readCardMemory(cardDir, ref, chatId) : undefined;
 				return this.#deps.readMemory?.(sm.getSessionId(), ref);
 			} } : {}),
-			...(this.#deps.listMemory || chatDir || (cardDir && this.mode !== "agent")
+			...(this.#deps.listMemory || chatDir
 				? { listMemory: (storeId: string) => {
 					if (storeId === "card") {
-						if (chatDir) return listChatMemory(chatDir).map((d) => ({ ...d, id: d.ref }));
-						return cardDir ? listCardMemory(cardDir, chatId).map((d) => ({ ...d, id: d.ref })) : [];
+						return chatDir ? listChatMemory(chatDir).map((d) => ({ ...d, id: d.ref })) : [];
 					}
 					const sessionList = this.#deps.listMemory?.(sm.getSessionId(), storeId) ?? [];
 					if (chatDir && storeId === "external") {
@@ -2052,11 +2063,9 @@ export class StageEngine {
 				} }
 				: {}),
 			// ---- 记忆写族（add / update / delete）：落入当前项目的 记忆/*.md ----
-			...(chatDir || cardDir ? {
+			...(chatDir ? {
 				updateMemory: (ref: string, version: string, content: string) => {
-					if (chatDir && !ref.startsWith("card:")) return changeChatMemory(chatDir, ref, version, content)!;
-					if (cardDir) return changeCardMemory(cardDir, ref, version, content)!;
-					throw new Error("当前不在项目或卡空间内，无法更新记忆文档。");
+					return changeChatMemory(chatDir, ref, version, content)!;
 				},
 			} : {}),
 			...(chatDir || this.#deps.addMemory
@@ -2072,7 +2081,7 @@ export class StageEngine {
 					return this.#deps.addMemory!(sm.getSessionId(), input);
 				} }
 				: {}),
-			...(chatDir || this.#deps.deleteMemory || cardDir
+			...(chatDir || this.#deps.deleteMemory
 				? { deleteMemory: (storeId: string, id: string, version?: string) => {
 					if (chatDir && (id.startsWith("chat:") || storeId === "card" || !id.includes(":"))) {
 						const existed = readChatMemory(chatDir, id);
@@ -2080,11 +2089,6 @@ export class StageEngine {
 							changeChatMemory(chatDir, id, version);
 							return true;
 						}
-					}
-					if (storeId === "card") {
-						if (!cardDir) return false;
-						changeCardMemory(cardDir, id, version ?? "");
-						return true;
 					}
 					return this.#deps.deleteMemory?.(sm.getSessionId(), storeId, id) ?? false;
 				} }

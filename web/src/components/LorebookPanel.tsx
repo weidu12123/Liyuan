@@ -308,8 +308,8 @@ function EntryRow({
 	);
 }
 
-/** 浏览目标：某一本文件，或 agent 补充设定 */
-type ViewTarget = { kind: "file"; path: string } | { kind: "agent" };
+/** 浏览目标：选中的世界书文件 */
+type ViewTarget = { kind: "file"; path: string };
 
 /** 书管理区：勾选=挂载进会话；点书名=下方只显示该本条目（不合并）。 */
 function BooksSection({
@@ -458,15 +458,10 @@ function BooksSection({
 	};
 
 	const viewingFile = view?.kind === "file" ? view.path : null;
-	const viewingAgent = view?.kind === "agent";
 	const currentBook = viewingFile ? data?.books.find((b) => b.path === viewingFile) : undefined;
 	const currentMounted = viewingFile ? activeSet.has(viewingFile) : false;
-	const currentTitle = currentBook
-		? currentBook.name
-		: viewingAgent
-			? t("agent 补充设定")
-			: t("未选择");
-	const isExpanded = open || creating || (!!data && data.books.length === 0 && !viewingAgent);
+	const currentTitle = currentBook ? currentBook.name : t("未选择");
+	const isExpanded = open || creating || (!!data && data.books.length === 0);
 
 	return (
 		<section className="sp-section book-filter-section">
@@ -483,9 +478,6 @@ function BooksSection({
 						<span className="book-filter-name">{currentTitle}</span>
 						{currentBook && (
 							<span className="lore-meta">{t("{n} 条条目", { n: currentBook.entryCount })}</span>
-						)}
-						{viewingAgent && (
-							<span className="lore-meta">{t("按卡自动")}</span>
 						)}
 						{currentBook && currentMounted && (
 							<span className="lore-meta book-mounted-tag">{t("已挂")}</span>
@@ -565,19 +557,6 @@ function BooksSection({
 										</div>
 									);
 								})}
-								<div className={`book-row ${viewingAgent ? "current" : ""}`}>
-									<button
-										type="button"
-										className="book-pick book-pick-full"
-										onClick={() => {
-											onView({ kind: "agent" });
-											setOpen(false);
-										}}
-									>
-										<span className="book-name">{t("agent 补充设定")}</span>
-										<span className="lore-meta">{t("按卡自动")}</span>
-									</button>
-								</div>
 								{data.books.length === 0 && <div className="sp-empty">{t("还没有世界书——可以「＋ 新建」自己写，也可以导入 JSON")}</div>}
 							</div>
 							{creating && (
@@ -819,15 +798,13 @@ function ProtectSection({ toast }: { toast: (level: "info" | "warning" | "error"
 
 export function LorebookPanel({ toast, onOpenDetail }: { toast: (level: "info" | "warning" | "error", text: string) => void; onOpenDetail?: (entry: LoreEntryView, scopePath: string) => void }) {
 	const [view, setView] = useState<ViewTarget | null>(null);
-	const viewKey = view?.kind === "file" ? `file:${view.path}` : view?.kind === "agent" ? "agent" : "none";
+	const viewKey = view?.kind === "file" ? `file:${view.path}` : "none";
 
 	/** 当前视图的 GET 路径：loader 与 cacheKey 共用同一个来源，防两处写法漂移 */
 	const entriesPath =
 		view?.kind === "file"
 			? `/api/lorebook?path=${encodeURIComponent(view.path)}`
-			: view?.kind === "agent"
-				? "/api/lorebook?source=agent"
-				: null;
+			: null;
 
 	const loadEntries = useCallback((): Promise<LorebookResponse> => {
 		if (entriesPath) return apiGet<LorebookResponse>(entriesPath);
@@ -901,8 +878,8 @@ export function LorebookPanel({ toast, onOpenDetail }: { toast: (level: "info" |
 			reload();
 		}, doneText);
 
-	/** 当前浏览的书（写操作都限定在它身上；agent = 本卡补充设定） */
-	const scopePath = view?.kind === "file" ? view.path : "agent";
+	/** 当前浏览的书（写操作都限定在它身上） */
+	const scopePath = view?.kind === "file" ? view.path : "";
 
 	// 删除限定当前浏览的书，防多本书同指纹时误删别本
 	const removeEntry = (fingerprint: string) =>
@@ -953,7 +930,7 @@ export function LorebookPanel({ toast, onOpenDetail }: { toast: (level: "info" |
 	}, [data, query, sort]);
 
 	const titleName =
-		data?.viewName ?? (view?.kind === "agent" ? t("agent 补充设定") : view?.kind === "file" ? "…" : t("未选择"));
+		data?.viewName ?? (view?.kind === "file" ? "…" : t("未选择"));
 
 	return (
 		<div className="panel-body">

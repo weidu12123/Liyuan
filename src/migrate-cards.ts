@@ -24,11 +24,25 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { basename, join } from "node:path";
 
 import { loadCardFile } from "./card.ts";
+import { writeChatMemoryDoc } from "./card-memory-tools.ts";
 import { copyPathSafe } from "./fs-copy.ts";
+import { loadLorebookFile } from "./lorebook.ts";
 import { loadPersonas, savePersonas } from "./personas.ts";
-import { appendSessionCardRebind, createCardSpace, freeCardFolder, listCardSpaces, resolveCardSpace, writeChatMeta, type CardSpace } from "./cardspace.ts";
+import {
+	appendSessionCardRebind,
+	createCardSpace,
+	freeCardFolder,
+	listCardSpaces,
+	listChats,
+	readChatSummary,
+	resolveCardSpace,
+	writeChatMeta,
+	writeChatSummary,
+	type CardSpace,
+} from "./cardspace.ts";
 import { stripBom } from "./jsonio.ts";
 import {
+	CARD_MEMORY_RECAPS_DIR,
 	CARD_OVERLAY_FILE,
 	CHAT_PANELS_FILE,
 	CHAT_STATE_FILE,
@@ -37,7 +51,9 @@ import {
 	CARDS_ROOT,
 	DIRS,
 	cardDirOf,
+	cardMemoryDirOf,
 	chatDirOf,
+	chatMemoryDocsDirOf,
 	chatSessionsDirOf,
 	dir,
 	nameSafe,
@@ -434,3 +450,170 @@ function rewriteCardRefs(cwd: string, plan: CardMigrationPlan, log: string[], sp
 function normalizeRef(ref: string): string {
 	return ref.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 }
+
+/** 从子项目会话 .jsonl 中提取最新一条 rp-summary 摘要文本 */
+function latestSummaryFromSessionsDir(sessionsDir: string): string | undefined {
+	if (!existsSync(sessionsDir)) return undefined;
+	let files: Array<{ path: string; mtime: number }> = [];
+	try {
+		files = readdirSync(sessionsDir)
+			.filter((f) => f.endsWith(".jsonl"))
+			.map((f) => {
+				const p = join(sessionsDir, f);
+				return { path: p, mtime: statSync(p).mtimeMs };
+			})
+			.sort((a, b) => b.mtime - a.mtime);
+	} catch {
+		return undefined;
+	}
+	for (const f of files) {
+		try {
+			const content = readFileSync(f.path, "utf8");
+			if (!content.includes('"rp-summary"')) continue;
+			const lines = content.split(/\r?\n/);
+			for (let i = lines.length - 1; i >= 0; i--) {
+				const line = lines[i];
+				if (!line || !line.includes('"rp-summary"')) continue;
+				try {
+					const parsed = JSON.parse(line) as { type?: unknown; customType?: unknown; data?: { summary?: unknown } };
+					if (parsed.type === "custom" && parsed.customType === "rp-summary" && typeof parsed.data?.summary === "string" && parsed.data.summary.trim()) {
+						return parsed.data.summary.trim();
+					}
+				} catch {
+					/* skip malformed line */
+				}
+			}
+		} catch {
+			/* skip unreadable file */
+		}
+	}
+	return undefined;
+}
+
+/**
+ * 一次性收口迁移：将旧版卡根目录 `cards/<卡>/记忆/` 下的各局复盘与旧会话内的 `rp-summary`
+ * 迁入对应子项目的项目资产（`对话/<chatId>/记忆/剧情复盘.md`、`MEMORY.md`、`前情提要.md`），
+ * 并彻底移除已废弃的卡根目录 `cards/<卡>/记忆/`，防止跨项目泄漏。
+ */
+export function migrateLegacyCardMemoryToChatAssets(cwd: string): string[] {
+	const log: string[] = [];
+	for (const space of listCardSpaces(cwd)) {
+		// 1) 迁移旧卡根目录 记忆/局/<chatId>.md → 对话/<chatId>/记忆/剧情复盘.md
+		const legacyMemDir = cardMemoryDirOf(space.dir);
+		if (existsSync(legacyMemDir)) {
+			const recapsDir = join(legacyMemDir, CARD_MEMORY_RECAPS_DIR);
+			let migratedRecaps = 0;
+			if (existsSync(recapsDir)) {
+				try {
+					for (const f of readdirSync(recapsDir)) {
+						if (!f.toLowerCase().endsWith(".md")) continue;
+						const chatId = f.slice(0, -3);
+						const targetChatDir = chatDirOf(space.dir, chatId);
+						if (!existsSync(targetChatDir)) continue;
+						const recapText = readFileSync(join(recapsDir, f), "utf8").trim();
+						if (!recapText) continue;
+						const targetDoc = join(chatMemoryDocsDirOf(targetChatDir), "剧情复盘.md");
+						if (!existsSync(targetDoc)) {
+							writeChatMemoryDoc(targetChatDir, { title: "剧情复盘", text: recapText });
+							migratedRecaps += 1;
+						}
+					}
+				} catch (err) {
+					log.push(`迁移卡「${space.folder}」旧局复盘异常：${err instanceof Error ? err.message : String(err)}`);
+				}
+			}
+			try {
+				rmSync(legacyMemDir, { recursive: true, force: true });
+				log.push(
+					migratedRecaps > 0
+						? `卡「${space.folder}」：${migratedRecaps} 份局复盘迁入子项目资产，已清理旧卡根 记忆/`
+						: `卡「${space.folder}」：已清理旧卡根 记忆/`,
+				);
+			} catch (err) {
+				log.push(`清理卡「${space.folder}」旧 记忆/ 失败：${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+
+		// 2) 为已有 rp-summary 但尚未落盘 前情提要.md 的旧子项目补齐项目资产文件
+		let backfilledSummaries = 0;
+		const chats = listChats(space.dir);
+		for (const chat of chats) {
+			if (readChatSummary(chat.dir)) continue;
+			const summary = latestSummaryFromSessionsDir(chat.sessionsDir);
+			if (summary) {
+				writeChatSummary(chat.dir, summary);
+				backfilledSummaries += 1;
+			}
+		}
+		if (backfilledSummaries > 0) {
+			log.push(`卡「${space.folder}」：${backfilledSummaries} 个子项目从会话记录补齐 前情提要.md`);
+		}
+
+		// 3) 迁移遗留补充设定集（cards/<卡>/补充设定集.json 与 .liyuan-lore/<卡名>.json）→ 对应子项目 记忆/补充设定.md
+		let cardName = space.folder;
+		try {
+			cardName = loadCardFile(space.cardFile).name || space.folder;
+		} catch {
+			/* ignore */
+		}
+		const overlayCandidates = [
+			join(space.dir, CARD_OVERLAY_FILE),
+			join(dir(cwd, "lore"), `${nameSafe(cardName)}.json`),
+			join(dir(cwd, "lore"), `${nameSafe(space.folder)}.json`),
+		];
+		for (const overlayFile of [...new Set(overlayCandidates)]) {
+			if (!existsSync(overlayFile)) continue;
+			try {
+				const entries = loadLorebookFile(overlayFile);
+				if (entries.length > 0 && chats.length > 0) {
+					const targetChat =
+						chats.find((c) => {
+							if (!existsSync(c.sessionsDir)) return false;
+							for (const f of readdirSync(c.sessionsDir)) {
+								if (!f.endsWith(".jsonl")) continue;
+								try {
+									const raw = readFileSync(join(c.sessionsDir, f), "utf8");
+									if (raw.includes('"lorebook_write"') || entries.some((e) => e.comment && raw.includes(e.comment))) {
+										return true;
+									}
+								} catch {
+									/* ignore */
+								}
+							}
+							return false;
+						}) ?? chats.find((c) => c.sessionCount > 0) ?? chats[0];
+					if (targetChat) {
+						const targetDoc = join(chatMemoryDocsDirOf(targetChat.dir), "补充设定.md");
+						if (!existsSync(targetDoc)) {
+							const body = entries
+								.map((e) => {
+									const title = e.comment || e.keys[0] || "设定条目";
+									const keysLine = e.keys.length > 0 ? `> 关键词：${e.keys.join("、")}\n\n` : "";
+									return `## ${title}\n\n${keysLine}${e.content.trim()}`;
+								})
+								.join("\n\n---\n\n");
+							writeChatMemoryDoc(targetChat.dir, { title: "补充设定", text: body });
+							log.push(`卡「${space.folder}」：${entries.length} 条补充设定已迁入子项目 ${targetChat.id} 记忆/补充设定.md`);
+						}
+					}
+				}
+				rmSync(overlayFile, { force: true });
+			} catch (err) {
+				log.push(`迁移卡「${space.folder}」补充设定失败：${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+	}
+	const legacyLoreDir = dir(cwd, "lore");
+	if (existsSync(legacyLoreDir)) {
+		try {
+			const remaining = readdirSync(legacyLoreDir);
+			if (remaining.length === 0) {
+				rmSync(legacyLoreDir, { recursive: true, force: true });
+			}
+		} catch {
+			/* ignore */
+		}
+	}
+	return log;
+}
+

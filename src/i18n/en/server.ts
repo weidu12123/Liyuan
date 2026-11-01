@@ -77,8 +77,6 @@ export const server: Record<string, string> = {
 	"无可用模型": "No model available",
 	"流未产出最终消息": "The stream produced no final message",
 	"最终消息无文本": "The final message has no text",
-	"记忆已更新：复盘 {recapped} 局、遗忘 {forgotten} 局": "Memory updated: {recapped} sessions recapped, {forgotten} forgotten",
-	"记忆已更新：复盘 {recapped} 局": "Memory updated: {recapped} sessions recapped",
 	"扩展错误（{event}）：{error}": "Extension error ({event}): {error}",
 	"向量记忆：入库失败 · {error}": "Memory: failed to store · {error}",
 	"合并入已有条目": " merged into an existing entry",

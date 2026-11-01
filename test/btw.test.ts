@@ -49,24 +49,32 @@ test("btw 提示词与视野块：自定义与空缺回退、不混入卡级酒�
 			chat: "PROJECT_LOCAL_RULE_SENTINEL",
 		},
 		chatMemoryIndex: "- [旧约](旧约.md) — {{char}}与{{user}}的约定",
-		cardAgents: "# 角色：{{char}}",
+		cardBrief: "# 当前剧目：云澜（用户扮演：沈舟）",
 		macro: { charName: "云澜", userName: "沈舟" },
 	});
-	assert.match(fallback, /# 旁路助手/, "btw 槽空缺时回退随包 BTW_APPEND_SYSTEM.md");
+	assert.match(fallback, /# 身份与边界/, "btw 槽空缺时回退随包 BTW_APPEND_SYSTEM.md");
+	assert.match(fallback, /# 助手性格设定/, "默认性格设定拼接在最后");
 	assert.match(fallback, /PROJECT_LOCAL_RULE_SENTINEL/, "拼入项目级局部守则");
 	assert.match(fallback, /云澜与沈舟的约定/, "拼入项目记忆索引并展开宏");
-	assert.match(fallback, /# 角色：云澜/, "拼入卡档案 AGENTS.md");
-	assert.doesNotMatch(fallback, /CARD_TAVERN_PRESET_SENTINEL/, "不混入卡级 APPEND_SYSTEM.md（防酒馆文风预设串味）");
+	assert.match(fallback, /# 当前剧目：云澜/, "拼入剧目简介（不含 AGENTS.md 写作块）");
+	assert.match(fallback, /CARD_TAVERN_PRESET_SENTINEL/, "保留卡级 APPEND_SYSTEM.md（回到旧版：身份/破限站）");
+	assert.ok(
+		fallback.indexOf("# 身份与边界") > fallback.indexOf("PROJECT_LOCAL_RULE_SENTINEL") &&
+			fallback.indexOf("# 助手性格设定") > fallback.indexOf("# 身份与边界"),
+		"助手规则与性格设定依次排在最后，紧贴对话",
+	);
 	assert.doesNotMatch(fallback, /GLOBAL_RP_ONLY_SENTINEL|AGENT_MODE_ONLY_SENTINEL/, "不混入其他模式的全局追加槽");
 
 	const custom = btwSystemPrompt({
 		cwd: "/workspace",
 		cardPath: "cards/云澜/云澜.json",
-		userRules: { global: "", agent: "", btw: "CUSTOM_SHARP_CRITIC_STYLE", card: "" },
+		userRules: { global: "", agent: "", btw: "CUSTOM_BTW_RULES_BLOCK", card: "" },
+		btwPersona: "CUSTOM_SHARP_CRITIC_PERSONA",
 		macro: { charName: "云澜", userName: "沈舟" },
 	});
-	assert.match(custom, /CUSTOM_SHARP_CRITIC_STYLE/, "自定义 BTW_APPEND_SYSTEM.md 生效");
-	assert.doesNotMatch(custom, /# 旁路助手/, "自定义非空时替换随包默认");
+	assert.match(custom, /CUSTOM_BTW_RULES_BLOCK/, "自定义 BTW_APPEND_SYSTEM.md 生效");
+	assert.match(custom, /CUSTOM_SHARP_CRITIC_PERSONA/, "自定义 btwPersona 性格设定生效");
+	assert.doesNotMatch(custom, /# 身份与边界/, "自定义非空时替换随包默认");
 
 	const block = buildBtwStageBlock({
 		state: defaultState(),
@@ -206,7 +214,7 @@ test("btw 全链路：读干净台前视野 + 多轮改卡写记忆 + 叉掉即�
 					turn1FirstMsg = JSON.stringify(ctx.messages[0]);
 					assert.match(turn1FirstMsg, /夜深风急，跟紧我/, "旁路可见台前已定稿剧情");
 					assert.doesNotMatch(turn1FirstMsg, /INTERNAL_STAGE_THINKING_NOISE/, "旁路不见台前思考过程");
-					assert.doesNotMatch(turn1Sys, /TAVERN_STATUSBAR_NOISE_SENTINEL/, "旁路不装卡级酒馆文风预设");
+					assert.match(turn1Sys, /TAVERN_STATUSBAR_NOISE_SENTINEL/, "旁路沿用旧版：装卡级 APPEND_SYSTEM.md");
 					assert.match(JSON.stringify(ctx.messages), /青峰山门/, "card_read 回执已送达");
 					return fauxAssistantMessage("这一拍节奏利落，当前卡场景是青峰山门。");
 				},
@@ -250,6 +258,30 @@ test("btw 全链路：读干净台前视野 + 多轮改卡写记忆 + 叉掉即�
 			assert.equal(sm.getBranch().length, branchBefore, "主会话树条目数零变化");
 			assert.equal(sm.getLeafId(), leafBefore, "主会话叶节点零变化");
 			assert.deepEqual(readdirSync(chat1SessDir), sessionFilesBefore, "不产生额外磁盘会话文件");
+			const btwSessDir = join(chat1Dir, "助手");
+			assert.ok(existsSync(btwSessDir) && readdirSync(btwSessDir).some((f) => f.endsWith(".jsonl")), "助手会话独立落盘于 <chatDir>/助手/*.jsonl");
+			await btw.dispose();
+			assert.equal(btw.hasSession, true, "dispose 后从磁盘自动识别已有持久会话");
+			assert.equal(btw.userTurnCount, 2, "dispose 后从磁盘恢复轮次数");
+			const restoredSnap = btw.snapshot();
+			assert.equal(restoredSnap.length, 4, "从磁盘恢复 2 轮 user+assistant 快照");
+			assert.ok(restoredSnap[1]?.tools?.some((t) => t.includes("读卡")), "从磁盘恢复历史工具胶囊");
+			reg.setResponses([fauxAssistantMessage("两人穿过山门石阶，风雪渐紧。", { stopReason: "stop" })] as never);
+			await engine.performTurn("我们进山门吧。");
+			let turn3FirstMsg = "";
+			let turn3AllMsgs = "";
+			reg.setResponses([
+				(ctx: { messages: Array<{ role: string; content: unknown }> }) => {
+					turn3FirstMsg = JSON.stringify(ctx.messages[0]);
+					turn3AllMsgs = JSON.stringify(ctx.messages);
+					return fauxAssistantMessage("看到第二拍了，且记得第一轮读过的青峰山门。");
+				},
+			] as never);
+			const r2b = await btw.prompt("现在演到哪了？");
+			assert.equal(r2b.error, undefined);
+			assert.equal(btw.userTurnCount, 3, "主演推进下一拍后助手会话不断代（累计第 3 轮）");
+			assert.match(turn3FirstMsg, /两人穿过山门石阶/, "助手看到主演新推进的第二拍剧情");
+			assert.match(turn3AllMsgs, /青峰山门/, "助手第一轮读过的 card_read 工具回执仍在持久上下文中，无需重读");
 
 			// 5. 叉掉即焚（close）+ 磁盘自定义 BTW_APPEND_SYSTEM.md 真实透传 + 无参 ls 默认本卡目录 + card_project 过程回执
 			await btw.close();
@@ -265,15 +297,16 @@ test("btw 全链路：读干净台前视野 + 多轮改卡写记忆 + 叉掉即�
 				fauxAssistantMessage(
 					[
 						fauxToolCall("ls", {}),
+						fauxToolCall("find", { path: "cards/云澜", pattern: "*" }),
+						fauxToolCall("grep", { path: "cards/云澜", pattern: "OTHER_PROJECT_SECRET" }),
 						fauxToolCall("card_project", { action: "inspect" }),
 					],
 					{ stopReason: "toolUse" },
 				),
 				(ctx: { systemPrompt?: string; messages: unknown[] }) => {
-					// messages = [user, assistant(toolCall), toolResult(ls), toolResult(card_project)]
 					afterCloseMsgCount = ctx.messages.filter((m) => (m as { role?: string }).role === "user").length;
 					afterCloseSys = String(ctx.systemPrompt ?? "");
-					lsResultText = JSON.stringify(ctx.messages.slice(-2));
+					lsResultText = JSON.stringify(ctx.messages.slice(-4));
 					return fauxAssistantMessage("全新草稿会话。");
 				},
 			] as never);
@@ -281,7 +314,8 @@ test("btw 全链路：读干净台前视野 + 多轮改卡写记忆 + 叉掉即�
 			assert.equal(r3.error, undefined);
 			assert.equal(afterCloseMsgCount, 1, "close 后重新提问不再携带旧旁路历史");
 			assert.match(afterCloseSys, /DISK_CUSTOM_BTW_PROMPT_SENTINEL/, "磁盘 BTW_APPEND_SYSTEM.md 经 materials 真实生效");
-			assert.match(lsResultText, /云澜\.json/, "无参 ls 默认落在本卡目录并直接放行");
+			assert.match(lsResultText, /记忆\//, "无参 ls 默认落在本项目目录并直接放行");
+			assert.doesNotMatch(lsResultText, /chat-2|OTHER_PROJECT_SECRET/, "对卡根目录执行 find/grep 时严密过滤掉同卡其他项目的文件与内容");
 			assert.ok(toolLogs.some((l) => l.includes("卡创作工程 · inspect")), "card_project 发射带动作名的过程回执");
 		} finally {
 			await btw.close();

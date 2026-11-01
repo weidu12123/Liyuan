@@ -9859,6 +9859,69 @@ label.drawer-btn {
 	color: var(--text);
 }
 
+.btw-inline-block.btw-inline-collapsed .btw-inline-head {
+	padding-bottom: 0;
+	margin-bottom: 0;
+	border-bottom: 0;
+}
+
+.btw-inline-close svg {
+	transition: transform 0.18s ease;
+}
+
+.btw-inline-close.is-collapsed svg {
+	transform: rotate(-90deg);
+}
+
+.btw-turn-fold {
+	border: 1px solid var(--hairline);
+	border-radius: 8px;
+	background: var(--surface);
+	padding: 6px 10px;
+}
+
+.btw-turn-summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+	font-size: 13px;
+	line-height: 1.5;
+	user-select: none;
+	list-style: none;
+}
+
+.btw-turn-summary::-webkit-details-marker {
+	display: none;
+}
+
+.btw-turn-summary-q {
+	font-weight: 500;
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.btw-turn-summary-a {
+	color: var(--text-soft);
+	font-size: 12.5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1;
+	min-width: 0;
+}
+
+.btw-turn-content {
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px dashed var(--hairline);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
 .btw-inline-body {
 	display: flex;
 	flex-direction: column;

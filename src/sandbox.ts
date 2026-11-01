@@ -16,7 +16,7 @@ import { loadCardConfig, resolveCardSpace, saveCardConfig } from "./cardspace.ts
 import { type DenylistRule, matchDenylist, normalizeCommand, readDenylistRules } from "./bash-denylist.ts";
 import type { ConversationEntry } from "./conversation-mode.ts";
 import { mountedLorebookPaths } from "./lorebook.ts";
-import { CARDS_ROOT, CHATS_DIR, CHAT_HISTORY_DIR, CHAT_SESSIONS_DIR, SHARED_LIBRARY_DIRS, cardsRoot, insidePath } from "./paths.ts";
+import { CARDS_ROOT, CHATS_DIR, CHAT_BTW_SESSIONS_DIR, CHAT_DOCS_MEMORY_DIR, CHAT_HISTORY_DIR, CHAT_SESSIONS_DIR, SHARED_LIBRARY_DIRS, cardsRoot, chatsRoot, insidePath } from "./paths.ts";
 
 /** pi 原生工具 → 访问类别。键集＝工作模式开放的原生工具清单（stage/authoring.ts 从这里派生）。 */
 export const NATIVE_TOOL_ACCESS = {
@@ -178,6 +178,20 @@ function isOtherChatPath(cardDir: string | undefined, currentChatDir: string | u
 }
 
 /**
+ * 目标路径是否落在已废除的卡根目录 `cards/<卡>/记忆` 下。
+ * 记忆、大纲与设定文档现统一归属当前子项目的项目资产（`对话/<chatId>/记忆/`），
+ * 拦截卡根 `记忆/` 的读写以防跨项目串味或写错位置。
+ */
+function isLegacyCardMemoryPath(cardDir: string | undefined, target: string): boolean {
+	if (!cardDir) return false;
+	const cardRoot = realExisting(cardDir);
+	const rel = relative(cardRoot, target);
+	if (!rel || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return false;
+	const segs = rel.split(sep);
+	return segs[0] === CHAT_DOCS_MEMORY_DIR;
+}
+
+/**
  * 卡目录里由 harness 持有的数据（docs/PLAN-AGENT-CODING.md §三）：`对话/<id>/历史/`（快照仓）与 `对话/<id>/会话/`（会话树）。
  * 原生写工具不碰这两处；`正文/` 就是稿子，完全开放读写。这是路径规则，不是识别器。
  */
@@ -186,7 +200,11 @@ export function harnessManagedPath(cardDir: string | undefined, target: string):
 	const rel = relative(realExisting(cardDir), target);
 	if (!rel || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return false;
 	const segs = rel.split(sep);
-	return segs[0] === CHATS_DIR && segs.length >= 3 && (segs[2] === CHAT_HISTORY_DIR || segs[2] === CHAT_SESSIONS_DIR);
+	return (
+		segs[0] === CHATS_DIR &&
+		segs.length >= 3 &&
+		(segs[2] === CHAT_HISTORY_DIR || segs[2] === CHAT_SESSIONS_DIR || segs[2] === CHAT_BTW_SESSIONS_DIR)
+	);
 }
 
 /** 命令的免问前缀：默认取首词（`git status` 这种多词前缀由用户在 卡.json 里自己改窄） */
@@ -219,6 +237,10 @@ export function sandboxVerdict(tool: string, input: Record<string, unknown>, sco
 	if (isOtherChatPath(scope.cardDir, scope.chatDir, target)) {
 		return { kind: "deny", reason: `${display(scope.cwd, target)} 属于其他独立项目，当前项目无权访问。` };
 	}
+	if (isLegacyCardMemoryPath(scope.cardDir, target)) {
+		const hint = scope.chatDir ? display(scope.cwd, join(scope.chatDir, CHAT_DOCS_MEMORY_DIR)) : "当前项目的 记忆/ 目录";
+		return { kind: "deny", reason: `${display(scope.cwd, target)} 是已废除的旧版卡级记忆目录；当前项目的记忆与大纲资产请访问 ${hint}。` };
+	}
 	if (access === "write" && harnessManagedPath(scope.cardDir, target)) {
 		return { kind: "deny", reason: `${display(scope.cwd, target)} 属于梨园管理的数据（快照仓 / 会话树），原生 ${tool} 不能写。` };
 	}
@@ -227,6 +249,118 @@ export function sandboxVerdict(tool: string, input: Record<string, unknown>, sco
 	if (access === "read" && within(scope.readRoots)) return { kind: "allow" };
 	if (within(grants.dirs)) return { kind: "allow" };
 	return { kind: "ask", tool: tool as NativeToolName, target, unit: grantUnit(scope.cwd, target) };
+}
+
+const requestedLimitOf = new WeakMap<Record<string, unknown>, number>();
+
+/**
+ * 若 find / grep 的搜索根覆盖了卡级 `对话/` 目录，预先放宽底层 fd/rg 的截断上限，
+ * 避免被同卡其他子项目的大量命中提前占满配额，再由结果过滤器按原定上限截断。
+ */
+function boostRecursiveLimitIfNeeded(tool: string, input: Record<string, unknown>, scope: SandboxScope): void {
+	if ((tool !== "find" && tool !== "grep") || !scope.cardDir) return;
+	const target = sandboxTarget(tool, input, scope.cwd);
+	if (!target) return;
+	const targetAbs = realExisting(target);
+	if (!insidePath(targetAbs, realExisting(chatsRoot(scope.cardDir)))) return;
+	const defaultLimit = tool === "find" ? 1000 : 100;
+	const orig = typeof input.limit === "number" && input.limit > 0 ? input.limit : defaultLimit;
+	requestedLimitOf.set(input, orig);
+	if (orig < 5000) input.limit = 5000;
+}
+
+/**
+ * 过滤 ls / find / grep 工具输出中落在其他独立子项目（`对话/<其他项目>`）、`对话/` 根入口
+ * 或已废除的卡根 `记忆/` 下的结果行，防止从卡根目录递归搜索穿透项目隔离。
+ */
+export function filterSandboxResultText(
+	tool: string,
+	input: Record<string, unknown>,
+	text: string,
+	scope: SandboxScope,
+): string {
+	if (tool !== "ls" && tool !== "find" && tool !== "grep") return text;
+	if (!scope.cardDir) return text;
+	const searchBase = sandboxTarget(tool, input, scope.cwd);
+	if (!searchBase) return text;
+	const baseAbs = realExisting(searchBase);
+	const isForbidden = (relPath: string): boolean => {
+		const cleaned = relPath.trim().replace(/[\\/]+$/, "");
+		if (!cleaned) return false;
+		const candidate = realExisting(resolve(baseAbs, cleaned));
+		if (isOtherChatPath(scope.cardDir, scope.chatDir, candidate) || isLegacyCardMemoryPath(scope.cardDir, candidate)) {
+			return true;
+		}
+		if ((tool === "find" || tool === "grep") && harnessManagedPath(scope.cardDir, candidate)) {
+			return true;
+		}
+		return false;
+	};
+
+	const cap = requestedLimitOf.get(input) ?? (typeof input.limit === "number" && input.limit > 0 ? input.limit : tool === "find" ? 1000 : 100);
+	const lines = text.split("\n");
+	const kept: string[] = [];
+	let keptItems = 0;
+
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!trimmed) {
+			if (kept.length > 0 && kept[kept.length - 1] !== "") kept.push("");
+			continue;
+		}
+		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+			continue;
+		}
+		if (tool === "ls" || tool === "find") {
+			if (trimmed === "(empty directory)" || trimmed === "No files found matching pattern") continue;
+			if (isForbidden(trimmed)) continue;
+			if (keptItems >= cap) continue;
+			kept.push(line);
+			keptItems += 1;
+		} else if (tool === "grep") {
+			if (trimmed === "No matches found") continue;
+			if (trimmed === "--") {
+				if (kept.length > 0 && kept[kept.length - 1] !== "--") kept.push(line);
+				continue;
+			}
+			const m = /^(.+?)(?::\d+:|-\d+-)\s/.exec(line);
+			if (m && isForbidden(m[1]!)) continue;
+			const isMatchLine = /^.+?:\d+:\s/.test(line);
+			if (isMatchLine && keptItems >= cap) continue;
+			kept.push(line);
+			if (isMatchLine) keptItems += 1;
+		}
+	}
+
+	while (kept.length > 0 && (kept[kept.length - 1] === "" || kept[kept.length - 1] === "--")) {
+		kept.pop();
+	}
+	if (keptItems === 0) {
+		if (tool === "ls") return "(empty directory)";
+		if (tool === "find") return "No files found matching pattern";
+		if (tool === "grep") return "No matches found";
+	}
+	return kept.join("\n");
+}
+
+export function filterSandboxToolContent<T extends { type: string; text?: string }>(
+	tool: string,
+	input: Record<string, unknown>,
+	content: T[],
+	scope: SandboxScope,
+): T[] | undefined {
+	if (tool !== "ls" && tool !== "find" && tool !== "grep") return undefined;
+	let changed = false;
+	const next = content.map((part) => {
+		if (part?.type !== "text" || typeof part.text !== "string") return part;
+		const filtered = filterSandboxResultText(tool, input, part.text, scope);
+		if (filtered !== part.text) {
+			changed = true;
+			return { ...part, text: filtered };
+		}
+		return part;
+	});
+	return changed ? next : undefined;
 }
 
 // ---------- 授权数据 ----------
@@ -345,7 +479,10 @@ export function createSandboxGate(deps: SandboxGateDeps): (tool: string, input: 
 		const session = deps.sessionGrants();
 		const perm = permanentGrants(deps.cwd, scope.cardDir);
 		const v = sandboxVerdict(tool, input, scope, { dirs: [...session.dirs, ...perm.dirs], bashAllow: [...session.bashAllow, ...perm.bashAllow] });
-		if (v.kind === "allow") return undefined;
+		if (v.kind === "allow") {
+			boostRecursiveLimitIfNeeded(tool, input, scope);
+			return undefined;
+		}
 		if (v.kind === "deny") { deps.log?.(`${tool} ${display(scope.cwd, sandboxTarget(tool, input, scope.cwd) ?? "")} → deny`); return v.reason; }
 		const card = describeAsk(v, scope);
 		if (!deps.ask) return `${card.denied}卡目录之外的访问需要用户批准，当前环境无法询问。`;
@@ -359,6 +496,7 @@ export function createSandboxGate(deps: SandboxGateDeps): (tool: string, input: 
 		if (action === "deny") return card.denied;
 		if (action === "session") deps.rememberSession(card.grant);
 		if (action === "always" && scope.cardDir) addPermanentGrant(deps.cwd, scope.cardDir, card.grant);
+		boostRecursiveLimitIfNeeded(tool, input, scope);
 		return undefined;
 	};
 }

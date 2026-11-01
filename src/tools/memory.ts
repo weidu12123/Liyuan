@@ -109,7 +109,7 @@ export const memorySearch: ToolSpec<MemoryDeps> = {
 	label: "检索剧情记忆",
 	description: (ctx) =>
 		ctx.surface === "stage"
-			? `检索当前分支的会话记忆，以及当前卡的 Markdown 手册、常驻摘要与各局复盘。每条带来源与 ref；往局复盘不等于本局已发生的事实。` +
+			? `检索当前项目的会话记忆与项目记忆文档（记忆/*.md）。每条带来源与 ref。` +
 				`重新带回【登场名录】里那些你已记不清细节的人物/物品/剧情线之前，必须先查——不得臆造早先已确立的事实。` +
 				`用${ctx.language}检索。`
 			: `检索当前剧情对话的记忆库（剧情摘要、早期归档正文、导入资料），用于诊断「模型记得什么」。` +
@@ -252,8 +252,8 @@ export const memoryList: ToolSpec<MemoryDeps> = {
 		properties: {
 			store: {
 				type: "string",
-				enum: ["external", "narrative", "card", "chat"],
-				description: "chat/card＝当前项目的 Markdown 记忆文档（记忆/*.md 与局部守则）；external＝手动录入与导入的资料（缺省）；narrative＝自动生成的剧情摘要与早期归档",
+				enum: ["external", "narrative", "chat"],
+				description: "chat＝当前项目的 Markdown 记忆文档（记忆/*.md 与局部守则）；external＝手动录入与导入的资料（缺省）；narrative＝自动生成的剧情摘要与早期归档",
 			},
 			keyword: { type: "string", description: "只列正文或标题含此字样的条目（缺省列全部）" },
 			limit: { type: "number", description: `最多列几条（默认 ${LIST_LIMIT}，上限 ${LIST_MAX}）` },
@@ -331,10 +331,10 @@ export const memoryDelete: ToolSpec<MemoryDeps> = {
 		type: "object",
 		properties: {
 			id: { type: "string", description: "条目编号（从 memory_list 的 [编号] 取）" },
-			version: { type: "string", description: "删除卡级文档必填，取自 memory_read。" },
+			version: { type: "string", description: "删除项目记忆文档时的可选版本号，取自 memory_read。" },
 			store: {
 				type: "string",
-				enum: ["external", "narrative", "card", "chat"],
+				enum: ["external", "narrative", "chat"],
 				description: "该条目所在的库（与 memory_list 时用的一致；缺省 external）",
 			},
 		},

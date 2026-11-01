@@ -20,7 +20,6 @@ import {
 	loadLorebookFile,
 	mergeEntries,
 	mountedLorebookPaths,
-	overlayPathFor,
 	setMountedLorebooks,
 } from "../lorebook.ts";
 import { addHistoryStripTags, resetDisplayTagExtras } from "../postprocess.ts";
@@ -231,8 +230,6 @@ export function modelVisibleSkillFiles(cwd: string): SkillFile[] {
  */
 interface MaterialsCacheEntry {
 	stamp: string;
-	/** overlay 路径要卡名才推得出，缓存下来免得为算指纹再解析一次卡 */
-	overlayFile: string;
 	value: StageMaterials;
 }
 let materialsCache: { cwd: string; entry: MaterialsCacheEntry } | null = null;
@@ -247,7 +244,7 @@ function fileStamp(abs: string): string {
 	}
 }
 
-/** 除 overlay 外的全部输入指纹（overlay 单独拼，见 MaterialsCacheEntry.overlayFile） */
+/** 全部输入文件指纹 */
 function inputStamp(cwd: string, config: RpConfig): string {
 	const parts = [fileStamp(resolveConfigPath(cwd)), fileStamp(resolvePath(cwd, config.card))];
 	for (const rel of mountedLorebookPaths(config)) {
@@ -273,7 +270,7 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 	// 缓存命中：指纹一致即内容一致。副作用与 skill 扫描照常走（见上方 ⚠）。
 	const cached = materialsCache?.cwd === cwd ? materialsCache.entry : null;
 	if (cached) {
-		const stamp = `${inputStamp(cwd, config)}|${fileStamp(cached.overlayFile)}`;
+		const stamp = inputStamp(cwd, config);
 		if (stamp === cached.stamp) {
 			resetDisplayTagExtras();
 			if (cached.value.presetDoc) addHistoryStripTags(FORMAT_STACK_TAGS);
@@ -301,7 +298,7 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		}
 	})();
 
-	// 世界书：已挂载独立书（0..N）+ 补充设定集 overlay；卡内 character_book 不自动进上下文。
+	// 世界书：仅加载已挂载独立书（0..N）；卡内 character_book 不自动进上下文，单局新增设定归项目资产。
 	// 协议判死（刀4）＝只执行**判定数据**（书旁 <书名>.判定.json，可见可改可删）；
 	// 没有判定文件的书不过滤——正则已在运行时退场，只在导入/手动检查时生产数据
 	// （src/lorebook-declare.ts）。按书应用（uid 是书内的，跨书合并后再套会误杀同号）。
@@ -315,15 +312,8 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		fileGroups.push(declared.entries);
 	}
 	const fileEntries = mergeEntries(...fileGroups);
-	const overlayFile = overlayPathFor(cwd, card.name, config.card);
-	const overlayEntries = (() => {
-		if (!existsSync(overlayFile)) return [];
-		const declared = applyDeclarations(loadLorebookFile(overlayFile), readDeclaration(overlayFile));
-		declarationDrops.push(...declared.dropped);
-		return declared.entries;
-	})();
 	// 用户级停用。
-	const disabledApplied = applyDisabledLore(mergeEntries(fileEntries, overlayEntries), config.disabledLore);
+	const disabledApplied = applyDisabledLore(fileEntries, config.disabledLore);
 	// 归属剥离：MVU 变量更新规则条目已被 src/mvu.ts 认领、读者是场记，主模型不该再收到同一份。
 	// 判据是归属不是签名（铁律三不禁），无树的书一律不动——见 stripMvuRuleEntries 的头注。
 	const mvuFiltered = stripMvuRuleEntries(disabledApplied);
@@ -459,8 +449,7 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 	materialsCache = {
 		cwd,
 		entry: {
-			stamp: `${inputStamp(cwd, config)}|${fileStamp(overlayFile)}|${fileStamp(declarationPathFor(overlayFile))}`,
-			overlayFile,
+			stamp: inputStamp(cwd, config),
 			value: materials,
 		},
 	};

@@ -1,11 +1,13 @@
 /**
- * 扮演模式的旁路助手运行器（/btw）：基于 pi 原生 AgentSession + SessionManager.inMemory 的单槽草稿会话。
+ * 扮演模式的旁路助手运行器（/btw）：基于 pi 原生 AgentSession + SessionManager 的项目级独立持久会话。
  *
- * - 独立于扮演主会话运行：不占 StageEngine.#busy、不落台前会话树、不产生磁盘 .jsonl；
+ * - 与扮演主会话（主演）完全隔离：主演不知道助手存在、看不到助手上下文；
+ * - 助手拥有自己持久化的 pi 会话生命周期（落盘于当前项目 `<chatDir>/助手/*.jsonl`），
+ *   推进下一拍台前剧情、切换项目或重启服务均不丢失上下文与已读文件回执；
  * - 过程内多轮上下文、工具调用循环、5 次报错自动重试、超窗口自动压缩均由 pi AgentSession 原生承担；
- * - 关闭（close）即销毁内存会话与临时沙箱授权，只保留已通过工具落盘的资产与卡片改动。
+ * - 显式执行 clear（/btw clear）才在当前项目新开一条空白助手会话。
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
 	createAgentSession,
@@ -19,7 +21,15 @@ import {
 
 import { formatToolStartDetail } from "../src/activity-format.ts";
 import { t } from "../src/i18n/index.ts";
-import { createSandboxGate, type SandboxGrants } from "../src/sandbox.ts";
+import { CHAT_BTW_SESSIONS_DIR } from "../src/paths.ts";
+import {
+	createSandboxGate,
+	filterSandboxToolContent,
+	SANDBOX_GRANT_TYPE,
+	sandboxGrantsFromBranch,
+	sandboxScope,
+	type SandboxGrants,
+} from "../src/sandbox.ts";
 import { prependToFirstUser } from "../src/stage/btw.ts";
 import type { StageEngine } from "../src/stage/engine.ts";
 import type { WireBtwMsg } from "./wire.ts";
@@ -48,7 +58,14 @@ export interface BtwRunner {
 	snapshot(): WireBtwMsg[];
 	prompt(text: string): Promise<{ aborted: boolean; error?: string }>;
 	abort(): Promise<void>;
+	/** 在当前项目新建一条空白助手会话（重置上下文） */
+	clear(): Promise<void>;
+	/** 别名：兼容既有调用方 */
 	close(): Promise<void>;
+	/** 主会话切换项目/角色卡时同步重绑到对应项目的助手会话（不清空磁盘历史） */
+	syncProject(): Promise<void>;
+	/** 进程退出时仅释放内存句柄 */
+	dispose(): Promise<void>;
 }
 
 const shippedSystemSkeleton = (): string => {
@@ -72,8 +89,69 @@ function readBaseSkeleton(agentDir: string): string {
 	return shippedSystemSkeleton();
 }
 
+/** 从 pi 会话分支重建前端/CLI 展示用的对话快照（合并同轮连续 assistant 工具步与正文） */
+function rebuildTranscriptFromBranch(branch: ReadonlyArray<Record<string, unknown>>): WireBtwMsg[] {
+	const out: WireBtwMsg[] = [];
+	let curAssistant: WireBtwMsg | null = null;
+	let fallbackTools: string[] = [];
+
+	for (const entry of branch) {
+		if (entry.type === "custom" && entry.customType === "btw-tools" && curAssistant && Array.isArray(entry.data)) {
+			curAssistant.tools = entry.data.filter((x): x is string => typeof x === "string" && x.length > 0);
+			fallbackTools = [];
+			continue;
+		}
+		if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") continue;
+		const msg = entry.message as { role?: unknown; content?: unknown; stopReason?: unknown; errorMessage?: unknown };
+		if (msg.role === "user") {
+			if (curAssistant && (!curAssistant.tools || curAssistant.tools.length === 0) && fallbackTools.length > 0) {
+				curAssistant.tools = fallbackTools;
+			}
+			curAssistant = null;
+			fallbackTools = [];
+			const text = extractUserText(msg.content).trim();
+			if (text) out.push({ role: "user", text });
+		} else if (msg.role === "assistant") {
+			if (!curAssistant) {
+				curAssistant = { role: "assistant", text: "", thinking: "", tools: [] };
+				out.push(curAssistant);
+			}
+			const parts = Array.isArray(msg.content) ? (msg.content as Array<Record<string, unknown>>) : [];
+			for (const p of parts) {
+				if (!p || typeof p !== "object") continue;
+				if (p.type === "text" && typeof p.text === "string" && p.text) {
+					curAssistant.text = curAssistant.text ? `${curAssistant.text}${p.text}` : p.text;
+				} else if (p.type === "thinking" && typeof p.thinking === "string" && p.thinking) {
+					curAssistant.thinking = `${curAssistant.thinking ?? ""}${p.thinking}`;
+				} else if (p.type === "toolCall" && typeof p.name === "string") {
+					const args = p.arguments && typeof p.arguments === "object" ? (p.arguments as Record<string, unknown>) : {};
+					const detail = formatToolStartDetail(p.name, args) || p.name;
+					fallbackTools.push(detail);
+				}
+			}
+			if (msg.stopReason === "error" && !curAssistant.text.trim()) {
+				const errText = typeof msg.errorMessage === "string" && msg.errorMessage ? msg.errorMessage : "provider error";
+				curAssistant.text = `（生成失败：${errText}）`; // i18n-ignore：回落文案
+			}
+		}
+	}
+	if (curAssistant && (!curAssistant.tools || curAssistant.tools.length === 0) && fallbackTools.length > 0) {
+		curAssistant.tools = fallbackTools;
+	}
+	return out;
+}
+
+function extractUserText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((p) => (p && typeof p === "object" && (p as { type?: unknown }).type === "text" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""))
+		.join("");
+}
+
 export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 	let session: AgentSession | null = null;
+	let boundSessionDir: string | null = null;
 	let unsubscribe: (() => void) | null = null;
 	let sessionGrants: SandboxGrants = { dirs: [], bashAllow: [] };
 	let busy = false;
@@ -85,6 +163,33 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 	let transcript: WireBtwMsg[] = [];
 	let liveReply: WireBtwMsg | null = null;
 
+	const resolveBtwSessionDir = (): string => {
+		const { chatDir } = deps.stage.btwAssembly();
+		const dir = chatDir ? join(chatDir, CHAT_BTW_SESSIONS_DIR) : join(deps.cwd, ".liyuan", CHAT_BTW_SESSIONS_DIR);
+		mkdirSync(dir, { recursive: true });
+		return dir;
+	};
+
+	/** 确保内存中的 transcript 与当前项目磁盘上的最近助手会话同步（即使尚未实例化 AgentSession） */
+	const syncTranscriptIfIdle = (): void => {
+		if (busy || session?.isStreaming) return;
+		const targetDir = resolveBtwSessionDir();
+		if (session && boundSessionDir === targetDir) return;
+		if (!session && boundSessionDir === targetDir) return;
+		// 目标项目目录发生变化且当前不在流式：卸载旧会话并从新目录恢复快照
+		if (session) {
+			unsubscribe?.();
+			unsubscribe = null;
+			session.dispose();
+			session = null;
+		}
+		boundSessionDir = targetDir;
+		const sm = SessionManager.continueRecent(deps.cwd, targetDir);
+		const branch = sm.getBranch() as unknown as Array<Record<string, unknown>>;
+		transcript = rebuildTranscriptFromBranch(branch);
+		sessionGrants = sandboxGrantsFromBranch(branch as never);
+	};
+
 	const recordTool = (detail: string) => {
 		if (liveReply) {
 			liveReply.tools ??= [];
@@ -93,8 +198,32 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 		deps.events?.onTool?.(detail);
 	};
 
-	const ensureSession = async (): Promise<AgentSession> => {
-		if (session) return session;
+	const teardownSessionInstance = async (): Promise<void> => {
+		activeAbort?.abort();
+		const s = session;
+		session = null;
+		activeKit = null;
+		activeAssembly = null;
+		activeToolNames = [];
+		lastError = undefined;
+		liveReply = null;
+		unsubscribe?.();
+		unsubscribe = null;
+		if (s) {
+			try {
+				if (s.isStreaming) await s.abort();
+			} catch {
+				// ignore abort errors during teardown
+			}
+			s.dispose();
+		}
+	};
+
+	const ensureSession = async (forceFresh = false): Promise<AgentSession> => {
+		const targetDir = resolveBtwSessionDir();
+		if (session && boundSessionDir === targetDir && !forceFresh) return session;
+		if (session) await teardownSessionInstance();
+
 		const { modelRuntime, settingsManager } = deps.getServices();
 		const { model, thinkingLevel } = deps.getModelState();
 		const toolErrors = new Set<string>();
@@ -161,7 +290,7 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 						(event.toolName === "ls" || event.toolName === "find" || event.toolName === "grep") &&
 						(inputObj.path === undefined || (typeof inputObj.path === "string" && inputObj.path.trim() === ""))
 					) {
-						const defaultDir = event.toolName === "ls" ? (asm.cardDir ?? asm.chatDir) : (asm.chatDir ?? asm.cardDir);
+						const defaultDir = asm.chatDir ?? asm.cardDir;
 						if (defaultDir) inputObj.path = defaultDir;
 					}
 					const gate = createSandboxGate({
@@ -170,8 +299,12 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 						chatDir: asm.chatDir ?? undefined,
 						sessionGrants: () => sessionGrants,
 						rememberSession: (g) => {
-							if ("dir" in g) sessionGrants.dirs.push(g.dir);
-							else sessionGrants.bashAllow.push(g.bashPrefix);
+							if ("dir" in g) {
+								sessionGrants.dirs.push(g.dir);
+								session?.sessionManager.appendCustomEntry(SANDBOX_GRANT_TYPE, { dir: g.dir });
+							} else {
+								sessionGrants.bashAllow.push(g.bashPrefix);
+							}
 						},
 						ask: kit.askUser ? (q, opts) => kit.askUser!(q, opts, activeAbort?.signal) : undefined,
 						onStop: () => {
@@ -188,7 +321,20 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 			});
 
 			pi.on("tool_result", (event) => {
-				if (toolErrors.delete(event.toolCallId)) return { isError: true };
+				const asm = activeAssembly ?? deps.stage.btwAssembly();
+				const nextContent = filterSandboxToolContent(
+					event.toolName,
+					(event.input ?? {}) as Record<string, unknown>,
+					event.content,
+					sandboxScope(deps.cwd, asm.config, asm.chatDir ?? undefined),
+				);
+				const isError = toolErrors.delete(event.toolCallId);
+				if (nextContent || isError) {
+					return {
+						...(nextContent ? { content: nextContent as typeof event.content } : {}),
+						...(isError ? { isError: true } : {}),
+					};
+				}
 				return undefined;
 			});
 		};
@@ -206,17 +352,26 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 		});
 		await resourceLoader.reload();
 
+		const sessionManager = forceFresh
+			? SessionManager.create(deps.cwd, targetDir)
+			: SessionManager.continueRecent(deps.cwd, targetDir);
+
 		const created = await createAgentSession({
 			cwd: deps.cwd,
 			agentDir: deps.agentDir,
 			modelRuntime,
 			settingsManager,
 			resourceLoader,
-			sessionManager: SessionManager.inMemory(deps.cwd),
+			sessionManager,
 			model,
 			thinkingLevel,
 		});
 		session = created.session;
+		boundSessionDir = targetDir;
+		const branch = session.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>;
+		transcript = rebuildTranscriptFromBranch(branch);
+		sessionGrants = sandboxGrantsFromBranch(branch as never);
+
 		unsubscribe = session.subscribe((event) => {
 			if (event.type === "message_update") {
 				const sub = event.assistantMessageEvent;
@@ -244,13 +399,16 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 			return busy || session?.isStreaming === true;
 		},
 		get hasSession(): boolean {
-			return (session !== null && session.messages.some((m) => m.role === "user")) || transcript.length > 0;
+			syncTranscriptIfIdle();
+			return (session !== null && session.messages.some((m) => m.role === "user")) || transcript.some((m) => m.role === "user");
 		},
 		get userTurnCount(): number {
-			if (!session) return 0;
-			return session.messages.filter((m) => m.role === "user").length;
+			syncTranscriptIfIdle();
+			if (session) return session.messages.filter((m) => m.role === "user").length;
+			return transcript.filter((m) => m.role === "user").length;
 		},
 		snapshot(): WireBtwMsg[] {
+			syncTranscriptIfIdle();
 			return transcript.map((m) => ({
 				role: m.role,
 				text: m.text,
@@ -275,13 +433,13 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 			busy = true;
 			lastError = undefined;
 			activeAbort = new AbortController();
-			transcript.push({ role: "user", text: trimmed });
-			liveReply = { role: "assistant", text: "", thinking: "", tools: [] };
-			transcript.push(liveReply);
-			deps.events?.onUser?.(trimmed);
-			deps.events?.onStart?.();
 			try {
-				const s = await ensureSession();
+				const s = await ensureSession(false);
+				transcript.push({ role: "user", text: trimmed });
+				liveReply = { role: "assistant", text: "", thinking: "", tools: [] };
+				transcript.push(liveReply);
+				deps.events?.onUser?.(trimmed);
+				deps.events?.onStart?.();
 				if (s.model?.id !== model.id || s.model?.provider !== model.provider) {
 					await s.setModel(model);
 				}
@@ -289,6 +447,10 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 					s.setThinkingLevel(thinkingLevel);
 				}
 				await s.prompt(trimmed, { expandPromptTemplates: false });
+				if (liveReply?.tools?.length) {
+					s.sessionManager.appendCustomEntry("btw-tools", [...liveReply.tools]);
+				}
+				s.sessionManager.flush();
 				const aborted = activeAbort.signal.aborted;
 				if (lastError && !aborted) {
 					if (liveReply && !liveReply.text.trim()) {
@@ -322,29 +484,43 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 				await session.abort();
 			}
 		},
-		async close(): Promise<void> {
-			activeAbort?.abort();
-			const hadData = session !== null || transcript.length > 0;
-			const s = session;
-			session = null;
-			activeKit = null;
-			activeAssembly = null;
-			activeToolNames = [];
-			sessionGrants = { dirs: [], bashAllow: [] };
-			lastError = undefined;
-			transcript = [];
-			liveReply = null;
-			unsubscribe?.();
-			unsubscribe = null;
-			if (s) {
-				try {
-					if (s.isStreaming) await s.abort();
-				} catch {
-					// ignore abort errors during teardown
+		async clear(): Promise<void> {
+			const targetDir = resolveBtwSessionDir();
+			let hadDiskFiles = false;
+			try {
+				for (const f of readdirSync(targetDir)) {
+					if (f.endsWith(".jsonl")) {
+						hadDiskFiles = true;
+						rmSync(join(targetDir, f), { force: true });
+					}
 				}
-				s.dispose();
+			} catch {
+				// ignore remove errors
 			}
+			const hadData = session !== null || transcript.length > 0 || hadDiskFiles;
+			await teardownSessionInstance();
+			boundSessionDir = targetDir;
+			sessionGrants = { dirs: [], bashAllow: [] };
+			transcript = [];
 			if (hadData) deps.events?.onClear?.();
+		},
+		async close(): Promise<void> {
+			await this.clear();
+		},
+		async syncProject(): Promise<void> {
+			const targetDir = resolveBtwSessionDir();
+			if (boundSessionDir === targetDir) return;
+			await teardownSessionInstance();
+			boundSessionDir = targetDir;
+			const sm = SessionManager.continueRecent(deps.cwd, targetDir);
+			const branch = sm.getBranch() as unknown as Array<Record<string, unknown>>;
+			transcript = rebuildTranscriptFromBranch(branch);
+			sessionGrants = sandboxGrantsFromBranch(branch as never);
+		},
+		async dispose(): Promise<void> {
+			await teardownSessionInstance();
+			boundSessionDir = null;
+			transcript = [];
 		},
 	};
 }

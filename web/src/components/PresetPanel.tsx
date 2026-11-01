@@ -107,7 +107,7 @@ const GLOBAL_PROMPT_SLOTS: PromptSlotMeta[] = [
 		title: () => t("助手系统提示词"),
 		file: "BTW_APPEND_SYSTEM.md", // i18n-ignore
 		effect: "beat",
-		hint: () => t("扮演模式旁路助手的系统提示词（BTW_APPEND_SYSTEM.md），与「角色 → 助手」中的身份提示词同步。"),
+		hint: () => t("扮演模式旁路助手的底层工作规则（BTW_APPEND_SYSTEM.md）；助手的性格设定请在「角色 → 助手」中修改。"),
 	},
 ];
 

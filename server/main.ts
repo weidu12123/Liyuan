@@ -155,8 +155,7 @@ import { readSessionCardInfo } from "../src/session-scan.ts";
 import { t } from "../src/i18n/index.ts";
 import { cardFileIn, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, listChatMarkdownAssets, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
 import { chatSessionsOf, chatsOfCard, ensureStorySessionDir, newChatSessionDir, storySessionTarget } from "../src/story-guide.ts";
-import { loadManifest, memoryPaths, saveManifest, syncCardMemory } from "../src/card-memory.ts";
-import { alreadyMigrated, applyCardMigration, planCardMigration, planOrphanSessions, promoteStagedCard } from "../src/migrate-cards.ts";
+import { alreadyMigrated, applyCardMigration, migrateLegacyCardMemoryToChatAssets, planCardMigration, planOrphanSessions, promoteStagedCard } from "../src/migrate-cards.ts";
 import {
 	toggleDisabledLore,
 } from "../src/lorebook.ts";
@@ -255,6 +254,9 @@ if (!alreadyMigrated(cwd)) {
 				console.log(`[liyuan] 卡迁移 ${line}`); // i18n-ignore：终端日志
 			}
 		}
+		for (const line of migrateLegacyCardMemoryToChatAssets(cwd)) {
+			console.log(`[liyuan] 资产迁移 ${line}`); // i18n-ignore：终端日志
+		}
 	} catch (err) {
 		console.error(`[liyuan] 收散会话失败：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
 	}
@@ -311,14 +313,21 @@ refreshNamesFromConfig();
 
 // ---------- pi 会话宿主 ----------
 
+let sharedModelRuntime: AgentSession["modelRuntime"] | undefined;
+let sharedSettingsManager: AgentSession["settingsManager"] | undefined;
+
 const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
 	const services = await createAgentSessionServices({
 		cwd,
+		...(sharedModelRuntime ? { modelRuntime: sharedModelRuntime } : {}),
+		...(sharedSettingsManager ? { settingsManager: sharedSettingsManager } : {}),
 		// 刀1（PLAN-AGENT-SLOTS §一）：打开 pi 的上下文文件槽位后，应用根目录自己的
 		// AGENTS.md/CLAUDE.md（开发者指令：铁律、src 索引、测试命令）会顺着 cwd 进
 		// 扮演基座——那是给改梨园代码的 agent 看的，不是剧情素材。只滤应用根这一层；
 		// 卡目录及用户自建的 AGENTS.md（刀3 的正主）照常继承。
 		resourceLoaderOptions: {
+			noThemes: true,
+			noPromptTemplates: true,
 			// 桌面版：cwd＝数据根，pi 按 cwd/.liyuan/extensions 扫不到产品扩展——经 pi 现成的
 			// 显式路径通道指到产品根（roleplay.ts 的 ../../src 相对引用只在那一侧成立）。
 			// 通道只认单个文件（目录语义是「包根」），照 stage 规则枚举 *.ts。
@@ -342,6 +351,8 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionMan
 			appendSystemPromptOverride: () => [],
 		},
 	});
+	sharedModelRuntime = services.modelRuntime;
+	sharedSettingsManager = services.settingsManager;
 	return {
 		...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent })),
 		services,
@@ -774,13 +785,6 @@ const takeDirectorNote = (): string | undefined => {
 	return note ?? undefined;
 };
 
-/** 推进下一拍台前剧情或重 roll 时：若存在已聊完的旁路草稿则自动关闭销毁（流式进行中的不打断） */
-const closeBtwBeforeBeat = async (): Promise<void> => {
-	if (stage?.mode === "roleplay" && btw?.hasSession && !btw.isStreaming) {
-		await btw.close();
-	}
-};
-
 /** 当前分支上最后一条用户消息 entry id（agent 模式查全部分支 user；roleplay 模式查剧情轮） */
 const lastStoryUserId = (): string | null => {
 	const isAgent = stage?.mode === "agent";
@@ -1169,7 +1173,6 @@ const regenerateSwipe = async (): Promise<void> => {
 	}
 	// 展示层立刻去掉旧回复（只显示到 user）
 	resyncAll();
-	await closeBtwBeforeBeat();
 	await stage.regenerate(takeDirectorNote());
 };
 
@@ -1527,64 +1530,7 @@ const sideTextOnce = async (
  * 子项目逐个复盘，复盘文件有增/改/删就合并＋遗忘。进度走活动条（name=memory）；
  * 全程后台，失败只进日志——记忆滞后不影响演出。
  */
-const memorySyncBusy = new Set<string>();
-const memorySyncQueued = new Set<string>();
-
-/** 给一张卡做一次记忆同步（模型/素材现读；任何失败只进日志、绝不抛出） */
-const syncCardMemoryOnce = async (cardDir: string) => {
-	try {
-		// 素材取自这张卡自己：卡本体在卡文件夹里，配置＝全局与卡级合并（与台上同语义）
-		const cardFile = cardFileIn(cardDir);
-		if (!cardFile) return;
-		const card = loadCardFile(cardFile);
-		const config = mergeCardConfig(loadConfig(cwd), loadCardConfig(cardDir));
-		// 旁路条目与场记/压缩同一条规则（sideEntryOf 是唯一主人）：配了走它，没配跟随剧情模型
-		const side = sideEntryOf();
-		const chosen = (side?.model ?? session.model) as StageModelLike | undefined;
-		if (!chosen) return; // 还没配模型：下次落会话再同步
-		const r = await syncCardMemory(
-			{
-				sideText: (sp, ut, maxTokens) =>
-					sideTextOnce(chosen, sp, ut, {
-						maxTokens,
-						reasoning: side?.thinking ?? "off",
-						signal: AbortSignal.timeout(300_000),
-					}),
-				onActivity: (detail) => broadcast({ type: "activity", activity: { kind: "note", name: "memory", detail } }),
-			},
-			{
-				cardDir,
-				language: config.language,
-				userName: config.userName,
-				charName: card.name,
-			},
-		);
-		if (r.failed.length > 0 || r.merged === "failed") {
-			console.error(`[card-memory] 同步未完成：复盘失败 ${r.failed.length} 局、合并 ${r.merged}`); // i18n-ignore：终端日志
-		} else if (r.recapped.length + r.forgotten.length > 0) {
-			console.log(`[card-memory] 同步完成：复盘 ${r.recapped.length} 局、遗忘 ${r.forgotten.length} 局`); // i18n-ignore：终端日志
-			// 活动条只在拍内可见（拍外来的会被下一拍的 resetActs 清掉），完成时另给一条
-			// notify（与「已钉档」同一通道）——只在真动了记忆时出声，无变化保持安静。
-			broadcast({
-				type: "notify",
-				level: "info",
-				text: r.forgotten.length
-					? t("记忆已更新：复盘 {recapped} 局、遗忘 {forgotten} 局", { recapped: r.recapped.length, forgotten: r.forgotten.length })
-					: t("记忆已更新：复盘 {recapped} 局", { recapped: r.recapped.length }),
-			});
-		}
-	} catch (err) {
-		console.error(`[card-memory] 同步异常：${err instanceof Error ? err.message : String(err)}`); // i18n-ignore：终端日志
-	}
-};
-
 // 卡级后台自动复盘已废除（2026-10-18 定案：记忆严格限在当前子项目内，不跨项目复盘合并）
-const runCardMemorySync = (_cardDir: string) => {
-	void syncCardMemoryOnce;
-	void memorySyncBusy;
-	void memorySyncQueued;
-};
-
 const syncMemoryForSession = () => {
 	// 保持空操作：切会话/删会话不再触发跨项目卡级复盘
 };
@@ -1595,7 +1541,7 @@ const bindSession = async () => {
 	pendingDirectorNote = null;
 	const nextChatDir = chatDirOfSessionDir(session.sessionManager.getSessionDir());
 	if (lastBoundChatDir !== null && nextChatDir !== lastBoundChatDir) {
-		await btw?.close();
+		await btw?.syncProject();
 	}
 	lastBoundChatDir = nextChatDir;
 	// 账本/面板的落点跟着会话走（子项目一份）：换会话/换子项目后要重挂目录监听
@@ -1762,6 +1708,30 @@ const wireRuntimeHooks = () => {
 		resyncAll(); // /branch 等替换会话后，所有端对齐新会话
 	});
 };
+
+/**
+ * 切换到指定 sessionDir 上的新 SessionManager（同 pi teardownCurrent 收尾：发 reason="new"|"resume"，
+ * 不发 reason="quit"，避免把进程级 MCP 连接池当成退出而销毁）。
+ */
+const replaceRuntimeForSessionDir = async (sessionManager: SessionManager, reason: "new" | "resume" = "new") => {
+	const previousSessionFile = session.sessionFile;
+	await session.abort();
+	await session.extensionRunner.emit({
+		type: "session_shutdown",
+		reason,
+		targetSessionFile: sessionManager.getSessionFile(),
+	});
+	session.dispose();
+	runtime = await createAgentSessionRuntime(createRuntime, {
+		cwd,
+		agentDir: getAgentDir(),
+		sessionManager,
+		sessionStartEvent: { type: "session_start", reason, previousSessionFile },
+	});
+	wireRuntimeHooks();
+	await bindSession();
+};
+
 wireRuntimeHooks();
 await bindSession();
 
@@ -1923,7 +1893,7 @@ const restHost: RestHost = {
 		resyncAll();
 	},
 	async switchToCard(opts?: { switchSession?: boolean }) {
-		await btw?.close();
+		await btw?.syncProject();
 		refreshNamesFromConfig(); // rest.ts 已写盘新 card，先让会话过滤对准新卡
 		// 换卡：装载中的预设要按新卡（宏按卡求值）重新落条目；声明全局留档（assets/presets/.liyuan/），
 		// 换卡不再重复问模型。后台跑，不挡切会话：链条自带串行（presetSyncChain）与跑完通知；
@@ -1946,16 +1916,7 @@ const restHost: RestHost = {
 			const dir = ensureStorySessionDir(cwd, cardPath);
 			const curChat = chatDirOfSessionDir(session.sessionManager.getSessionDir());
 			if (dir && curChat !== chatDirOfSessionDir(dir)) {
-				const previousSessionFile = session.sessionFile;
-				await runtime.dispose();
-				runtime = await createAgentSessionRuntime(createRuntime, {
-					cwd,
-					agentDir: getAgentDir(),
-					sessionManager: SessionManager.create(cwd, dir),
-					sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-				});
-				wireRuntimeHooks();
-				await bindSession();
+				await replaceRuntimeForSessionDir(SessionManager.create(cwd, dir), "new");
 				resyncAll();
 				result = "created";
 			} else {
@@ -2133,58 +2094,21 @@ const restHost: RestHost = {
 				if (otherSessions[0]) {
 					await runtime.switchSession(otherSessions[0].path);
 				} else {
-					const previousSessionFile = session.sessionFile;
-					await runtime.dispose();
-					runtime = await createAgentSessionRuntime(createRuntime, {
-						cwd,
-						agentDir: getAgentDir(),
-						sessionManager: SessionManager.create(cwd, other.sessionsDir),
-						sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-					});
-					wireRuntimeHooks();
-					await bindSession();
+					await replaceRuntimeForSessionDir(SessionManager.create(cwd, other.sessionsDir), "new");
 				}
 			} else {
 				// 唯一项目：新建一个干净的项目并切入（保持同模式）
 				const mode = chatModeOfSessionDir(chatSessionsDirOf(cardDir, chatId));
 				const freshDir = newChatSessionDir(cwd, cardPath, undefined, mode === "agent" ? "agent" : undefined);
 				if (!freshDir) throw new Error(t("无法创建新子项目作为落脚点"));
-				const previousSessionFile = session.sessionFile;
-				await runtime.dispose();
-				runtime = await createAgentSessionRuntime(createRuntime, {
-					cwd,
-					agentDir: getAgentDir(),
-					sessionManager: SessionManager.create(cwd, freshDir),
-					sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-				});
-				wireRuntimeHooks();
-				await bindSession();
+				await replaceRuntimeForSessionDir(SessionManager.create(cwd, freshDir), "new");
 			}
 		}
 
-		// 2. 物理删除整个子项目目录（正文、历史、会话、状态、面板、向量记忆）
+		// 2. 物理删除整个子项目目录（正文、历史、会话、状态、面板、向量记忆、项目资产）
 		rmSync(targetDir, { recursive: true, force: true });
 
-		// 3. 物理删除卡级跨会话复盘与记忆残留
-		const p = memoryPaths(cardDir);
-		const recapFile = p.recapOf(chatId);
-		if (existsSync(recapFile)) {
-			try { unlinkSync(recapFile); } catch {}
-		}
-		const manifest = loadManifest(cardDir);
-		if (manifest.recaps[chatId]) {
-			delete manifest.recaps[chatId];
-		}
-		manifest.manual ??= { protectedRefs: [], forgottenChats: [], supersededRecaps: {}, aggregatePinned: false, epoch: 0 };
-		if (!manifest.manual.forgottenChats.includes(chatId)) {
-			manifest.manual.forgottenChats.push(chatId);
-		}
-		saveManifest(cardDir, manifest);
-
-		// 4. 触发记忆同步与遗忘
-		runCardMemorySync(cardDir);
-
-		// 5. 广播会话树刷新
+		// 3. 广播会话树刷新
 		resyncAll();
 		broadcast(await listSessions());
 	},
@@ -3117,7 +3041,7 @@ const handlePrompt = async (text: string) => {
 			return;
 		}
 		if (/^(clear|close)$/i.test(sub)) {
-			await btw?.close();
+			await btw?.clear();
 			const msg = t("已关闭并清空旁路对话");
 			cli?.out(`[btw] ${msg}`); // i18n-ignore：CLI 终端输出
 			broadcast({ type: "notify", level: "info", text: msg });
@@ -3156,16 +3080,7 @@ const handlePrompt = async (text: string) => {
 				cli?.out("[project] 当前卡不在 cards/ 下"); // i18n-ignore：CLI 终端输出
 				return;
 			}
-			const previousSessionFile = session.sessionFile;
-			await runtime.dispose();
-			runtime = await createAgentSessionRuntime(createRuntime, {
-				cwd,
-				agentDir: getAgentDir(),
-				sessionManager: SessionManager.create(cwd, freshDir),
-				sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-			});
-			wireRuntimeHooks();
-			await bindSession();
+			await replaceRuntimeForSessionDir(SessionManager.create(cwd, freshDir), "new");
 			resyncAll();
 			const nChat = chatDirOfSessionDir(session.sessionManager.getSessionDir());
 			cli?.out(`[project] 已新建并切入项目 ${nChat ? basename(nChat) : ""}`); // i18n-ignore：CLI 终端输出
@@ -3183,16 +3098,7 @@ const handlePrompt = async (text: string) => {
 			if (targetSessions[0]) {
 				await runtime.switchSession(targetSessions[0].path);
 			} else {
-				const previousSessionFile = session.sessionFile;
-				await runtime.dispose();
-				runtime = await createAgentSessionRuntime(createRuntime, {
-					cwd,
-					agentDir: getAgentDir(),
-					sessionManager: SessionManager.create(cwd, target.sessionsDir),
-					sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-				});
-				wireRuntimeHooks();
-				await bindSession();
+				await replaceRuntimeForSessionDir(SessionManager.create(cwd, target.sessionsDir), "new");
 			}
 			resyncAll();
 			cli?.out(`[project] 已切入项目 ${target.id}`); // i18n-ignore：CLI 终端输出
@@ -3320,7 +3226,6 @@ const handlePrompt = async (text: string) => {
 		session.appendMessage({ role: "user", content: [{ type: "text", text: rerollArgMatch[1].trim() }], timestamp: Date.now() });
 		sm.flush();
 		resyncAll();
-		await closeBtwBeforeBeat();
 		await stage.regenerate(takeDirectorNote());
 		return;
 	}
@@ -3430,7 +3335,6 @@ const handlePrompt = async (text: string) => {
 	const commandName = trimmed.startsWith("/") ? trimmed.slice(1).split(" ", 1)[0] : undefined;
 	const isCommand = !!commandName && !!session.extensionRunner.getCommand(commandName);
 	if (!isCommand) {
-		await closeBtwBeforeBeat();
 		broadcast({
 			type: "message",
 			message: { channel: "user", name: names.userName, text: trimmed, ...(stage.mode !== "roleplay" ? { mode: stage.mode } : {}) },
@@ -3462,6 +3366,31 @@ const refuseWhileStreaming = (ws: WebSocket, what: string): boolean => {
 // ---------- 会话-卡绑定（PLAN-PHASE3 §2.1）：读文件头解析 rp-card，mtime 缓存 ----------
 
 const cardCache = new Map<string, { mtimeMs: number; info: { card: string; name: string } | null }>();
+const sessionDirListCache = new Map<string, { sig: string; items: Awaited<ReturnType<typeof SessionManager.listAll>> }>();
+
+const listSessionsInDirCached = async (dirPath: string) => {
+	try {
+		const files = readdirSync(dirPath).filter((f) => f.endsWith(".jsonl")).sort();
+		if (files.length === 0) return [];
+		const parts: string[] = [];
+		for (const f of files) {
+			try {
+				const st = statSync(join(dirPath, f));
+				parts.push(`${f}:${st.mtimeMs}:${st.size}`);
+			} catch {
+				// 忽略并发消失的临时文件
+			}
+		}
+		const sig = parts.join("|");
+		const hit = sessionDirListCache.get(dirPath);
+		if (hit && hit.sig === sig) return hit.items;
+		const items = await SessionManager.listAll(dirPath);
+		sessionDirListCache.set(dirPath, { sig, items });
+		return items;
+	} catch {
+		return [];
+	}
+};
 
 const readSessionCard = (path: string, mtimeMs: number): { card: string; name: string } | null => {
 	const cached = cardCache.get(path);
@@ -3494,9 +3423,9 @@ const sessionInfos = async () => {
 	// （rp-card 过滤退役——子项目目录本身就是归属）；否则走老路径（pi 默认目录 + 卡过滤）。
 	const chatEntries = chatSessionsOf(cwd, cardPath);
 	// pi 的 listAll/list 只收**目录**（listSessionsFromDir 会 readdir）——传会话文件会
-	// ENOTDIR 被吞、返回空。按子项目去重目录再列。
+	// ENOTDIR 被吞、返回空。按子项目去重目录再列（带 mtime/size 缓存避免未变会话重复整读 JSONL）。
 	const all = chatEntries
-		? (await Promise.all([...new Set(chatEntries.map((e) => dirname(e.path)))].map((p) => SessionManager.listAll(p)))).flat()
+		? (await Promise.all([...new Set(chatEntries.map((e) => dirname(e.path)))].map((p) => listSessionsInDirCached(p)))).flat()
 		: await SessionManager.list(cwd);
 	// 两层布局：会话文件所在目录即其子项目的会话目录——目录→chatId 一张表。
 	// 用 chatsOfCard 全量子项目建表（含还没有会话文件的空项目）——否则新建项目后的
@@ -3525,19 +3454,20 @@ const sessionInfos = async () => {
 	};
 	for (const s of all) {
 		const mtime = s.modified instanceof Date ? s.modified.getTime() : Number(s.modified) || 0;
-		// 新建后 mtime 刚变：清掉可能过期的卡缓存再读
-		if (cardCache.has(s.path)) {
-			const c = cardCache.get(s.path)!;
-			if (c.mtimeMs !== mtime) cardCache.delete(s.path);
-		}
-		const info = readSessionCard(s.path, mtime);
 		const isCurrent = s.id === curId || isSameSessionPath(s.path, curFile);
-		// 两层布局不过滤：文件在这张卡的子项目目录里就是这张卡的，rp-card 标记只作显示
-		// （issue #11：重绑定行漂到文件中部时按标记过滤会把会话藏掉）。
+		// 两层布局不过滤：文件在这张卡的子项目目录里就是这张卡的，不必整读 JSONL 扫描 rp-card。
 		// 老布局严格按卡过滤：其它卡一律不出现（含「当前打开却属其它卡」——由换卡流程切会话）。
-		if (!chatEntries && (!info || !belongsHere(info.card))) {
-			// 仅当「当前会话尚未打上标记」时保留入口，避免新建后列表空白
-			if (!(isCurrent && !info && cardPath)) continue;
+		let info: { card: string; name: string } | null = null;
+		if (!chatEntries) {
+			if (cardCache.has(s.path)) {
+				const c = cardCache.get(s.path)!;
+				if (c.mtimeMs !== mtime) cardCache.delete(s.path);
+			}
+			info = readSessionCard(s.path, mtime);
+			if (!info || !belongsHere(info.card)) {
+				// 仅当「当前会话尚未打上标记」时保留入口，避免新建后列表空白
+				if (!(isCurrent && !info && cardPath)) continue;
+			}
 		}
 		const preview = readSessionPreview(s.path, mtime);
 		const chatId = chatIdOf(s.path);
@@ -3899,18 +3829,7 @@ wss.on("connection", (ws, req) => {
 									new StoryHistory(chatDir).commit({ author: "user", message: t("开场白落成第一个文件") });
 								}
 							}
-							const previousSessionFile = session.sessionFile;
-							// 按 pi 的 teardownCurrent 同款收尾旧会话（session_shutdown → 扩展收尾 → dispose），
-							// 不能只丢引用：roleplay.ts 在 shutdown 事件里落盘收尾。
-							await runtime.dispose();
-							runtime = await createAgentSessionRuntime(createRuntime, {
-								cwd,
-								agentDir: getAgentDir(),
-								sessionManager: SessionManager.create(cwd, freshDir),
-								sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-							});
-							wireRuntimeHooks();
-							await bindSession();
+							await replaceRuntimeForSessionDir(SessionManager.create(cwd, freshDir), "new");
 							resyncAll();
 						} else {
 							await runtime.newSession();
@@ -3994,18 +3913,7 @@ wss.on("connection", (ws, req) => {
 						if (currentChatDir && currentChatDir === target.dir) {
 							await runtime.newSession();
 						} else {
-							const previousSessionFile = session.sessionFile;
-							// 按 pi 的 teardownCurrent 同款收尾旧会话（session_shutdown → 扩展收尾 → dispose），
-							// 不能只丢引用：roleplay.ts 在 shutdown 事件里落盘收尾。
-							await runtime.dispose();
-							runtime = await createAgentSessionRuntime(createRuntime, {
-								cwd,
-								agentDir: getAgentDir(),
-								sessionManager: SessionManager.create(cwd, target.sessionsDir),
-								sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-							});
-							wireRuntimeHooks();
-							await bindSession();
+							await replaceRuntimeForSessionDir(SessionManager.create(cwd, target.sessionsDir), "new");
 							resyncAll();
 						}
 						broadcast(await listSessions());
@@ -4086,8 +3994,9 @@ const shutdown = async () => {
 			wss.close();
 			httpServer.close();
 		}
-		await btw?.close();
+		await btw?.dispose();
 		await runtime.dispose();
+		await getMcpHub(cwd).closeAll();
 	} finally {
 		process.exit(0);
 	}

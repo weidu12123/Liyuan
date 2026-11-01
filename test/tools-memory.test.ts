@@ -116,7 +116,7 @@ test("写侧不给 store 参数：narrative 服务层禁写，只有一个合法
 
 	// list 要分库（两库性质不同：手动录入 vs 自动生成的剧情摘要）
 	const listProps = (memoryList.parameters(stageCtx) as { properties: Record<string, { enum?: string[] }> }).properties;
-	assert.deepEqual(listProps.store?.enum, ["external", "narrative", "card", "chat"]);
+	assert.deepEqual(listProps.store?.enum, ["external", "narrative", "chat"]);
 });
 
 test("memory_add 的描述必须钉死「不跨会话」（最易说谎处）", () => {

@@ -25,12 +25,10 @@ import { storyBranch } from "../../src/conversation-mode.ts";
 import { memorySearch } from "../../src/memory/index.ts";
 import { checkWriteGate } from "../../src/tools/gate.ts";
 import {
-	appendOverlayEntry,
 	applyDisabledLore,
 	loadLorebookFile,
 	mergeEntries,
 	mountedLorebookPaths,
-	overlayPathFor,
 	searchEntries,
 	setMountedLorebooks,
 } from "../../src/lorebook.ts";
@@ -100,7 +98,6 @@ const RP_TOOLS = [
 	"lorebook_search",
 	"world_state_get",
 	"world_state_update",
-	"lorebook_write",
 	"show_image",
 	"show_audio",
 	"show_video",
@@ -183,8 +180,6 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 	let panels: PanelMap = {};
 	let panelsFile = "";
 	let preset: RpPreset | null = null;
-		/** 补充设定集文件（lorebook_write 的落点，按卡分文件） */
-	let overlayFile = "";
 	/** 项目根（工具执行时无 ctx.cwd，session_start 捕获） */
 	let appCwd = process.cwd();
 	// 场记记账：进行中标志（防重入）；连续性审查已关闭
@@ -193,6 +188,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 	let sessionMcpEnabled: string[] = [];
 	let mcpToolNames: string[] = [];
 	const mcpRegistered = new Set<string>();
+	let extensionDisposed = false;
 	
 	const notify = (ctx: { ui: { notify: (msg: string, level: string) => void } }, msg: string, level = "info") => {
 		try {
@@ -308,11 +304,32 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		}
 		const hub = getMcpHub(appCwd);
 		const statuses = await hub.sync(sessionMcpEnabled);
+		if (extensionDisposed) return statuses;
 		const tools = hub.listActiveTools();
 		mcpToolNames = tools.map((t) => t.qualifiedName);
 		registerMcpTools(tools);
-				if (rpMode) applyRpToolset();
+		if (rpMode) applyRpToolset();
 		return statuses;
+	};
+
+	/**
+	 * 非阻塞挂载 MCP：先同步挂载 hub 里已连接就绪的工具，再后台对账未连接的服务器。
+	 * 避免新建/切换会话或启动时因等待 MCP 子进程握手而阻塞界面刷新数秒。
+	 */
+	const syncMcpNonBlocking = () => {
+		try {
+			const hub = getMcpHub(appCwd);
+			const readyTools = hub.setSessionEnabled(sessionMcpEnabled);
+			mcpToolNames = readyTools.map((t) => t.qualifiedName);
+			registerMcpTools(readyTools);
+		} catch {
+			mcpToolNames = [];
+		}
+		void syncMcp().catch((err) => {
+			if (process.env.RP_DEBUG) {
+				console.error(`[rp-mcp] sync 失败：${err instanceof Error ? err.message : String(err)}`);
+			}
+		});
 	};
 
 	/** 状态快照写入会话树：账本随剧情分支走（/rewind /branch 后可恢复），.liyuan-state 文件只是最新位置的缓存 */
@@ -564,47 +581,6 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 					})
 					.join("\n\n");
 				return { content: [{ type: "text", text }], details: { count: hits.length } };
-			},
-		});
-
-		registerRpTool({
-			name: "lorebook_write",
-			label: "写入补充设定集",
-			description:
-				"Record world canon the user explicitly asked to keep (a setting/rule/character profile) into the supplementary lorebook, so it persists across sessions and becomes searchable. Call ONLY when the user asks to record/save a setting — never on your own initiative, and never ask the user 'shall I write this'. Use for worldbuilding facts only — plot progress belongs to world_state_update. Never duplicates: identical content is rejected.",
-			parameters: Type.Object({
-				title: Type.String({ description: "Short entry title, e.g. '北境骨誓风俗'" }),
-				keys: Type.Array(Type.String(), {
-					description: "Trigger keywords for retrieval (include Chinese AND any original-language names)",
-				}),
-				content: Type.String({ description: "The canon text (concise, factual, in the story's language)" }),
-				constant: Type.Optional(
-					Type.Boolean({ description: "true = always inject into context (reserve for globally critical facts)" }),
-				),
-			}),
-			async execute(_id, params) {
-				if (!overlayFile) {
-					return { content: [{ type: "text", text: "补充设定集未就绪（会话尚未装载角色卡）。" }], isError: true };
-				}
-				const entry = appendOverlayEntry(overlayFile, {
-					title: params.title,
-					keys: params.keys,
-					content: params.content,
-					constant: params.constant,
-				});
-				if (!entry) {
-					return { content: [{ type: "text", text: "内容与已有条目重复，未写入。" }] };
-				}
-				entries = [...entries, entry];
-				return {
-					content: [
-						{
-							type: "text",
-							text: `已固化为正典：【${entry.comment}】关键词 ${entry.keys.join("、") || "（无）"}${entry.constant ? "（常驻注入）" : ""}。此后检索可命中，跨会话保留。`,
-						},
-					],
-					details: { uid: entry.uid, file: overlayFile },
-				};
 			},
 		});
 
@@ -997,17 +973,15 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				card = loadCardFile(cardAbs);
 			}
 
-			// 世界书只来自「已挂载的独立书（0..N 本）」+ agent 补充设定集；
-			// 卡内 character_book 不自动进上下文（与角色卡解耦，可另存为独立书再挂）。
+			// 世界书只来自「已挂载的独立书（0..N 本）」；
+			// 卡内 character_book 不自动进上下文，单局新增设定归项目资产。
 			const fileGroups: LorebookEntry[][] = [];
 			for (const rel of mountedLorebookPaths(config)) {
 				const abs = resolvePath(ctx.cwd, rel);
 				if (existsSync(abs)) fileGroups.push(loadLorebookFile(abs));
 			}
 			const fileEntries = mergeEntries(...fileGroups);
-			overlayFile = overlayPathFor(ctx.cwd, card.name, config.card);
-			const overlayEntries = existsSync(overlayFile) ? loadLorebookFile(overlayFile) : [];
-			entries = applyDisabledLore(mergeEntries(fileEntries, overlayEntries), config.disabledLore);
+			entries = applyDisabledLore(fileEntries, config.disabledLore);
 
 			// 转换后的预设（可选）：system 块进 system prompt，postHistory 块进末端注入
 			// 工作草稿（preset-override.json）优先，与 hotReload 一致
@@ -1048,21 +1022,16 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 			scribeBusy = false;
 			// 素材可能已变，允许重新初始化（有磁盘缓存，代价极低）
 
-			// MCP 外设：按本会话启用集连接；索引写进 system prompt（D8：会话内字节稳定）
-			try {
-				await syncMcp();
-			} catch (err) {
-				if (process.env.RP_DEBUG) {
-					console.error(`[rp-mcp] sync 失败：${err instanceof Error ? err.message : String(err)}`);
-				}
-				mcpToolNames = [];
-							}
+			// MCP 外设：先捕获初始活跃工具集，再非阻塞挂载已连接工具并后台对账未连接的服务器
+			if (rpMode) {
+				savedTools = pi.getActiveTools();
+			}
+			syncMcpNonBlocking();
 
 			// 双 system：剧情含预设 system 块；非剧情不含——会话内各自字节稳定（D8）
 			rebuildSystemPrompts(ctx.cwd);
 
 			if (rpMode) {
-				savedTools = pi.getActiveTools();
 				applyRpToolset();
 			}
 
@@ -1189,13 +1158,20 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 	pi.on("message_update", (event) => activeStage?.update(event.assistantMessageEvent as never));
 	pi.on("message_end", (event) => activeStage?.messageEnd(event.message as never));
 	pi.on("tool_result", (event) => {
-		activeStage?.toolResult(event.toolName, event.content);
-		if (stageToolErrors.delete(event.toolCallId)) return { isError: true };
+		const nextContent = activeStage?.toolResult(event.toolName, event.content, event.input as Record<string, unknown>);
+		const isError = stageToolErrors.delete(event.toolCallId);
+		if (nextContent || isError) {
+			return {
+				...(nextContent ? { content: nextContent as typeof event.content } : {}),
+				...(isError ? { isError: true } : {}),
+			};
+		}
 	});
 	pi.on("turn_end", () => activeStage?.turnEnd(() => pi.setActiveTools([])));
 	pi.on("agent_end", (event) => activeStage?.end((event as { willRetry?: boolean }).willRetry));
 	pi.on("session_before_compact", () => activeStage ? { cancel: true } : undefined);
 	pi.on("session_shutdown", async (event) => {
+		extensionDisposed = true;
 		unpublishStage?.();
 		unpublishStage = undefined;
 		if ((event as { reason?: string } | undefined)?.reason === "quit") {
@@ -1259,11 +1235,8 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		if (!restoreMcpFromBranch(ctx.sessionManager)) {
 			sessionMcpEnabled = defaultSessionEnabledIds(appCwd);
 		}
-		try {
-			await syncMcp();
-		} catch {
-			// 树导航时 MCP 重连失败不挡主流程
-		}
+		syncMcpNonBlocking();
+		if (rpMode) applyRpToolset();
 		notify(ctx, restored ? "世界状态已随剧情位置同步（/state 查看）" : "已回到无状态记录的剧情点，账本已清空");
 	});
 
@@ -1757,6 +1730,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 				? [...new Set([...sessionMcpEnabled, id])]
 				: sessionMcpEnabled.filter((x) => x !== id);
 			try {
+				if (!on) await getMcpHub(appCwd).disconnect(id);
 				await syncMcp(next);
 				// 开关后就地重装 system prompt 索引（同会话内 MCP 段可变；其余仍稳定）
 				if (card) rebuildSystemPrompts(appCwd);
@@ -1788,9 +1762,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 			if (existsSync(abs)) fileGroups.push(loadLorebookFile(abs));
 		}
 		const fileEntries = mergeEntries(...fileGroups);
-		overlayFile = overlayPathFor(cwd, card.name, config.card);
-		const overlayEntries = existsSync(overlayFile) ? loadLorebookFile(overlayFile) : [];
-		entries = applyDisabledLore(mergeEntries(fileEntries, overlayEntries), config.disabledLore);
+		entries = applyDisabledLore(fileEntries, config.disabledLore);
 		preset = null;
 		if (config.preset) {
 			// 工作草稿优先（面板改开关/正文立即生效但不写盘）；无草稿才读预设文件

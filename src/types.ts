@@ -180,6 +180,8 @@ export interface RpConfig {
 	btwName?: string;
 	/** 旁路助手头像相对路径（如 assets/personas/btw.png） */
 	btwAvatar?: string;
+	/** 旁路助手性格设定（在「角色 → 助手」中编辑；留空回退内置默认性格） */
+	btwPersona?: string;
 }
 
 export const DEFAULT_CONFIG: RpConfig = {

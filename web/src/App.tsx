@@ -350,6 +350,7 @@ export default function App() {
 	}));
 	const [btwMessages, setBtwMessages] = useState<WireBtwMsg[]>([]);
 	const [btwStreaming, setBtwStreaming] = useState(false);
+	const [btwCardCollapsed, setBtwCardCollapsed] = useState(false);
 	const [sessions, setSessions] = useState<WireSessionInfo[] | null>(null);
 	/** 两层布局的子项目清单（null＝老布局/未下发 ⇒ 面板回落扁平列表） */
 	const [chats, setChats] = useState<WireChatInfo[] | null>(null);
@@ -950,13 +951,9 @@ export default function App() {
 						setWarnings([]);
 						setActiveChoice(null);
 						turnActsRef.current = [];
-						// 会话树常驻左栏下半区：列表「当前」标记已变，重拉（+短延迟再拉一次，等 rp-card 落盘）。
-						sendRef.current({ type: "sessions" });
-						window.setTimeout(() => sendRef.current({ type: "sessions" }), 350);
-					} else {
-						// 同会话 hello（重载）：刷新列表
-						sendRef.current({ type: "sessions" });
 					}
+					// 会话树常驻左栏下半区：收到 hello 后同步一次列表与 current 标记
+					sendRef.current({ type: "sessions" });
 						document.title = t("梨园");
 						setDraftWorkspace(frame.workspace);
 						setDraftHistory(undefined);
@@ -1218,10 +1215,12 @@ export default function App() {
 					break;
 				}
 				case "btw_user":
+					setBtwCardCollapsed(false);
 					setBtwMessages((ms) => [...ms, { role: "user", text: frame.text }, { role: "assistant", text: "", thinking: "", tools: [] }]);
 					break;
 				case "btw_state":
 					if (frame.state === "start") {
+						setBtwCardCollapsed(false);
 						setBtwStreaming(true);
 					} else if (frame.state === "end") {
 						setBtwStreaming(false);
@@ -1232,6 +1231,7 @@ export default function App() {
 					} else if (frame.state === "clear") {
 						setBtwStreaming(false);
 						setBtwMessages([]);
+						setBtwCardCollapsed(false);
 					}
 					break;
 				case "btw_delta":
@@ -1259,9 +1259,6 @@ export default function App() {
 					if (frame.level !== "info") {
 						setWarnings((ws) => [{ ts: Date.now(), level: frame.level as "warning" | "error", text: frame.text }, ...ws].slice(0, 30));
 					}
-					// 新建/切换后服务端会 notify；会话树常驻左栏下半区，确保列表与 current 标记更新。
-					sendRef.current({ type: "sessions" });
-					window.setTimeout(() => sendRef.current({ type: "sessions" }), 350);
 					break;
 				case "error":
 					pushToast("error", frame.text);
@@ -3173,106 +3170,158 @@ export default function App() {
 									{(streamText || streamThinking) && <span className="caret" />}
 								</div>
 							)}
-							{!welcome && conversationMode === "roleplay" && (btwMessages.length > 0 || btwStreaming) && (
-								<div className="btw-inline-block" role="region" aria-label={btwName}>
-									<div className="btw-inline-head">
-										<div className="btw-inline-identity">
-											<span className="btw-inline-avatar" aria-hidden="true">
-												{btwProfile.avatar ? (
-													<img src={personaAvatarUrl("__btw__", btwProfile.bust)} alt="" />
+							{!welcome && conversationMode === "roleplay" && (btwMessages.length > 0 || btwStreaming) && (() => {
+								const turns: Array<{ user?: WireBtwMsg; assistant?: WireBtwMsg }> = [];
+								for (const m of btwMessages) {
+									if (m.role === "user") {
+										turns.push({ user: m });
+									} else {
+										const last = turns[turns.length - 1];
+										if (last && !last.assistant) last.assistant = m;
+										else turns.push({ assistant: m });
+									}
+								}
+								const clipLine = (s: string, max = 48) => {
+									const line = s.split(/\r?\n/).map((x) => x.trim()).find(Boolean) ?? "";
+									return line.length > max ? `${line.slice(0, max)}…` : line;
+								};
+								return (
+									<div className={`btw-inline-block ${btwCardCollapsed ? "btw-inline-collapsed" : ""}`} role="region" aria-label={btwName}>
+										<div className="btw-inline-head">
+											<div
+												className="btw-inline-identity"
+												onClick={() => setBtwCardCollapsed((c) => !c)}
+												style={{ cursor: "pointer" }}
+											>
+												<span className="btw-inline-avatar" aria-hidden="true">
+													{btwProfile.avatar ? (
+														<img src={personaAvatarUrl("__btw__", btwProfile.bust)} alt="" />
+													) : (
+														btwName.slice(0, 1)
+													)}
+												</span>
+												<span className="btw-inline-name">{btwName}</span>
+												<span className="btw-inline-badge">
+													{btwCardCollapsed
+														? t("已折叠 {n} 轮对话 · 点击展开", { n: turns.length })
+														: t("旁路协作 · 不入剧情历史")}
+												</span>
+											</div>
+											<div className="btw-inline-head-acts">
+												{btwStreaming ? (
+													<button
+														type="button"
+														className="btw-inline-btn"
+														onClick={() => ws.send({ type: "prompt", text: "/btw stop" })}
+													>
+														{t("停止")}
+													</button>
 												) : (
-													btwName.slice(0, 1)
+													<button
+														type="button"
+														className="btw-inline-btn"
+														onClick={() => ws.send({ type: "prompt", text: "/btw clear" })}
+														title={t("清空助手记忆并重新开始")}
+													>
+														{t("清空")}
+													</button>
 												)}
-											</span>
-											<span className="btw-inline-name">{btwName}</span>
-											<span className="btw-inline-badge">{t("旁路协作 · 不入剧情历史")}</span>
-										</div>
-										<div className="btw-inline-head-acts">
-											{btwStreaming && (
 												<button
 													type="button"
-													className="btw-inline-btn"
-													onClick={() => ws.send({ type: "prompt", text: "/btw stop" })}
+													className={`btw-inline-close ${btwCardCollapsed ? "is-collapsed" : ""}`}
+													onClick={() => setBtwCardCollapsed((c) => !c)}
+													title={btwCardCollapsed ? t("展开旁路对话") : t("折叠旁路对话")}
+													aria-label={btwCardCollapsed ? t("展开旁路对话") : t("折叠旁路对话")}
 												>
-													{t("停止")}
+													<IconChevronDown size={15} />
 												</button>
-											)}
-											<button
-												type="button"
-												className="btw-inline-close"
-												onClick={() => ws.send({ type: "prompt", text: "/btw clear" })}
-												title={t("关闭并清空旁路对话")}
-												aria-label={t("关闭并清空旁路对话")}
-											>
-												<IconClose size={14} />
-											</button>
+											</div>
 										</div>
-									</div>
-									<div className="btw-inline-body">
-										{btwMessages.map((m, idx) =>
-											m.role === "user" ? (
-												<div key={idx} className="btw-turn btw-turn-user">
-													<span className="btw-mention-pill">@{btwName}</span>
-													<span className="btw-user-text">{m.text}</span>
-												</div>
-											) : (
-												<div key={idx} className="btw-turn btw-turn-assistant">
-													{m.tools && m.tools.length > 0 && (
-														<div className="btw-tool-chips">
-															{m.tools.map((tl, ti) => (
-																<span key={ti} className="btw-tool-chip">
-																	{tl}
-																</span>
-															))}
-														</div>
-													)}
-													{m.thinking && m.thinking.trim().length > 0 && (
-														<details className="btw-thinking">
-															<summary>{t("思考过程")}</summary>
-															<div className="btw-thinking-body">{m.thinking}</div>
+										{!btwCardCollapsed && (
+											<div className="btw-inline-body">
+												{turns.map((turn, ti) => {
+													const isLast = ti === turns.length - 1;
+													const uText = turn.user?.text ?? "";
+													const aMsg = turn.assistant;
+													const aText = aMsg?.text ?? "";
+													return (
+														<details key={ti} className="btw-turn-fold" open={isLast}>
+															<summary className="btw-turn-summary">
+																<span className="btw-mention-pill">@{btwName}</span>
+																<span className="btw-turn-summary-q">{clipLine(uText, 42) || t("提问")}</span>
+																{aText.trim() && (
+																	<span className="btw-turn-summary-a">· {clipLine(aText, 48)}</span>
+																)}
+															</summary>
+															<div className="btw-turn-content">
+																{uText && (
+																	<div className="btw-turn btw-turn-user">
+																		<span className="btw-user-text">{uText}</span>
+																	</div>
+																)}
+																{aMsg && (
+																	<div className="btw-turn btw-turn-assistant">
+																		{aMsg.tools && aMsg.tools.length > 0 && (
+																			<div className="btw-tool-chips">
+																				{aMsg.tools.map((tl, tli) => (
+																					<span key={tli} className="btw-tool-chip">
+																						{tl}
+																					</span>
+																				))}
+																			</div>
+																		)}
+																		{aMsg.thinking && aMsg.thinking.trim().length > 0 && (
+																			<details className="btw-thinking">
+																				<summary>{t("思考过程")}</summary>
+																				<div className="btw-thinking-body">{aMsg.thinking}</div>
+																			</details>
+																		)}
+																		{aText.trim() ? (
+																			<div className="btw-reply-md">{renderMarkdown(aText)}</div>
+																		) : btwStreaming && isLast ? (
+																			<div className="info-line pulse">{t("正在思考…")}</div>
+																		) : null}
+																		{aText.trim() && !(btwStreaming && isLast) && (
+																			<div className="btw-turn-foot">
+																				<button
+																					type="button"
+																					className="btw-inline-btn"
+																					onClick={() => {
+																						const lines = aText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+																						const noteLine = lines.find((l) => /导演备注/.test(l)) ?? lines.find((l) => l.startsWith(">")) ?? aText.trim();
+																						const cleaned = noteLine
+																							.replace(/^>\s*/, "")
+																							.replace(/^\*\*【?导演备注】?\*\*[：:]?\s*/, "")
+																							.replace(/^【?导演备注】?[：:]?\s*/, "")
+																							.trim();
+																						if (cleaned) {
+																							setNoteRows((rs) => [...rs.filter((x) => x.trim()), cleaned]);
+																							pushToast("info", t("已填入备注行"));
+																						}
+																					}}
+																				>
+																					{t("填入备注")}
+																				</button>
+																				<button
+																					type="button"
+																					className="btw-inline-btn"
+																					onClick={() => doCopy(aText)}
+																				>
+																					{t("复制")}
+																				</button>
+																			</div>
+																		)}
+																	</div>
+																)}
+															</div>
 														</details>
-													)}
-													{m.text.trim() ? (
-														<div className="btw-reply-md">{renderMarkdown(m.text)}</div>
-													) : btwStreaming && idx === btwMessages.length - 1 ? (
-														<div className="info-line pulse">{t("正在思考…")}</div>
-													) : null}
-													{m.text.trim() && !(btwStreaming && idx === btwMessages.length - 1) && (
-														<div className="btw-turn-foot">
-															<button
-																type="button"
-																className="btw-inline-btn"
-																onClick={() => {
-																	const lines = m.text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-																	const noteLine = lines.find((l) => /导演备注/.test(l)) ?? lines.find((l) => l.startsWith(">")) ?? m.text.trim();
-																	const cleaned = noteLine
-																		.replace(/^>\s*/, "")
-																		.replace(/^\*\*【?导演备注】?\*\*[：:]?\s*/, "")
-																		.replace(/^【?导演备注】?[：:]?\s*/, "")
-																		.trim();
-																	if (cleaned) {
-																		setNoteRows((rs) => [...rs.filter((x) => x.trim()), cleaned]);
-																		pushToast("info", t("已填入备注行"));
-																	}
-																}}
-															>
-																{t("填入备注")}
-															</button>
-															<button
-																type="button"
-																className="btw-inline-btn"
-																onClick={() => doCopy(m.text)}
-															>
-																{t("复制")}
-															</button>
-														</div>
-													)}
-												</div>
-											),
+													);
+												})}
+											</div>
 										)}
 									</div>
-								</div>
-							)}
+								);
+							})()}
 								{!welcome && draftWorkspace && <DraftPanel workspace={draftWorkspace} busy={busy}
 									revisions={draftHistory?.id === draftWorkspace.id ? draftHistory.revisions : undefined}
 									onInspect={() => ws.send({ type: "draft_history", id: draftWorkspace.id })}

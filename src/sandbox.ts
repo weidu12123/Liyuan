@@ -16,7 +16,23 @@ import { loadCardConfig, resolveCardSpace, saveCardConfig } from "./cardspace.ts
 import { type DenylistRule, matchDenylist, normalizeCommand, readDenylistRules } from "./bash-denylist.ts";
 import type { ConversationEntry } from "./conversation-mode.ts";
 import { mountedLorebookPaths } from "./lorebook.ts";
-import { CARDS_ROOT, CHATS_DIR, CHAT_BTW_SESSIONS_DIR, CHAT_DOCS_MEMORY_DIR, CHAT_HISTORY_DIR, CHAT_SESSIONS_DIR, SHARED_LIBRARY_DIRS, cardsRoot, chatsRoot, insidePath } from "./paths.ts";
+import {
+	CARDS_ROOT,
+	CHATS_DIR,
+	CHAT_BTW_SESSIONS_DIR,
+	CHAT_DOCS_MEMORY_DIR,
+	CHAT_HISTORY_DIR,
+	CHAT_MEMORY_DIR,
+	CHAT_META_FILE,
+	CHAT_PANELS_FILE,
+	CHAT_SESSIONS_DIR,
+	CHAT_STATE_FILE,
+	CHAT_WORLDLINE_FILE,
+	SHARED_LIBRARY_DIRS,
+	cardsRoot,
+	chatsRoot,
+	insidePath,
+} from "./paths.ts";
 
 /** pi 原生工具 → 访问类别。键集＝工作模式开放的原生工具清单（stage/authoring.ts 从这里派生）。 */
 export const NATIVE_TOOL_ACCESS = {
@@ -106,13 +122,36 @@ const isDir = (p: string): boolean => {
 	}
 };
 
-/** 路径类工具的目标（grep/find/ls 不带 path ＝ 工作目录）；bash 与非原生工具无目标 */
-function sandboxTarget(tool: string, input: Record<string, unknown>, cwd: string): string | undefined {
+const ROOT_REL_PREFIXES = new Set([
+	CARDS_ROOT,
+	"assets",
+	"skills",
+	"web",
+	"src",
+	".liyuan",
+	".liyuan-skills",
+	"liyuan.config.json",
+]);
+
+/** 路径类工具的目标（grep/find/ls 不带 path ＝ 当前项目资产目录或工作目录）；bash 与非原生工具无目标 */
+function sandboxTarget(
+	tool: string,
+	input: Record<string, unknown>,
+	scope: { cwd: string; chatDir?: string },
+): string | undefined {
 	const access = NATIVE_TOOL_ACCESS[tool as NativeToolName];
 	if (!access || access === "bash") return undefined;
 	const raw = typeof input.path === "string" && input.path.trim() ? input.path.trim() : ".";
 	const normalized = normalizeLikePi(raw);
-	return isAbsolute(normalized) ? resolve(normalized) : resolve(cwd, normalized);
+	if (isAbsolute(normalized)) return resolve(normalized);
+	if (scope.chatDir) {
+		const cleaned = normalized.replace(/^[.\\/]+/, "");
+		const firstSeg = cleaned.split(/[\\/]/)[0] ?? "";
+		if (!firstSeg || !ROOT_REL_PREFIXES.has(firstSeg)) {
+			return resolve(scope.chatDir, normalized);
+		}
+	}
+	return resolve(scope.cwd, normalized);
 }
 
 /**
@@ -138,20 +177,28 @@ export function sandboxScope(
 ): SandboxScope {
 	const cardAbs = resolve(cwd, config.card);
 	const space = resolveCardSpace(cwd, relative(cwd, cardAbs));
-	const roots = [space ? space.dir : dirname(cardAbs)];
-	try {
-		roots.push(cardAuthoringDirectory(cwd, cardAbs));
-	} catch {
-		// 创作目录不在工作区内：不进允许集
+	const cardRoot = space ? space.dir : dirname(cardAbs);
+	const resolvedChatDir = chatDir ? realExisting(chatDir) : undefined;
+	const roots: string[] = [];
+	if (resolvedChatDir) {
+		roots.push(resolvedChatDir);
+	} else {
+		roots.push(cardRoot);
+		try {
+			roots.push(cardAuthoringDirectory(cwd, cardAbs));
+		} catch {
+			// 创作目录不在工作区内：不进允许集
+		}
 	}
 	const readRoots = [
+		...(resolvedChatDir ? [cardRoot] : []),
 		...SHARED_LIBRARY_DIRS.map((d) => join(cwd, d)),
 		...mountedLorebookPaths(config).map((p) => resolve(cwd, p)),
 	];
 	return {
 		cwd,
 		cardDir: space?.dir,
-		chatDir: chatDir ? realExisting(chatDir) : undefined,
+		chatDir: resolvedChatDir,
 		roots: roots.map(realExisting),
 		readRoots: readRoots.map(realExisting),
 		denyRules: readDenylistRules(),
@@ -191,20 +238,75 @@ function isLegacyCardMemoryPath(cardDir: string | undefined, target: string): bo
 	return segs[0] === CHAT_DOCS_MEMORY_DIR;
 }
 
+const HARNESS_MANAGED_CHAT_DIRS = new Set([
+	CHAT_HISTORY_DIR,
+	CHAT_SESSIONS_DIR,
+	CHAT_BTW_SESSIONS_DIR,
+	CHAT_MEMORY_DIR,
+]);
+
+const HARNESS_MANAGED_CHAT_FILES = new Set([
+	CHAT_META_FILE,
+	CHAT_PANELS_FILE,
+	CHAT_STATE_FILE,
+	CHAT_WORLDLINE_FILE,
+]);
+
 /**
- * 卡目录里由 harness 持有的数据（docs/PLAN-AGENT-CODING.md §三）：`对话/<id>/历史/`（快照仓）与 `对话/<id>/会话/`（会话树）。
- * 原生写工具不碰这两处；`正文/` 就是稿子，完全开放读写。这是路径规则，不是识别器。
+ * 卡目录里由 harness 持有的数据：`对话/<id>/` 下的内部目录（`历史/`、`会话/`、`助手/`、`向量记忆/`）
+ * 与专用工具托管的状态文件（`对话.json`、`面板.json`、`世界状态.json`、`世界线.json`）。
+ * 原生写工具不碰这些位置；`正文/`、`记忆/`、`APPEND_SYSTEM.md` 等项目资产完全开放读写。
  */
 export function harnessManagedPath(cardDir: string | undefined, target: string): boolean {
 	if (!cardDir) return false;
 	const rel = relative(realExisting(cardDir), target);
 	if (!rel || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return false;
 	const segs = rel.split(sep);
-	return (
-		segs[0] === CHATS_DIR &&
-		segs.length >= 3 &&
-		(segs[2] === CHAT_HISTORY_DIR || segs[2] === CHAT_SESSIONS_DIR || segs[2] === CHAT_BTW_SESSIONS_DIR)
-	);
+	if (segs[0] !== CHATS_DIR || segs.length < 3) return false;
+	if (HARNESS_MANAGED_CHAT_DIRS.has(segs[2]!)) return true;
+	if (segs.length === 3 && HARNESS_MANAGED_CHAT_FILES.has(segs[2]!)) return true;
+	return false;
+}
+
+function harnessManagedDenyReason(cwd: string, tool: NativeToolName, target: string): string {
+	const name = basename(target);
+	if (name === CHAT_PANELS_FILE) {
+		return `${display(cwd, target)} 由梨园面板系统管理，原生 ${tool} 不能直接修改；请使用 panel_write / panel_close 工具。`;
+	}
+	if (name === CHAT_STATE_FILE) {
+		return `${display(cwd, target)} 由梨园世界状态系统管理，原生 ${tool} 不能直接修改；请使用 world_state_update 工具。`;
+	}
+	return `${display(cwd, target)} 属于梨园管理的数据（快照仓 / 会话树 / 内部状态），原生 ${tool} 不能写。`;
+}
+
+/**
+ * 项目模式下 bash 命令越界检查：禁止通过 ..、外部路径或直接操作受管文件逃出当前项目资产目录。
+ */
+function bashChatEscapeReason(command: string, scope: SandboxScope): string | undefined {
+	if (!scope.chatDir) return undefined;
+	if (/(?:^|[\s"'=/\\])\.\.(?:[\s"'/\\]|$)/.test(command)) {
+		return "已拦截：bash 仅限在当前项目资产目录内操作，禁止通过 .. 访问上级或外部目录；外部操作请使用专用工具。";
+	}
+	if (
+		/(?:^|[\s"'=/\\])(?:AGENTS\.md|卡\.json|补充设定集\.json|liyuan\.config\.json|面板\.json|世界状态\.json|世界线\.json|对话\.json)(?:[\s"'/\\]|$)/.test(
+			command,
+		)
+	) {
+		return "已拦截：禁止通过 bash 直接操作角色卡或梨园托管的状态文件；请使用 card_project / panel_write / world_state_update 等专用工具。";
+	}
+	let stripped = command;
+	for (const allowed of [
+		scope.chatDir,
+		scope.chatDir.replace(/\\/g, "/"),
+		display(scope.cwd, scope.chatDir),
+		display(scope.cwd, scope.chatDir).replace(/\\/g, "/"),
+	]) {
+		if (allowed && allowed !== ".") stripped = stripped.split(allowed).join("");
+	}
+	if (/(?:^|[\s"'=/\\])(?:cards|assets)[\\/]/.test(stripped)) {
+		return "已拦截：bash 仅限在当前项目资产目录内操作，禁止直接读写外部卡目录或公共资产库；请使用 card_project 等专用工具。";
+	}
+	return undefined;
 }
 
 /** 命令的免问前缀：默认取首词（`git status` 这种多词前缀由用户在 卡.json 里自己改窄） */
@@ -231,9 +333,14 @@ export function sandboxVerdict(tool: string, input: Record<string, unknown>, sco
 		const command = String(input.command ?? "");
 		const hit = matchDenylist(command, scope.denyRules);
 		if (hit) return { kind: "deny", reason: `已拦截：命中命令黑名单「${hit.raw}」，梨园不允许执行。如确有需要，请向用户说明。` };
+		if (scope.chatDir) {
+			const escapeReason = bashChatEscapeReason(command, scope);
+			if (escapeReason) return { kind: "deny", reason: escapeReason };
+			return { kind: "allow" };
+		}
 		return allowedByPrefix(command, grants.bashAllow) ? { kind: "allow" } : { kind: "ask-bash", command };
 	}
-	const target = realExisting(sandboxTarget(tool, input, scope.cwd)!);
+	const target = realExisting(sandboxTarget(tool, input, scope)!);
 	if (isOtherChatPath(scope.cardDir, scope.chatDir, target)) {
 		return { kind: "deny", reason: `${display(scope.cwd, target)} 属于其他独立项目，当前项目无权访问。` };
 	}
@@ -241,13 +348,25 @@ export function sandboxVerdict(tool: string, input: Record<string, unknown>, sco
 		const hint = scope.chatDir ? display(scope.cwd, join(scope.chatDir, CHAT_DOCS_MEMORY_DIR)) : "当前项目的 记忆/ 目录";
 		return { kind: "deny", reason: `${display(scope.cwd, target)} 是已废除的旧版卡级记忆目录；当前项目的记忆与大纲资产请访问 ${hint}。` };
 	}
+	if (access === "write" && basename(target) === "AGENTS.md") {
+		return {
+			kind: "deny",
+			reason: `${display(scope.cwd, target)} 是梨园根据角色卡自动生成的只读档案，原生 ${tool} 不能直接修改；修改角色卡请使用 card_project 工具，编写本项目局部守则请修改 APPEND_SYSTEM.md。`,
+		};
+	}
 	if (access === "write" && harnessManagedPath(scope.cardDir, target)) {
-		return { kind: "deny", reason: `${display(scope.cwd, target)} 属于梨园管理的数据（快照仓 / 会话树），原生 ${tool} 不能写。` };
+		return { kind: "deny", reason: harnessManagedDenyReason(scope.cwd, tool as NativeToolName, target) };
 	}
 	const within = (roots: string[]) => roots.some((r) => insidePath(r, target));
 	if (within(scope.roots)) return { kind: "allow" };
 	if (access === "read" && within(scope.readRoots)) return { kind: "allow" };
 	if (within(grants.dirs)) return { kind: "allow" };
+	if (access === "write" && scope.chatDir) {
+		return {
+			kind: "deny",
+			reason: `${display(scope.cwd, target)} 位于当前项目资产目录之外，原生 ${tool} 仅限在当前项目资产目录（${display(scope.cwd, scope.chatDir)}）内使用；修改角色卡、开场白、世界书或脚本请使用 card_project 等专用工具。`,
+		};
+	}
 	return { kind: "ask", tool: tool as NativeToolName, target, unit: grantUnit(scope.cwd, target) };
 }
 
@@ -259,7 +378,7 @@ const requestedLimitOf = new WeakMap<Record<string, unknown>, number>();
  */
 function boostRecursiveLimitIfNeeded(tool: string, input: Record<string, unknown>, scope: SandboxScope): void {
 	if ((tool !== "find" && tool !== "grep") || !scope.cardDir) return;
-	const target = sandboxTarget(tool, input, scope.cwd);
+	const target = sandboxTarget(tool, input, scope);
 	if (!target) return;
 	const targetAbs = realExisting(target);
 	if (!insidePath(targetAbs, realExisting(chatsRoot(scope.cardDir)))) return;
@@ -281,7 +400,7 @@ export function filterSandboxResultText(
 ): string {
 	if (tool !== "ls" && tool !== "find" && tool !== "grep") return text;
 	if (!scope.cardDir) return text;
-	const searchBase = sandboxTarget(tool, input, scope.cwd);
+	const searchBase = sandboxTarget(tool, input, scope);
 	if (!searchBase) return text;
 	const baseAbs = realExisting(searchBase);
 	const isForbidden = (relPath: string): boolean => {
@@ -291,7 +410,7 @@ export function filterSandboxResultText(
 		if (isOtherChatPath(scope.cardDir, scope.chatDir, candidate) || isLegacyCardMemoryPath(scope.cardDir, candidate)) {
 			return true;
 		}
-		if ((tool === "find" || tool === "grep") && harnessManagedPath(scope.cardDir, candidate)) {
+		if (harnessManagedPath(scope.cardDir, candidate)) {
 			return true;
 		}
 		return false;
@@ -467,6 +586,26 @@ interface SandboxGateDeps {
 	log?: (line: string) => void;
 }
 
+function applySandboxExecutionTarget(tool: string, input: Record<string, unknown>, scope: SandboxScope): void {
+	const access = NATIVE_TOOL_ACCESS[tool as NativeToolName];
+	if (!access) return;
+	if (access === "bash") {
+		if (scope.chatDir && existsSync(scope.chatDir) && typeof input.command === "string" && input.command.trim()) {
+			const cdDir = scope.chatDir.replace(/\\/g, "/").replace(/'/g, "'\\''");
+			const prefix = `cd '${cdDir}'\n`;
+			if (!input.command.startsWith(prefix)) {
+				input.command = `${prefix}${input.command}`;
+			}
+		}
+		return;
+	}
+	if (scope.chatDir) {
+		const target = sandboxTarget(tool, input, scope);
+		if (target) input.path = target;
+	}
+	boostRecursiveLimitIfNeeded(tool, input, scope);
+}
+
 /**
  * 一拍一个门：允许集按当前卡算一次，授权每次现读（本会话的在树上、永久的在 卡.json）。
  * 返回拦截理由（作为工具回执回给模型）；undefined ＝ 放行。
@@ -480,10 +619,13 @@ export function createSandboxGate(deps: SandboxGateDeps): (tool: string, input: 
 		const perm = permanentGrants(deps.cwd, scope.cardDir);
 		const v = sandboxVerdict(tool, input, scope, { dirs: [...session.dirs, ...perm.dirs], bashAllow: [...session.bashAllow, ...perm.bashAllow] });
 		if (v.kind === "allow") {
-			boostRecursiveLimitIfNeeded(tool, input, scope);
+			applySandboxExecutionTarget(tool, input, scope);
 			return undefined;
 		}
-		if (v.kind === "deny") { deps.log?.(`${tool} ${display(scope.cwd, sandboxTarget(tool, input, scope.cwd) ?? "")} → deny`); return v.reason; }
+		if (v.kind === "deny") {
+			deps.log?.(`${tool} ${display(scope.cwd, sandboxTarget(tool, input, scope) ?? "")} → deny`);
+			return v.reason;
+		}
 		const card = describeAsk(v, scope);
 		if (!deps.ask) return `${card.denied}卡目录之外的访问需要用户批准，当前环境无法询问。`;
 		const answer = await deps.ask(card.question, card.options.map((o) => o.label));
@@ -496,7 +638,7 @@ export function createSandboxGate(deps: SandboxGateDeps): (tool: string, input: 
 		if (action === "deny") return card.denied;
 		if (action === "session") deps.rememberSession(card.grant);
 		if (action === "always" && scope.cardDir) addPermanentGrant(deps.cwd, scope.cardDir, card.grant);
-		boostRecursiveLimitIfNeeded(tool, input, scope);
+		applySandboxExecutionTarget(tool, input, scope);
 		return undefined;
 	};
 }

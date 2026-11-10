@@ -700,9 +700,29 @@ export class AgentSession {
 						event.message.display,
 						event.message.details,
 					);
+				} else if (event.message.role === "assistant") {
+					const assistantMsg = event.message as AssistantMessage;
+					if (assistantMsg.stopReason === "error") {
+						const partialText = this._extractAssistantText(assistantMsg);
+						const willRetryThis =
+							this.settingsManager.getRetrySettings().enabled &&
+							this._retryAttempt < this.settingsManager.getRetrySettings().maxRetries &&
+							this._isRetryableError(assistantMsg);
+						if (partialText.trim().length > 0) {
+							const keepThinking = assistantMsg.content.filter((b) => b.type === "thinking");
+							this.sessionManager.appendMessage({
+								...assistantMsg,
+								...(willRetryThis ? { stopReason: "length", errorMessage: undefined } : {}),
+								content: [...keepThinking, { type: "text", text: partialText }],
+							});
+						} else if (!willRetryThis && !this._hasContinuationPrefix()) {
+							this.sessionManager.appendMessage(event.message);
+						}
+					} else {
+						this.sessionManager.appendMessage(event.message);
+					}
 				} else if (
 					event.message.role === "user" ||
-					event.message.role === "assistant" ||
 					event.message.role === "toolResult"
 				) {
 					// Regular LLM message - persist as SessionMessageEntry
@@ -1163,6 +1183,18 @@ export class AgentSession {
 
 		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
 			return true;
+		}
+
+		if (
+			msg.stopReason === "error" &&
+			this._hasContinuationPrefix() &&
+			this._extractAssistantText(msg).trim().length === 0
+		) {
+			const messages = this.agent.state.messages;
+			if (messages.length > 0 && messages[messages.length - 1] === msg) {
+				this._transientMessages.delete(msg);
+				this.agent.state.messages = messages.slice(0, -1);
+			}
 		}
 
 		if (msg.stopReason === "error" && this._retryAttempt > 0) {
@@ -2918,6 +2950,20 @@ export class AgentSession {
 	// Auto-Retry
 	// =========================================================================
 
+	private _extractAssistantText(message: AssistantMessage): string {
+		if (!Array.isArray(message.content)) return "";
+		return message.content
+			.filter((b): b is TextContent => b.type === "text" && typeof b.text === "string")
+			.map((b) => b.text)
+			.join("");
+	}
+
+	private _hasContinuationPrefix(): boolean {
+		return this.agent.state.messages.some(
+			(m) => Boolean((m as unknown as { details?: { liyuanContinueRetry?: boolean } })?.details?.liyuanContinueRetry),
+		);
+	}
+
 	/**
 	 * Check if an error is retryable (overloaded, rate limit, server errors).
 	 * Context overflow errors are NOT retryable (handled by compaction instead).
@@ -2925,6 +2971,16 @@ export class AgentSession {
 	private _isRetryableError(message: AssistantMessage): boolean {
 		// Context overflow is handled by compaction, not retry.
 		if (isContextOverflow(message, this.model?.contextWindow ?? 0)) return false;
+		// If we already preserved partial text and attempted a continuation retry on a
+		// content_filter/sensitive stop, a second zero-text content_filter means the upstream
+		// filter deterministically rejects the prefix; stop at the truncation point immediately.
+		if (
+			this._hasContinuationPrefix() &&
+			this._extractAssistantText(message).trim().length === 0 &&
+			/content_filter|sensitive/i.test(message.errorMessage ?? "")
+		) {
+			return false;
+		}
 		return isRetryableAssistantError(message);
 	}
 
@@ -2987,9 +3043,70 @@ export class AgentSession {
 			errorMessage: message.errorMessage || "Unknown error",
 		});
 
-		// Remove error message from agent state (keep in session for history)
+		// Preserve any already-generated text as a continuation prefix instead of discarding
+		// and regenerating from scratch; only drop the message if it produced no text at all.
+		const partialText = this._extractAssistantText(message);
 		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+		if (partialText.trim().length > 0 && messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+			const lastMsg = messages[messages.length - 1] as AssistantMessage;
+			const prevContinueIdx = messages.length - 2;
+			const prevPrefixIdx = messages.length - 3;
+			const prevContinue =
+				prevContinueIdx >= 0
+					? (messages[prevContinueIdx] as unknown as { details?: { liyuanContinueRetry?: boolean } })
+					: undefined;
+			const prevPrefix = prevPrefixIdx >= 0 ? messages[prevPrefixIdx] : undefined;
+			if (prevContinue?.details?.liyuanContinueRetry && prevPrefix?.role === "assistant") {
+				const prevAsst = prevPrefix as AssistantMessage;
+				const prevText = this._extractAssistantText(prevAsst);
+				const keepThinking = [
+					...prevAsst.content.filter((b) => b.type === "thinking"),
+					...lastMsg.content.filter((b) => b.type === "thinking"),
+				];
+				const mergedPrefix: AssistantMessage = {
+					...prevAsst,
+					stopReason: "length",
+					errorMessage: undefined,
+					content: [...keepThinking, { type: "text", text: `${prevText}${partialText}` }],
+				};
+				if (this._transientMessages.has(prevPrefix)) {
+					this._transientMessages.delete(prevPrefix);
+					this._transientMessages.add(mergedPrefix);
+				}
+				this._transientMessages.delete(lastMsg);
+				this.agent.state.messages = [
+					...messages.slice(0, prevPrefixIdx),
+					mergedPrefix,
+					messages[prevContinueIdx],
+				];
+			} else {
+				const wasTransient = this._transientMessages.has(lastMsg);
+				this._transientMessages.delete(lastMsg);
+				const keepThinking = lastMsg.content.filter((b) => b.type === "thinking");
+				const prefixAssistant: AssistantMessage = {
+					...lastMsg,
+					stopReason: "length",
+					errorMessage: undefined,
+					content: [...keepThinking, { type: "text", text: partialText }],
+				};
+				if (wasTransient) {
+					this._transientMessages.add(prefixAssistant);
+				}
+				const continuePrompt = {
+					role: "user" as const,
+					content: [
+						{
+							type: "text" as const,
+							text: "[System note: Your previous response was interrupted mid-stream. Continue directly from the exact character where it stopped. Do not repeat any text already written, and do not add any preamble or explanation. If the response was already complete, output nothing.]",
+						},
+					],
+					details: { liyuanContinueRetry: true },
+					timestamp: Date.now(),
+				} as unknown as AgentMessage;
+				this._transientMessages.add(continuePrompt);
+				this.agent.state.messages = [...messages.slice(0, -1), prefixAssistant, continuePrompt];
+			}
+		} else if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 			this._transientMessages.delete(messages[messages.length - 1]);
 			this.agent.state.messages = messages.slice(0, -1);
 		}

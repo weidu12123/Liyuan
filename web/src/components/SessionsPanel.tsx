@@ -47,7 +47,7 @@ import { fmtDateTime, t } from "../i18n/index.ts";
 export interface ChatMarkdownAsset {
 	relPath: string;
 	name: string;
-	category: "rules" | "summary" | "memory";
+	category: "rules" | "summary" | "memory" | "file";
 	size: number;
 	modified: number;
 }
@@ -79,8 +79,17 @@ export function chatAssetTitle(relPath: string): string {
 	if (relPath === "APPEND_SYSTEM.md") return t("局部守则");
 	if (relPath === MEMORY_INDEX_REL) return t("记忆索引");
 	if (relPath === CHAT_SUMMARY_FILE) return t("前情提要");
-	const base = relPath.startsWith(MEMORY_DIR_PREFIX) ? relPath.slice(MEMORY_DIR_PREFIX.length) : relPath;
-	return base.replace(/\.md$/i, "") || base;
+	if (relPath.startsWith(MEMORY_DIR_PREFIX)) {
+		const base = relPath.slice(MEMORY_DIR_PREFIX.length);
+		return base.replace(/\.md$/i, "") || base;
+	}
+	return relPath;
+}
+
+function formatAssetSize(bytes: number): string {
+	if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+	if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+	return `${bytes}B`;
 }
 
 function chatAssetHint(relPath: string): string {
@@ -118,16 +127,18 @@ export function ChatAssetCenter({
 	const [draft, setDraft] = useState("");
 	const [editing, setEditing] = useState(false);
 	const [loaded, setLoaded] = useState(false);
+	const [truncated, setTruncated] = useState(false);
 	const [dirty, setDirty] = useState(false);
 	const { busy, run } = useAction(toast);
 
 	useEffect(() => {
 		let cancelled = false;
 		setLoaded(false);
+		setTruncated(false);
 		setDirty(false);
 		setEditing(false);
 		apiGetCacheClear("/api/chats/asset");
-		void apiGet<{ ok: boolean; content: string }>(
+		void apiGet<{ ok: boolean; content: string; truncated?: boolean }>(
 			`/api/chats/asset?chatId=${encodeURIComponent(asset.chatId)}&path=${encodeURIComponent(asset.relPath)}`,
 		)
 			.then((r) => {
@@ -135,6 +146,7 @@ export function ChatAssetCenter({
 				const content = r.content ?? "";
 				setText(content);
 				setDraft(content);
+				setTruncated(r.truncated === true);
 				setLoaded(true);
 			})
 			.catch((err) => {
@@ -267,15 +279,17 @@ export function ChatAssetCenter({
 										{builtin ? t("清空") : t("删除")}
 									</ConfirmButton>
 								)}
-								<button
-									type="button"
-									className="drawer-btn save-btn chat-asset-edit-btn"
-									disabled={busy || !loaded}
-									onClick={startEdit}
-								>
-									<IconPencil size={13} />
-									<span>{t("修改")}</span>
-								</button>
+								{!truncated && (
+									<button
+										type="button"
+										className="drawer-btn save-btn chat-asset-edit-btn"
+										disabled={busy || !loaded}
+										onClick={startEdit}
+									>
+										<IconPencil size={13} />
+										<span>{t("修改")}</span>
+									</button>
+								)}
 							</>
 						)}
 						<button
@@ -311,7 +325,11 @@ export function ChatAssetCenter({
 							<div className="chat-asset-empty">{t("读取中…")}</div>
 						) : text.trim().length > 0 ? (
 							<article className="chat-asset-readme artifact-md">
-								{renderMarkdown(text, handleLinkClick)}
+								{asset.relPath.toLowerCase().endsWith(".md") ? (
+										renderMarkdown(text, handleLinkClick)
+									) : (
+										<pre style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: "var(--mono)" }}>{text}</pre>
+									)}
 							</article>
 						) : (
 							<div className="chat-asset-empty">{t("暂无内容")}</div>
@@ -1215,7 +1233,7 @@ export function SessionsPanel({
 									>
 										<IconDoc size={14} />
 										<span className="spv2-asset-name">{label}</span>
-										<span className="spv2-asset-meta">.md</span>
+										<span className="spv2-asset-meta">{formatAssetSize(doc.size)}</span>
 									</button>
 									<span className="spv2-leaf-acts">
 										<ConfirmButton

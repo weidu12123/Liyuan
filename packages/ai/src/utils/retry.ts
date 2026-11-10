@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "../types.ts";
+import { isContextOverflow } from "./overflow.ts";
 
 function buildProviderErrorPattern(patterns: readonly string[]): RegExp {
 	return new RegExp(patterns.join("|"), "i");
@@ -21,6 +22,19 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 	"out of budget",
 	"quota exceeded",
 	"billing",
+	"余额不足",
+	"额度不足",
+	"额度已用尽",
+
+	// Deterministic authentication / invalid API key / test mock exhaustion errors.
+	"invalid_api_key",
+	"invalid api key",
+	"incorrect api key",
+	"authentication_error",
+	"authentication failed",
+	"令牌无效",
+	"无效的令牌",
+	"No more faux responses queued",
 ]);
 
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
@@ -221,8 +235,10 @@ export async function retryAssistantCall(
  * before restarting the assistant turn.
  */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
-	if (message.stopReason !== "error" || !message.errorMessage) return false;
-	const errorMessage = message.errorMessage;
+	if (message.stopReason !== "error") return false;
+	if (isContextOverflow(message)) return false;
+	const errorMessage = message.errorMessage ?? "";
+	if (!errorMessage) return true;
 	if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) return false;
-	return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
+	return true;
 }

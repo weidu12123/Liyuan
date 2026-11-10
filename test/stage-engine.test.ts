@@ -1670,15 +1670,17 @@ test("上一拍·发布守卫：落稿后切走分支，不把回执写到别的
 	} finally { reg.unregister(); rmSync(cwd, { recursive: true, force: true }); }
 });
 
-test("pi：瞬时错误自动重试（默认 5 次上限），半截断流清理后落树纯净正文", async () => {
+test("pi：半截报错自动重试从断点继续（保留已生成前半截、不清屏重来），content_filter 截断处完整落盘", async () => {
 	const { cwd, sm } = makeStage();
 	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
 	try {
 		let clears = 0;
+		let streamed = "";
 		let end: any = null;
 		const engine = await makePiEngine({
 			...piDeps(cwd, sm, reg.getModel("faux-rp")),
 			events: {
+				onDelta: (kind, delta) => { if (kind === "text") streamed += delta; },
 				onStreamClear: () => clears++,
 				onTurnEnd: (info) => (end = info),
 			},
@@ -1687,21 +1689,114 @@ test("pi：瞬时错误自动重试（默认 5 次上限），半截断流清理
 		assert.equal(session.settingsManager.getRetrySettings().maxRetries, 5, "默认重试上限为 5 次");
 		session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 5, baseDelayMs: 1 } });
 
+		const seenContexts: any[] = [];
 		reg.setResponses([
-			fauxAssistantMessage("半截残句不应保留", { stopReason: "error", errorMessage: "502 Bad Gateway" }),
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-			...directBeat("云散月明，她推窗望向山道。"),
+			fauxAssistantMessage("云散月明，", { stopReason: "error", errorMessage: "上游网关连接中断" }),
+			(ctx: any) => {
+				seenContexts.push(ctx);
+				return fauxAssistantMessage("", { stopReason: "error", errorMessage: "502 Bad Gateway" });
+			},
+			(ctx: any) => {
+				seenContexts.push(ctx);
+				return fauxAssistantMessage("她推窗望向山道。");
+			},
 		] as never);
 
 		await engine.performTurn("推窗。");
-		assert.ok(end && !end.error && end.entryId, "重试成功后应正常落树");
-		assert.ok(clears >= 2, "每次报错重试前应清理前端半截流式缓冲");
-		const msgEntries = sm.getBranch().filter((e) => e.type === "message" || (e.type === "custom" && e.customType === CONVERSATION_PROCESS_TYPE));
+		assert.ok(end && !end.error && end.entryId, "断点续写重试成功后应正常落树");
+		assert.equal(clears, 0, "已有半截正文时重试不得触发 onStreamClear 清空屏幕");
+		assert.equal(streamed, "云散月明，她推窗望向山道。", "流式输出应无缝拼接前半截与续写后半截");
+		assert.ok(
+			seenContexts.length >= 2 && JSON.stringify(seenContexts[0].messages).includes("云散月明，"),
+			"续写请求上下文必须携带已生成的前半截内容",
+		);
 		const replies = sm.getBranch().filter((e) => e.type === "message" && e.message.role === "assistant") as any[];
 		assert.equal(replies.length, 1);
 		assert.equal(replies[0].message.content.find((c: any) => c.type === "text")?.text, "云散月明，她推窗望向山道。");
-		assert.ok(!JSON.stringify(msgEntries).includes("半截残句不应保留"), "失败重试的半截残句不得混入定稿、时间线或过程记录");
+		assert.equal(replies[0].message.stopReason, "stop");
 		assertSessionAligned(session);
+
+		// 验证 content_filter 在输出接近完成时报错：重试若仍被拦截，已输出内容必须完整保留落树，绝不丢失
+		streamed = "";
+		end = null;
+		reg.setResponses([
+			fauxAssistantMessage("长街灯火次第亮起，她转身步入茶楼。", {
+				stopReason: "error",
+				errorMessage: "Provider finish_reason: content_filter",
+			}),
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: "Provider finish_reason: content_filter",
+			}),
+		] as never);
+		await engine.performTurn("进茶楼。");
+		assert.ok(end?.entryId, "content_filter 截断后已生成内容必须落盘生成 entryId");
+		const allReplies = sm.getBranch().filter((e) => e.type === "message" && e.message.role === "assistant") as any[];
+		assert.equal(allReplies.length, 2);
+		assert.equal(
+			allReplies[1].message.content.find((c: any) => c.type === "text")?.text,
+			"长街灯火次第亮起，她转身步入茶楼。",
+		);
+		assert.equal(allReplies[1].message.stopReason, "stop", "落盘消息 stopReason 必须归一为 stop 以免后续轮次被过滤");
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("pi（agent 写作模式）：content_filter 截断与半截报错断点续写均完整保留已输出内容", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		let clears = 0;
+		let streamed = "";
+		let end: any = null;
+		const engine = await makePiEngine({
+			...piDeps(cwd, sm, reg.getModel("faux-rp")),
+			events: {
+				onDelta: (kind, delta) => { if (kind === "text") streamed += delta; },
+				onStreamClear: () => clears++,
+				onTurnEnd: (info) => (end = info),
+			},
+		});
+		const session = sessionByEngine.get(engine)!;
+		session.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 5, baseDelayMs: 1 } });
+
+		// 1. 写作模式输出完毕末尾报 content_filter（重试返回空 content_filter 后停在截断处）：正文完整保留
+		reg.setResponses([
+			fauxAssistantMessage("第一章大纲已整理完毕，共分三幕。", {
+				stopReason: "error",
+				errorMessage: "Provider finish_reason: content_filter",
+			}),
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: "Provider finish_reason: content_filter",
+			}),
+		] as never);
+		await engine.performTurn("整理第一章大纲。", undefined, { mode: "agent" });
+		assert.ok(end?.entryId, "写作模式 content_filter 报错后必须保存已生成的正文");
+		assert.equal(clears, 0);
+		let replies = sm.getBranch().filter((e) => e.type === "message" && e.message.role === "assistant") as any[];
+		assert.equal(replies.length, 1);
+		assert.equal(replies[0].message.content.find((c: any) => c.type === "text")?.text, "第一章大纲已整理完毕，共分三幕。");
+		assert.equal(replies[0].message.stopReason, "stop");
+
+		// 2. 写作模式半截断流后自动续写：前半截 + 后半截无缝合并
+		streamed = "";
+		end = null;
+		reg.setResponses([
+			fauxAssistantMessage("第二章聚焦男主入京，", {
+				stopReason: "error",
+				errorMessage: "Provider finish_reason: network_error",
+			}),
+			fauxAssistantMessage("在城门偶遇旧友。"),
+		] as never);
+		await engine.performTurn("继续整理第二章。", undefined, { mode: "agent" });
+		assert.ok(end && !end.error && end.entryId, "写作模式断点续写成功后应无错收尾");
+		assert.equal(streamed, "第二章聚焦男主入京，在城门偶遇旧友。");
+		replies = sm.getBranch().filter((e) => e.type === "message" && e.message.role === "assistant") as any[];
+		assert.equal(replies.length, 2);
+		assert.equal(replies[1].message.content.find((c: any) => c.type === "text")?.text, "第二章聚焦男主入京，在城门偶遇旧友。");
 	} finally {
 		reg.unregister();
 		rmSync(cwd, { recursive: true, force: true });

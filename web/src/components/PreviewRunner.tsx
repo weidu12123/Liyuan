@@ -8,6 +8,7 @@ import type { CardProjectPreview } from "../../../src/card-authoring-types.ts";
 import { apiPost } from "../api.ts";
 import { buildCardAuthoringPreview, CARD_PREVIEW_SANDBOX, cardPreviewUrl } from "../cardAuthoringPreview.ts";
 import "./CardAuthoring.css";
+import { FloatWindow } from "./FloatWindow.tsx";
 import { t } from "../i18n/index.ts";
 
 export interface CardPreviewRequestFrame {
@@ -83,17 +84,15 @@ export function PreviewRunner({ request, onClose }: { request: CardPreviewReques
 
 	if (!request) return null;
 	const errors = events.filter((e) => e.level === "error").length;
+	const title =
+		t("Agent 预览 · {state}", { state: state === "running" ? t("运行中") : state === "reported" ? t("已回报") : t("回报失败") }) +
+		(errors ? t(" · {n} 个错误", { n: errors }) : "");
 	return (
-		<div className="card-preview-runner">
-			<div className="card-preview-runner-head">
-				<span>
-					{t("Agent 预览 · {state}", { state: state === "running" ? t("运行中") : state === "reported" ? t("已回报") : t("回报失败") })}
-					{errors ? t(" · {n} 个错误", { n: errors }) : ""}
-				</span>
-				<button type="button" className="act" onClick={onClose}>{t("关闭")}</button>
+		<FloatWindow id="card-preview" title={title} onClose={onClose}>
+			<div className="card-preview-runner">
+				<iframe key={request.id} ref={frame} title={t("Agent 预览")} sandbox={CARD_PREVIEW_SANDBOX} src={url} />
+				<PreviewEventList events={events} />
 			</div>
-			<iframe key={request.id} ref={frame} title={t("Agent 预览")} sandbox={CARD_PREVIEW_SANDBOX} src={url} />
-			<PreviewEventList events={events} />
-		</div>
+		</FloatWindow>
 	);
 }

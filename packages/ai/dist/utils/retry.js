@@ -1,3 +1,4 @@
+import { isContextOverflow } from "./overflow.js";
 function buildProviderErrorPattern(patterns) {
     return new RegExp(patterns.join("|"), "i");
 }
@@ -16,6 +17,18 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
     "out of budget",
     "quota exceeded",
     "billing",
+    "余额不足",
+    "额度不足",
+    "额度已用尽",
+    // Deterministic authentication / invalid API key / test mock exhaustion errors.
+    "invalid_api_key",
+    "invalid api key",
+    "incorrect api key",
+    "authentication_error",
+    "authentication failed",
+    "令牌无效",
+    "无效的令牌",
+    "No more faux responses queued",
 ]);
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
     // Generic provider load, HTTP status, and server-side transient failures.
@@ -164,11 +177,15 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
  * before restarting the assistant turn.
  */
 export function isRetryableAssistantError(message) {
-    if (message.stopReason !== "error" || !message.errorMessage)
+    if (message.stopReason !== "error")
         return false;
-    const errorMessage = message.errorMessage;
+    if (isContextOverflow(message))
+        return false;
+    const errorMessage = message.errorMessage ?? "";
+    if (!errorMessage)
+        return true;
     if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage))
         return false;
-    return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
+    return true;
 }
 //# sourceMappingURL=retry.js.map

@@ -48,8 +48,8 @@ export const RP_COMMANDS: CommandMeta[] = [
 	},
 	{
 		name: "btw",
-		usage: "/btw [问题或指令 | clear | stop]",
-		description: "旁路助手：不污染剧情历史地讨论点评剧情、检索设定或修改角色卡与项目文档（clear 关闭清空）",
+		usage: "/btw [问题或指令 | retry | rewind | delete | model | template | clear | stop]",
+		description: "旁路助手：不污染剧情历史地讨论点评剧情、检索设定或修改角色卡与项目文档（支持重试/回退/删除/切模型/性格模板）",
 		takesArgs: true,
 		mode: "roleplay",
 	},

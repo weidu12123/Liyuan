@@ -600,6 +600,8 @@ export declare class AgentSession {
     reload(options?: {
         beforeSessionStart?: () => void | Promise<void>;
     }): Promise<void>;
+    private _extractAssistantText;
+    private _hasContinuationPrefix;
     /**
      * Check if an error is retryable (overloaded, rate limit, server errors).
      * Context overflow errors are NOT retryable (handled by compaction instead).

@@ -7,7 +7,7 @@
  * - 过程内多轮上下文、工具调用循环、5 次报错自动重试、超窗口自动压缩均由 pi AgentSession 原生承担；
  * - 显式执行 clear（/btw clear）才在当前项目新开一条空白助手会话。
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	createAgentSession,
@@ -48,6 +48,7 @@ export interface BtwRunnerDeps {
 		onNotify?: (level: "info" | "warning" | "error", text: string) => void;
 		onEnd?: (info: { aborted: boolean; error?: string }) => void;
 		onClear?: () => void;
+		onSync?: (messages: WireBtwMsg[]) => void;
 	};
 }
 
@@ -57,6 +58,12 @@ export interface BtwRunner {
 	readonly userTurnCount: number;
 	snapshot(): WireBtwMsg[];
 	prompt(text: string): Promise<{ aborted: boolean; error?: string }>;
+	/** 重新生成指定轮次（缺省最后一轮，0-based）的助手回复；可选替换该轮用户提问文本 */
+	retry(opts?: { turnIndex?: number; text?: string }): Promise<{ aborted: boolean; error?: string }>;
+	/** 回退最后 N 轮对话（缺省 1 轮） */
+	rewind(turns?: number): Promise<{ ok: boolean; turnsRewound: number; remainingTurns: number; error?: string }>;
+	/** 删除指定轮次（0-based，缺省最后一轮），保留其余轮次 */
+	deleteTurn(turnIndex?: number): Promise<{ ok: boolean; deletedIndex: number; remainingTurns: number; error?: string }>;
 	abort(): Promise<void>;
 	/** 在当前项目新建一条空白助手会话（重置上下文） */
 	clear(): Promise<void>;
@@ -147,6 +154,34 @@ function extractUserText(content: unknown): string {
 	return content
 		.map((p) => (p && typeof p === "object" && (p as { type?: unknown }).type === "text" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""))
 		.join("");
+}
+
+interface BtwTurnSlice {
+	userText: string;
+	entries: Array<Record<string, unknown>>;
+}
+
+function sliceBranchIntoTurns(branch: ReadonlyArray<Record<string, unknown>>): {
+	preamble: Array<Record<string, unknown>>;
+	turns: BtwTurnSlice[];
+} {
+	const preamble: Array<Record<string, unknown>> = [];
+	const turns: BtwTurnSlice[] = [];
+	let cur: BtwTurnSlice | null = null;
+	for (const entry of branch) {
+		if (entry.type === "message" && entry.message && typeof entry.message === "object") {
+			const msg = entry.message as { role?: unknown; content?: unknown };
+			if (msg.role === "user") {
+				const text = extractUserText(msg.content).trim();
+				cur = { userText: text, entries: [entry] };
+				turns.push(cur);
+				continue;
+			}
+		}
+		if (cur) cur.entries.push(entry);
+		else preamble.push(entry);
+	}
+	return { preamble, turns };
 }
 
 export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
@@ -312,9 +347,9 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 							void session?.abort();
 						},
 					});
-					const blockReason = await gate(event.toolName, event.input as Record<string, unknown>);
+					const summary = formatToolStartDetail(event.toolName, { ...inputObj });
+					const blockReason = await gate(event.toolName, inputObj);
 					if (blockReason) return { block: true, reason: blockReason };
-					const summary = formatToolStartDetail(event.toolName, event.input);
 					if (summary) recordTool(summary);
 				}
 				return undefined;
@@ -384,14 +419,89 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 					deps.events?.onDelta?.(kind, sub.delta);
 				}
 			} else if (event.type === "message_end") {
-				if (event.message.role === "assistant" && event.message.stopReason === "error") {
-					lastError = event.message.errorMessage || "provider error";
+				if (event.message.role === "assistant") {
+					if (event.message.stopReason === "error") {
+						lastError = event.message.errorMessage || "provider error";
+					} else {
+						lastError = undefined;
+					}
 				}
 			} else if (event.type === "auto_retry_start") {
 				recordTool(`请求失败，正在自动重试（第 ${event.attempt}/${event.maxAttempts} 次）…`); // i18n-ignore：过程日志
 			}
 		});
 		return session;
+	};
+
+	const inspectCurrentTurns = () => {
+		const targetDir = resolveBtwSessionDir();
+		const sm =
+			session && boundSessionDir === targetDir
+				? session.sessionManager
+				: SessionManager.continueRecent(deps.cwd, targetDir);
+		const branch = sm.getBranch() as unknown as Array<Record<string, unknown>>;
+		const { preamble, turns } = sliceBranchIntoTurns(branch);
+		return { targetDir, sm, preamble, turns };
+	};
+
+	const applyKeptTurns = async (
+		targetDir: string,
+		sm: SessionManager,
+		preamble: Array<Record<string, unknown>>,
+		keptTurns: BtwTurnSlice[],
+		opts?: { silentWhenEmpty?: boolean },
+	): Promise<void> => {
+		if (keptTurns.length === 0) {
+			try {
+				for (const f of readdirSync(targetDir)) {
+					if (f.endsWith(".jsonl")) rmSync(join(targetDir, f), { force: true });
+				}
+			} catch {
+				// ignore remove errors
+			}
+			await teardownSessionInstance();
+			boundSessionDir = targetDir;
+			sessionGrants = { dirs: [], bashAllow: [] };
+			transcript = [];
+			if (opts?.silentWhenEmpty) deps.events?.onSync?.([]);
+			else deps.events?.onClear?.();
+			return;
+		}
+
+		const header = sm.getHeader() ?? {
+			type: "session",
+			version: 3,
+			id: sm.getSessionId(),
+			timestamp: new Date().toISOString(),
+			cwd: deps.cwd,
+		};
+		const sessionFile = sm.getSessionFile();
+		await teardownSessionInstance();
+
+		let prevId: string | null = null;
+		const chained: Array<Record<string, unknown>> = [];
+		for (const raw of [...preamble, ...keptTurns.flatMap((t) => t.entries)]) {
+			const copy = { ...raw, parentId: prevId };
+			if (typeof copy.id === "string") prevId = copy.id;
+			chained.push(copy);
+		}
+		if (sessionFile) {
+			const lines = [header, ...chained].map((x) => JSON.stringify(x)).join("\n") + "\n";
+			writeFileSync(sessionFile, lines, "utf8");
+		}
+		boundSessionDir = targetDir;
+		const nextSm = SessionManager.continueRecent(deps.cwd, targetDir);
+		const nextBranch = nextSm.getBranch() as unknown as Array<Record<string, unknown>>;
+		transcript = rebuildTranscriptFromBranch(nextBranch);
+		sessionGrants = sandboxGrantsFromBranch(nextBranch as never);
+		deps.events?.onSync?.(
+			transcript.map((m) => ({
+				role: m.role,
+				text: m.text,
+				...(m.thinking ? { thinking: m.thinking } : {}),
+				...(m.tools?.length ? { tools: [...m.tools] } : {}),
+			})),
+		);
 	};
 
 	return {
@@ -477,6 +587,68 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 				busy = false;
 				activeAbort = null;
 			}
+		},
+		async retry(opts?: { turnIndex?: number; text?: string }): Promise<{ aborted: boolean; error?: string }> {
+			if (busy || session?.isStreaming) {
+				deps.events?.onNotify?.("warning", t("旁路助手正在回复中，请稍候或使用 /btw stop 停止"));
+				return { aborted: false, error: "busy" };
+			}
+			const { targetDir, sm, preamble, turns } = inspectCurrentTurns();
+			if (turns.length === 0) {
+				const msg = t("当前没有可重试的旁路对话");
+				deps.events?.onNotify?.("warning", msg);
+				return { aborted: false, error: "empty" };
+			}
+			const idx =
+				opts?.turnIndex !== undefined && Number.isInteger(opts.turnIndex)
+					? Math.min(Math.max(0, opts.turnIndex), turns.length - 1)
+					: turns.length - 1;
+			const targetText = (opts?.text?.trim() || turns[idx].userText.trim());
+			if (!targetText) {
+				return { aborted: false, error: "empty-text" };
+			}
+			await applyKeptTurns(targetDir, sm, preamble, turns.slice(0, idx), { silentWhenEmpty: true });
+			return await this.prompt(targetText);
+		},
+		async rewind(turnsCount = 1): Promise<{ ok: boolean; turnsRewound: number; remainingTurns: number; error?: string }> {
+			if (busy || session?.isStreaming) {
+				deps.events?.onNotify?.("warning", t("旁路助手正在回复中，请稍候或使用 /btw stop 停止"));
+				return { ok: false, turnsRewound: 0, remainingTurns: this.userTurnCount, error: "busy" };
+			}
+			const { targetDir, sm, preamble, turns } = inspectCurrentTurns();
+			if (turns.length === 0) {
+				const msg = t("当前没有可回退的旁路对话");
+				deps.events?.onNotify?.("warning", msg);
+				return { ok: false, turnsRewound: 0, remainingTurns: 0, error: "empty" };
+			}
+			const n = Math.min(Math.max(1, Math.floor(turnsCount)), turns.length);
+			const kept = turns.slice(0, turns.length - n);
+			await applyKeptTurns(targetDir, sm, preamble, kept);
+			return { ok: true, turnsRewound: n, remainingTurns: kept.length };
+		},
+		async deleteTurn(turnIndex?: number): Promise<{ ok: boolean; deletedIndex: number; remainingTurns: number; error?: string }> {
+			if (busy || session?.isStreaming) {
+				deps.events?.onNotify?.("warning", t("旁路助手正在回复中，请稍候或使用 /btw stop 停止"));
+				return { ok: false, deletedIndex: -1, remainingTurns: this.userTurnCount, error: "busy" };
+			}
+			const { targetDir, sm, preamble, turns } = inspectCurrentTurns();
+			if (turns.length === 0) {
+				const msg = t("当前没有可删除的旁路对话");
+				deps.events?.onNotify?.("warning", msg);
+				return { ok: false, deletedIndex: -1, remainingTurns: 0, error: "empty" };
+			}
+			const idx =
+				turnIndex !== undefined && Number.isInteger(turnIndex)
+					? turnIndex
+					: turns.length - 1;
+			if (idx < 0 || idx >= turns.length) {
+				const msg = t("指定的旁路对话轮次不存在（共 {n} 轮）", { n: turns.length });
+				deps.events?.onNotify?.("warning", msg);
+				return { ok: false, deletedIndex: -1, remainingTurns: turns.length, error: "out-of-range" };
+			}
+			const kept = turns.filter((_, i) => i !== idx);
+			await applyKeptTurns(targetDir, sm, preamble, kept);
+			return { ok: true, deletedIndex: idx, remainingTurns: kept.length };
 		},
 		async abort(): Promise<void> {
 			activeAbort?.abort();

@@ -325,8 +325,10 @@ export function takeAgentMergeLog(): string[] {
  * 用户自己改写过的（不以旧开场句开头）一律不动。
  */
 const LEGACY_SYSTEM_OPENING = "你在 **梨园**（Liyuan）里担任角色扮演 agent";
-const LEGACY_CARD_MEMORY_SYSTEM =
-	"You are an agent operating inside 梨园（Liyuan）. Your working directory is a card workspace: the files around you — AGENTS.md, APPEND_SYSTEM.md, the lorebooks, 记忆/ — are the current card's material.";
+const LEGACY_CARD_WORKSPACE_SYSTEMS = new Set([
+	"You are an agent operating inside 梨园（Liyuan）. Your working directory is a card workspace: the files around you — AGENTS.md, APPEND_SYSTEM.md, the lorebooks, 记忆/ — are the current card's material.",
+	"You are an agent operating inside 梨园（Liyuan）. Your working directory is a card workspace: the files around you — AGENTS.md, APPEND_SYSTEM.md, the lorebooks — are the current card's material.",
+]);
 
 export function seedStageSystemPrompt(cwd: string, agentDir: string): void {
 	try {
@@ -347,9 +349,9 @@ export function seedStageSystemPrompt(cwd: string, agentDir: string): void {
 					copyFileSync(shipped("SYSTEM.md"), target);
 					lastAgentMergeLog.push(`迁移：SYSTEM.md 已换成最小环境底座`);
 				}
-			} else if (current.trim() === LEGACY_CARD_MEMORY_SYSTEM && existsSync(shipped("SYSTEM.md"))) {
+			} else if (LEGACY_CARD_WORKSPACE_SYSTEMS.has(current.trim()) && existsSync(shipped("SYSTEM.md"))) {
 				copyFileSync(shipped("SYSTEM.md"), target);
-				lastAgentMergeLog.push(`迁移：SYSTEM.md 已移除旧版卡根 记忆/ 指引`);
+				lastAgentMergeLog.push(`迁移：SYSTEM.md 已收口为项目资产目录底座`);
 			}
 		} else if (existsSync(shipped("SYSTEM.md"))) {
 			copyFileSync(shipped("SYSTEM.md"), target);

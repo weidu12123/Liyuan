@@ -9118,6 +9118,9 @@ label.drawer-btn {
 	flex-direction: column;
 	overflow: hidden;
 }
+.floatwin.is-dragging iframe {
+	pointer-events: none;
+}
 /* 右下角缩放柄：两道斜线，不抢视觉 */
 .floatwin-grip {
 	position: absolute;

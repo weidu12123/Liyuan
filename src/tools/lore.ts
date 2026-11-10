@@ -56,10 +56,30 @@ export interface LoreDeps {
 
 	// ---- 以下未注入则该工具不可用（各面按能力注册） ----
 
+	/** 写一条世界书条目；book 给出则写进那本世界书，缺省写当前已挂载的世界书。返回 null＝内容重复未写入 */
+	writeLore?: (input: {
+		title: string;
+		keys: string[];
+		content: string;
+		constant?: boolean;
+		book?: string;
+	}) => LoreEntryLike | null;
+	/** 改一条条目（按指纹，寻址范围＝书单全部世界书）；null = 哪本里都没这条 */
+	updateLore?: (
+		fingerprint: string,
+		patch: { title?: string; keys?: string[]; content?: string; constant?: boolean },
+	) => { entry: LoreEntryLike; newFingerprint: string; path?: string } | null;
+	/** 删一条条目（按指纹，同一寻址范围）；null = 未命中 */
+	deleteLore?: (fingerprint: string) => { entry: LoreEntryLike; path?: string } | null;
 	/** 列举全部条目（含停用的——列举的意义正是让 agent 看见能启停什么） */
 	listLore?: () => LoreEntryLike[];
 	/** 书单 + 当前挂载状态（`lorebook_files`） */
 	listBooks?: () => { books: Array<{ path: string; name: string; entryCount: number }>; mounted: string[] };
+	/** 新建一本世界书（连第一条一起写，写完直接挂载）；返回 null＝同名已存在 */
+	createBook?: (
+		name: string,
+		first: { title: string; keys: string[]; content: string; constant?: boolean },
+	) => { path: string; mounted: string[] } | null;
 	/** 挂载/卸载一本；返回挂载后的完整列表；抛错 = 路径不是有效世界书 */
 	mountBook?: (path: string, mounted: boolean) => string[];
 	/** 按内容指纹启停；返回实际生效的条数 */
@@ -391,12 +411,217 @@ const lorebookMount: ToolSpec<LoreDeps> = {
 	},
 };
 
-/** 世界书族全部工具（检索 / 列 / 启停 / 书一级列挂） */
+export const lorebookCreate: ToolSpec<LoreDeps> = {
+	name: "lorebook_create",
+	domain: "lore",
+	mode: "write",
+	surfaces: ["stage"],
+	label: "新建世界书",
+	description: () =>
+		"新建一本独立世界书并写入第一条设定，建好即自动挂载生效。此后往这本里加条目用 lorebook_write 传 book。同名已存在会被拒绝。",
+	parameters: () => ({
+		type: "object",
+		properties: {
+			name: { type: "string", description: "书名，如「青云志」（会成为文件名）" },
+			title: { type: "string", description: "第一条的标题" },
+			keys: { type: "array", items: { type: "string" }, description: "第一条的检索关键词" },
+			content: { type: "string", description: "第一条的正文" },
+			constant: { type: "boolean", description: "第一条是否常驻注入" },
+		},
+		required: ["name", "title", "keys", "content"],
+	}),
+	async run(args, deps): Promise<ToolResult> {
+		if (!deps.createBook) return { text: "本环境不支持新建世界书。" };
+
+		const name = strArg(args, "name");
+		const title = strArg(args, "title");
+		const content = strArg(args, "content");
+		if (!name) return { text: "缺少 name 参数（书名）。" };
+		if (!title || !content) return { text: "缺少 title 或 content（新书要连第一条一起建）。" };
+		const keys = Array.isArray(args.keys)
+			? args.keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
+			: [];
+
+		let r: { path: string; mounted: string[] } | null;
+		try {
+			r = deps.createBook(name, { title, keys, content, constant: args.constant === true });
+		} catch (err) {
+			return { text: `新建世界书失败：${errText(err)}` };
+		}
+		if (!r) return { text: `已有同名世界书「${name}」，未新建。`, activity: "建世界书 · 重名跳过" };
+
+		return {
+			text: `已新建世界书「${name}」（${r.path}）并挂载，首条【${title}】已写入。往这本里再加条目：lorebook_write 传 book="${r.path}"。`,
+			activity: `建世界书「${name}」`,
+			details: { path: r.path, mounted: r.mounted },
+		};
+	},
+};
+
+export const lorebookWrite: ToolSpec<LoreDeps> = {
+	name: "lorebook_write",
+	domain: "lore",
+	mode: "write",
+	surfaces: ["stage", "extension"],
+	label: "写入世界书条目",
+	description: () =>
+		"向独立世界书写入一条设定（标题/检索关键词/正文/是否常驻）：写入后 lorebook_search 与 lorebook_list 可见。" +
+		"通过 book 指定写入哪本世界书（路径从 lorebook_files 或 lorebook_create 取；若只挂载了一本世界书可省略 book）。还没有世界书时先调 lorebook_create。",
+	parameters: () => ({
+		type: "object",
+		properties: {
+			title: { type: "string", description: "条目标题，如「青云宗门规」" },
+			keys: {
+				type: "array",
+				items: { type: "string" },
+				description: "检索关键词（供触发与检索命中）",
+			},
+			content: { type: "string", description: "设定正文" },
+			constant: { type: "boolean", description: "true = 常驻注入（仅限全局关键设定）" },
+			book: { type: "string", description: "写进哪本世界书（路径从 lorebook_files 取；缺省写入当前已挂载的世界书）" },
+		},
+		required: ["title", "keys", "content"],
+	}),
+	async run(args, deps): Promise<ToolResult> {
+		if (!deps.writeLore) return { text: "本环境不支持写入世界书条目。" };
+
+		const title = strArg(args, "title");
+		const content = strArg(args, "content");
+		if (!title || !content) return { text: "缺少 title 或 content 参数。" };
+		const keys = Array.isArray(args.keys)
+			? args.keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
+			: [];
+		const book = strArg(args, "book");
+
+		let entry: LoreEntryLike | null;
+		try {
+			entry = deps.writeLore({ title, keys, content, constant: args.constant === true, ...(book ? { book } : {}) });
+		} catch (err) {
+			return { text: `写入世界书条目失败：${errText(err)}` };
+		}
+		if (!entry) return { text: "内容与已有条目重复，未写入。", activity: "写设定 · 重复跳过" };
+
+		return {
+			text:
+				`已写入世界书条目：【${entry.comment}】关键词 ${entry.keys?.join("、") || "（无）"}` +
+				`${entry.constant ? "（常驻注入）" : ""}${book ? `，写在 ${book}` : ""}。`,
+			activity: `写设定「${entry.comment}」`,
+			details: { uid: entry.uid },
+		};
+	},
+};
+
+export const lorebookUpdate: ToolSpec<LoreDeps> = {
+	name: "lorebook_update",
+	domain: "lore",
+	mode: "write",
+	surfaces: ["stage"],
+	label: "修改世界书条目",
+	description: () =>
+		"按指纹修改一条世界书条目（指纹从 lorebook_list 取）：标题/关键词/正文/常驻，只传要改的字段，没传的原样保留。",
+	parameters: () => ({
+		type: "object",
+		properties: {
+			fingerprint: { type: "string", description: "要改的条目指纹（从 lorebook_list 取）" },
+			title: { type: "string", description: "新标题" },
+			keys: { type: "array", items: { type: "string" }, description: "新检索关键词（整组替换）" },
+			content: { type: "string", description: "新设定正文（整段替换）" },
+			constant: { type: "boolean", description: "是否常驻注入" },
+		},
+		required: ["fingerprint"],
+	}),
+	async run(args, deps): Promise<ToolResult> {
+		if (!deps.updateLore) return { text: "本环境不支持修改世界书条目。" };
+
+		const fingerprint = strArg(args, "fingerprint").replace(/^lore:/, "");
+		if (!fingerprint) return { text: "缺少 fingerprint 参数（指纹从 lorebook_list 取）。" };
+
+		const patch: { title?: string; keys?: string[]; content?: string; constant?: boolean } = {};
+		const title = strArg(args, "title");
+		if (title) patch.title = title;
+		const content = strArg(args, "content");
+		if (content) patch.content = content;
+		if (Array.isArray(args.keys)) {
+			patch.keys = args.keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim());
+		}
+		if (typeof args.constant === "boolean") patch.constant = args.constant;
+		if (Object.keys(patch).length === 0) return { text: "没有要改的字段（title/keys/content/constant 至少给一个）。" };
+
+		let r: { entry: LoreEntryLike; newFingerprint: string; path?: string } | null;
+		try {
+			r = deps.updateLore(fingerprint, patch);
+		} catch (err) {
+			return { text: `修改世界书条目失败：${errText(err)}` };
+		}
+		if (!r) {
+			return {
+				text: "哪本世界书里都没有这个指纹（条目可能已被改过——指纹随正文变，重新 lorebook_list 取一次）。",
+				activity: "改设定 · 未命中",
+			};
+		}
+
+		return {
+			text:
+				`已修改【${r.entry.comment}】${r.path ? `（${r.path}）` : ""}` +
+				`${patch.content ? `，正文已更新，新指纹 ${r.newFingerprint}` : ""}。`,
+			activity: `改设定「${r.entry.comment}」`,
+			details: { fingerprint: r.newFingerprint, path: r.path },
+		};
+	},
+};
+
+export const lorebookDelete: ToolSpec<LoreDeps> = {
+	name: "lorebook_delete",
+	domain: "lore",
+	mode: "write",
+	surfaces: ["stage"],
+	label: "删除世界书条目",
+	description: () =>
+		"按指纹删除一条世界书条目（指纹从 lorebook_list 取）。拿不准是否要永久删除时用 lorebook_toggle 停用。",
+	parameters: () => ({
+		type: "object",
+		properties: {
+			fingerprint: { type: "string", description: "要删的条目指纹（从 lorebook_list 取）" },
+		},
+		required: ["fingerprint"],
+	}),
+	async run(args, deps): Promise<ToolResult> {
+		if (!deps.deleteLore) return { text: "本环境不支持删除世界书条目。" };
+
+		const fingerprint = strArg(args, "fingerprint").replace(/^lore:/, "");
+		if (!fingerprint) return { text: "缺少 fingerprint 参数（指纹从 lorebook_list 取）。" };
+
+		let r: { entry: LoreEntryLike; path?: string } | null;
+		try {
+			r = deps.deleteLore(fingerprint);
+		} catch (err) {
+			return { text: `删除世界书条目失败：${errText(err)}` };
+		}
+		if (!r) {
+			return {
+				text: "哪本世界书里都没有这个指纹（条目可能已被改过——指纹随正文变，重新 lorebook_list 取一次）。",
+				activity: "删设定 · 未命中",
+			};
+		}
+
+		return {
+			text: `已删除【${r.entry.comment}】${r.path ? `（${r.path}）` : ""}，此后检索不再命中。`,
+			activity: `删设定「${r.entry.comment}」`,
+			details: { path: r.path },
+		};
+	},
+};
+
+/** 世界书族全部工具（检索 / 列 / 启停 / 书一级列建挂 / 条目增改删） */
 export const loreTools: ToolSpec<LoreDeps>[] = [
 	lorebookSearch,
 	lorebookRead,
 	lorebookList,
 	lorebookToggle,
 	lorebookFiles,
+	lorebookCreate,
 	lorebookMount,
+	lorebookWrite,
+	lorebookUpdate,
+	lorebookDelete,
 ];

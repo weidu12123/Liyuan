@@ -365,6 +365,7 @@ export type ServerFrame =
 	| { type: "btw_state"; state: "start" | "end" | "clear"; aborted?: boolean; error?: string }
 	| { type: "btw_delta"; kind: "text" | "thinking"; delta: string }
 	| { type: "btw_tool"; detail: string }
+	| { type: "btw_sync"; messages: WireBtwMsg[]; streaming?: boolean }
 	| { type: "error"; text: string };
 
 /** Client → Server 帧 */

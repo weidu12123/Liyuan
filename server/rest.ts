@@ -89,7 +89,7 @@ import {
 	resolveConfigPath,
 	sameCardPath,
 } from "../src/paths.ts";
-import { createCardSpace, exportChatZip, importChatZip, listCardSpaces, listChatMarkdownAssets, listChats, loadCardConfig, renameChat, resolveCardSpace, saveCardConfig } from "../src/cardspace.ts";
+import { createCardSpace, exportChatZip, importChatZip, isInternalChatWorkspacePath, listCardSpaces, listChatMarkdownAssets, listChats, loadCardConfig, renameChat, resolveCardSpace, saveCardConfig } from "../src/cardspace.ts";
 import { scanSkillFiles, stageSkillRoot } from "../src/stage/materials.ts";
 import { deleteStageSkill, saveStageSkill } from "../src/stage/skill-store.ts";
 import type { WorldlineView } from "../src/worldline.ts";
@@ -520,6 +520,8 @@ const CONFIG_EDITABLE = new Set([
 	"btwName",
 	"btwAvatar",
 	"btwPersona",
+	"btwPersonaTemplates",
+	"btwModel",
 ]);
 
 export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown>): RpConfig {
@@ -560,6 +562,43 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 			next.sideModel = { provider: sm.provider.trim(), entry: sm.entry.trim() };
 		}
 	}
+	// 旁路助手模型：同 sideModel，指向 { provider, entry }；非法值删除（缺省=跟随剧情主模型）
+	if (next.btwModel !== undefined) {
+		const bm = next.btwModel as { provider?: unknown; entry?: unknown } | null;
+		if (
+			!bm ||
+			typeof bm !== "object" ||
+			typeof bm.provider !== "string" ||
+			!bm.provider.trim() ||
+			typeof bm.entry !== "string" ||
+			!bm.entry.trim()
+		) {
+			delete next.btwModel;
+		} else {
+			next.btwModel = { provider: bm.provider.trim(), entry: bm.entry.trim() };
+		}
+	}
+	// 旁路助手性格模板列表：允许保存空数组 []（代表用户删空了全部模板）；null/空串已在上方删除键（恢复内置默认）
+	if (next.btwPersonaTemplates !== undefined) {
+		if (!Array.isArray(next.btwPersonaTemplates)) {
+			delete next.btwPersonaTemplates;
+		} else {
+			const seen = new Set<string>();
+			const list: Array<{ id: string; name: string; content: string }> = [];
+			for (let i = 0; i < next.btwPersonaTemplates.length; i++) {
+				const raw = next.btwPersonaTemplates[i] as { id?: unknown; name?: unknown; content?: unknown } | null;
+				if (!raw || typeof raw !== "object") continue;
+				const name = typeof raw.name === "string" ? raw.name.trim() : "";
+				const content = typeof raw.content === "string" ? raw.content.trim() : "";
+				if (!name || !content) continue;
+				let id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : `tpl-${Date.now()}-${i}`;
+				while (seen.has(id)) id = `${id}-${i}`;
+				seen.add(id);
+				list.push({ id, name, content });
+			}
+			next.btwPersonaTemplates = list;
+		}
+	}
 	// 挂载书：lorebooks 数组优先；兼容旧单本 lorebook
 	const paths = mountedLorebookPaths(next as RpConfig);
 	Object.assign(next, setMountedLorebooks(next as RpConfig, paths));
@@ -576,6 +615,12 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 		else delete next.samplers;
 	}
 	return next as unknown as RpConfig;
+}
+
+export function saveConfig(cwd: string, patch: Record<string, unknown>): RpConfig {
+	const next = applyConfigPatch(loadConfig(cwd), patch);
+	writeJsonWithBackup(configPath(cwd), next);
+	return next;
 }
 
 function clampInt(v: unknown, min: number, max: number, dflt: number): number {
@@ -1640,8 +1685,16 @@ export function loreWriteTargets(cwd: string, config: RpConfig, scope?: string):
 	const p = (scope ?? "").replace(/\\/g, "/").trim();
 	const known = listLorebookFiles(cwd, config).map((b) => b.path);
 	if (p) {
-		if (!known.includes(p)) throw new Error(t("不是已知的世界书文件"));
-		return [resolvePath(cwd, p)];
+		const matched =
+			known.find((k) => k === p) ??
+			known.find(
+				(k) =>
+					k === `assets/lorebooks/${p.replace(/\.json$/i, "")}.json` ||
+					k.endsWith(`/${p}`) ||
+					k.endsWith(`/${p}.json`),
+			);
+		if (!matched) throw new Error(t("不是已知的世界书文件"));
+		return [resolvePath(cwd, matched)];
 	}
 	return known.map((k) => resolvePath(cwd, k));
 }
@@ -1651,7 +1704,7 @@ export function loreWriteTargets(cwd: string, config: RpConfig, scope?: string):
  * 内容变了＝换身份（指纹是内容 md5），停用清单里的旧指纹必须跟着迁移，
  * 否则用户亲手关掉的条目会静默复活。
  */
-function patchLoreEntryAnywhere(
+export function patchLoreEntryAnywhere(
 	cwd: string,
 	config: RpConfig,
 	fingerprint: string,
@@ -1672,7 +1725,7 @@ function patchLoreEntryAnywhere(
 }
 
 /** 按指纹删一条：同一寻址；顺手清掉停用清单里的残留指纹（删掉的条目不该继续占位）。 */
-function deleteLoreEntryAnywhere(
+export function deleteLoreEntryAnywhere(
 	cwd: string,
 	config: RpConfig,
 	fingerprint: string,
@@ -1707,7 +1760,11 @@ export function lorebookShelf(
  * 挂载方向校验「是不是有效世界书」——与 POST /api/lorebooks/select 同一条：空书挂不上。
  */
 export function setLorebookMounted(cwd: string, config: RpConfig, path: string, mounted: boolean): string[] {
-	const p = path.replace(/\\/g, "/");
+	let p = path.replace(/\\/g, "/").trim();
+	if (p && !existsSync(resolvePath(cwd, p))) {
+		const candidate = `assets/lorebooks/${p.replace(/\.json$/i, "")}.json`;
+		if (existsSync(resolvePath(cwd, candidate))) p = candidate;
+	}
 	if (mounted) {
 		const abs = resolvePath(cwd, p);
 		if (!existsSync(abs) || loadLorebookFile(abs).length === 0) {
@@ -1993,6 +2050,40 @@ export function importEmbeddedLoreForCards(
 	}
 
 	return { results, newlyMounted, nextConfig };
+}
+
+/**
+ * `card_project` 执行 `apply` / `undo` 后：若角色卡内嵌 `character_book` 含有条目，
+ * 自动将其同步写出至 `assets/lorebooks/<卡名>.json` 并确保挂载到当前配置，
+ * 避免模型通过 `card_project` 写入卡内世界书后在梨园【世界书】面板与 `lorebook_list` 中不可见。
+ */
+export function syncCardAuthoringLore(cwd: string, cardAbsPath: string): string | null {
+	let card: ReturnType<typeof loadCardFile>;
+	try {
+		card = loadCardFile(cardAbsPath);
+	} catch {
+		return null;
+	}
+	if (!card || card.book.length === 0) return null;
+	mkdirSync(join(cwd, LOREBOOKS_DIR), { recursive: true });
+	const safeBase = card.name.replace(/[\\/:*?"<>|]/g, "-").trim() || "card-lore";
+	const file = `${safeBase}.json`;
+	const dest = join(cwd, LOREBOOKS_DIR, file);
+	const stJson = exportStLorebook(card.name, card.book);
+	writeFileSync(dest, `${JSON.stringify(stJson, null, "\t")}\n`, "utf8");
+	lorebookMetaCache.delete(dest);
+	const rel = `${LOREBOOKS_DIR}/${file}`;
+	const config = loadConfig(cwd);
+	const existing = mountedLorebookPaths(config);
+	if (!existing.includes(rel)) {
+		const merged = [...existing, rel];
+		writeJsonWithBackup(configPath(cwd), setMountedLorebooks(config, merged));
+		const space = resolveCardSpace(cwd, config.card);
+		if (space && Array.isArray(loadCardConfig(space.dir).lorebooks)) {
+			saveCardConfig(space.dir, { lorebooks: merged });
+		}
+	}
+	return rel;
 }
 
 /**
@@ -2833,21 +2924,34 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			case "GET /api/chats/asset": {
 				const chatId = (query.get("chatId") ?? host.currentChatId() ?? "").trim();
 				const rel = (query.get("path") ?? "").trim().replace(/\\/g, "/");
-				if (!chatId || !chatIdOk(chatId) || !rel || !rel.toLowerCase().endsWith(".md")) throw new Error(t("参数不合法"));
+				if (!chatId || !chatIdOk(chatId) || !rel || isInternalChatWorkspacePath(rel)) throw new Error(t("参数不合法"));
 				const space = resolveCardSpace(host.cwd, loadConfig(host.cwd).card);
 				if (!space) throw new Error(t("当前卡不在 cards/（老布局没有对话层）"));
 				const cDir = chatDirOf(space.dir, chatId);
 				const target = resolve(cDir, rel);
 				if (!insidePath(cDir, target)) throw new Error(t("路径越界"));
-				const content = existsSync(target) ? readFileSync(target, "utf8") : "";
-				sendJson(res, 200, { ok: true, chatId, path: rel, content });
+				const MAX_PREVIEW_BYTES = 200 * 1024;
+				let content = "";
+				let truncated = false;
+				let totalBytes = 0;
+				if (existsSync(target)) {
+					const buf = readFileSync(target);
+					totalBytes = buf.byteLength;
+					if (buf.byteLength > MAX_PREVIEW_BYTES) {
+						content = buf.subarray(0, MAX_PREVIEW_BYTES).toString("utf8");
+						truncated = true;
+					} else {
+						content = buf.toString("utf8");
+					}
+				}
+				sendJson(res, 200, { ok: true, chatId, path: rel, content, ...(truncated ? { truncated: true, totalBytes } : {}) });
 				return true;
 			}
 			case "PUT /api/chats/asset": {
 				const body = JSON.parse(await readBody(req)) as { chatId?: string; path?: string; content?: string };
 				const chatId = (body.chatId ?? host.currentChatId() ?? "").trim();
 				const rel = (body.path ?? "").trim().replace(/\\/g, "/");
-				if (!chatId || !chatIdOk(chatId) || !rel || !rel.toLowerCase().endsWith(".md")) throw new Error(t("参数不合法"));
+				if (!chatId || !chatIdOk(chatId) || !rel || isInternalChatWorkspacePath(rel)) throw new Error(t("参数不合法"));
 				const space = resolveCardSpace(host.cwd, loadConfig(host.cwd).card);
 				if (!space) throw new Error(t("当前卡不在 cards/（老布局没有对话层）"));
 				const cDir = chatDirOf(space.dir, chatId);
@@ -2861,7 +2965,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			case "DELETE /api/chats/asset": {
 				const chatId = (query.get("chatId") ?? host.currentChatId() ?? "").trim();
 				const rel = (query.get("path") ?? "").trim().replace(/\\/g, "/");
-				if (!chatId || !chatIdOk(chatId) || !rel || !rel.toLowerCase().endsWith(".md")) throw new Error(t("参数不合法"));
+				if (!chatId || !chatIdOk(chatId) || !rel || isInternalChatWorkspacePath(rel)) throw new Error(t("参数不合法"));
 				const space = resolveCardSpace(host.cwd, loadConfig(host.cwd).card);
 				if (!space) throw new Error(t("当前卡不在 cards/（老布局没有对话层）"));
 				const cDir = chatDirOf(space.dir, chatId);
@@ -3974,7 +4078,10 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 					const applying = body.action === "apply" || body.action === "undo";
 					if (applying && refuseWhileStreaming()) return true;
 					const result = body.action === "preview" ? await host.runCardPreview(body) : cardProjectOperation(host.cwd, path, body);
-					if (applying) await host.softRefreshConfig();
+					if (applying) {
+						syncCardAuthoringLore(host.cwd, path);
+						await host.softRefreshConfig();
+					}
 					sendJson(res, 200, result);
 				}
 				return true;

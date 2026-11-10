@@ -378,21 +378,25 @@ function ModelDetailInspect({
 	item,
 	isCurrent,
 	isSide,
+	isBtw,
 	liveThinking,
 	busy,
 	onSelectWithLevel,
 	onPatchEntry,
 	onToggleSide,
+	onToggleBtw,
 	onUseModel,
 }: {
 	item: AggregatedModelItem;
 	isCurrent: boolean;
 	isSide: boolean;
+	isBtw?: boolean;
 	liveThinking: string;
 	busy: boolean;
 	onSelectWithLevel: (level: string) => void;
 	onPatchEntry: (patch: Partial<ModelEntry>) => void;
 	onToggleSide: (on: boolean) => void;
+	onToggleBtw?: (on: boolean) => void;
 	onUseModel?: () => void;
 }) {
 	const key = entryKeyOf(item.entry);
@@ -619,6 +623,29 @@ function ModelDetailInspect({
 						</span>
 					</button>
 				</div>
+
+				{/* 5. 助手模型 */}
+				{onToggleBtw && (
+					<div className="wb-inspect-item">
+						<button
+							type="button"
+							className="wb-inspect-row"
+							disabled={busy}
+							title={
+								isBtw
+									? t("取消助手模型指定，回到跟随剧情主模型")
+									: t("将扮演模式旁路助手（@助手 / /btw）指定为此模型条目")
+							}
+							onClick={() => onToggleBtw(!isBtw)}
+						>
+							<span className="wb-inspect-label">{t("设为助手模型")}</span>
+							<span className="wb-inspect-val">
+								<span>{isBtw ? t("已开启") : t("跟随主模型")}</span>
+								<IconChevronRight size={13} className="wb-inspect-arrow" />
+							</span>
+						</button>
+					</div>
+				)}
 			</div>
 
 			{onUseModel && !isCurrent && (
@@ -657,6 +684,7 @@ export function ComposerModelSwitch({
 	const allModels = modelsData.data?.models ?? [];
 	const activeConfig: LiyuanAgentConfig = agentCfg.data?.config ?? { version: 1, providers: {} };
 	const sideEntry = rpConfig.data?.config?.sideModel ?? null;
+	const btwEntry = rpConfig.data?.config?.btwModel ?? null;
 	const storyKey = typeof activeConfig.defaultModelEntry === "string" ? activeConfig.defaultModelEntry.trim() : "";
 
 	const allItems = useMemo(() => buildAggregatedModels(activeConfig, allModels), [activeConfig, allModels]);
@@ -803,6 +831,14 @@ export function ComposerModelSwitch({
 			bumpWatchPanels();
 		}, on ? t("旁路：{entry}", { entry: `${target.provider}/${entryKeyOf(target.entry)}` }) : t("旁路：跟随剧情模型"));
 
+	const setBtwForTarget = (target: AggregatedModelItem, on: boolean) =>
+		run(async () => {
+			const key = entryKeyOf(target.entry);
+			await apiPut("/api/config", { btwModel: on ? { provider: target.provider, entry: key } : null });
+			rpConfig.reload();
+			bumpWatchPanels();
+		}, on ? t("助手模型已切换为：{entry}", { entry: `${target.provider}/${entryKeyOf(target.entry)}` }) : t("助手模型已设为：跟随主模型"));
+
 	return (
 		<div className="composer-model-wrap" ref={wrapRef}>
 			<button
@@ -859,6 +895,10 @@ export function ComposerModelSwitch({
 										sideEntry?.provider === mobileDetailItem.provider &&
 										sideEntry?.entry === entryKeyOf(mobileDetailItem.entry)
 									}
+									isBtw={
+										btwEntry?.provider === mobileDetailItem.provider &&
+										btwEntry?.entry === entryKeyOf(mobileDetailItem.entry)
+									}
 									liveThinking={
 										typeof mobileDetailItem.entry.thinkingLevel === "string" && mobileDetailItem.entry.thinkingLevel.trim()
 											? mobileDetailItem.entry.thinkingLevel.trim()
@@ -870,6 +910,7 @@ export function ComposerModelSwitch({
 									}
 									onPatchEntry={(patch) => void patchTargetEntry(mobileDetailItem, patch)}
 									onToggleSide={(on) => void setSideForTarget(mobileDetailItem, on)}
+									onToggleBtw={(on) => void setBtwForTarget(mobileDetailItem, on)}
 									onUseModel={() => {
 										void selectModelEntry(mobileDetailItem.provider, mobileDetailItem.entry);
 										setOpen(false);
@@ -896,6 +937,10 @@ export function ComposerModelSwitch({
 												sideEntry?.provider === inspectTarget.provider &&
 												sideEntry?.entry === entryKeyOf(inspectTarget.entry)
 											}
+											isBtw={
+												btwEntry?.provider === inspectTarget.provider &&
+												btwEntry?.entry === entryKeyOf(inspectTarget.entry)
+											}
 											liveThinking={liveThinking}
 											busy={busy}
 											onSelectWithLevel={(lv) =>
@@ -903,6 +948,7 @@ export function ComposerModelSwitch({
 											}
 											onPatchEntry={(patch) => void patchTargetEntry(inspectTarget, patch)}
 											onToggleSide={(on) => void setSideForTarget(inspectTarget, on)}
+											onToggleBtw={(on) => void setBtwForTarget(inspectTarget, on)}
 											onUseModel={() => void selectModelEntry(inspectTarget.provider, inspectTarget.entry)}
 										/>
 									</div>
@@ -1028,6 +1074,7 @@ export function ConnectEditorPane({
 	const allModels = modelsData.data?.models ?? [];
 	const activeConfig: LiyuanAgentConfig = agentCfg.data?.config ?? { version: 1, providers: {} };
 	const sideEntry = rpConfig.data?.config?.sideModel ?? null;
+	const btwEntry = rpConfig.data?.config?.btwModel ?? null;
 
 	const isGen = target.kind === "gen";
 	const isFile = target.kind === "file";
@@ -1276,6 +1323,7 @@ export function ConnectEditorPane({
 		if (!modelItem) return null;
 		const key = entryKeyOf(modelItem.entry);
 		const isSide = sideEntry?.provider === modelItem.provider && sideEntry?.entry === key;
+		const isBtw = btwEntry?.provider === modelItem.provider && btwEntry?.entry === key;
 		const entryThinking =
 			(typeof modelItem.entry.thinkingLevel === "string" && modelItem.entry.thinkingLevel.trim()) ||
 			supportedLevelsOf(modelItem.entry)[0] ||
@@ -1308,6 +1356,13 @@ export function ConnectEditorPane({
 				bumpWatchPanels();
 			}, on ? t("旁路：{entry}", { entry: `${modelItem.provider}/${key}` }) : t("旁路：跟随剧情模型"));
 
+		const toggleBtw = (on: boolean) =>
+			run(async () => {
+				await apiPut("/api/config", { btwModel: on ? { provider: modelItem.provider, entry: key } : null });
+				rpConfig.reload();
+				bumpWatchPanels();
+			}, on ? t("助手模型已切换为：{entry}", { entry: `${modelItem.provider}/${key}` }) : t("助手模型已设为：跟随主模型"));
+
 		return (
 			<aside className="rc-lore-picker conn-editor-sub" aria-label={key}>
 				<div className="panel-head rc-lore-picker-head">
@@ -1326,11 +1381,13 @@ export function ConnectEditorPane({
 						item={modelItem}
 						isCurrent={false}
 						isSide={isSide}
+						isBtw={isBtw}
 						liveThinking={entryThinking}
 						busy={busy}
 						onSelectWithLevel={(lv) => void patchEntry({ thinkingLevel: lv })}
 						onPatchEntry={(patch) => void patchEntry(patch)}
 						onToggleSide={(on) => void toggleSide(on)}
+						onToggleBtw={(on) => void toggleBtw(on)}
 					/>
 				</div>
 			</aside>
@@ -1771,6 +1828,7 @@ export function ConnectPanel({
 	const allModels = modelsData.data?.models ?? [];
 	const activeConfig: LiyuanAgentConfig = agentCfg.data?.config ?? { version: 1, providers: {} };
 	const sideEntry = rpConfig.data?.config?.sideModel ?? null;
+	const btwEntry = rpConfig.data?.config?.btwModel ?? null;
 
 	const reloadAll = () => {
 		modelsData.reload();
@@ -1886,6 +1944,7 @@ export function ConnectPanel({
 							const entry = it.entry;
 							const key = entryKeyOf(entry);
 							const isSide = sideEntry?.provider === pk && sideEntry?.entry === key;
+							const isBtw = btwEntry?.provider === pk && btwEntry?.entry === key;
 							const inspecting =
 								activeTarget?.kind === "model" &&
 								activeTarget.provider === pk &&
@@ -1904,6 +1963,7 @@ export function ConnectPanel({
 								>
 									<span className="wb-model-row-name">{key}</span>
 									{isSide && <span className="wb-model-side-tag">{t("旁路")}</span>}
+									{isBtw && <span className="wb-model-side-tag">{t("助手")}</span>}
 									<span className="wb-model-row-prov">{pk}</span>
 									<IconChevronRight size={14} className="wb-panel-model-caret" />
 								</button>

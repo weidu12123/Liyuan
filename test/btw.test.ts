@@ -17,11 +17,19 @@ import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@liyuan/ai/pro
 
 import roleplayExtension from "../.liyuan/extensions/roleplay.ts";
 import { createBtwRunner } from "../server/btw.ts";
+import { applyConfigPatch } from "../server/rest.ts";
 import { cardProjectOperation } from "../src/card-authoring.ts";
 import { seedBashDenylist } from "../src/bash-denylist.ts";
-import { btwSystemPrompt, buildBtwStageBlock, prependToFirstUser } from "../src/stage/btw.ts";
+import {
+	btwSystemPrompt,
+	buildBtwStageBlock,
+	DEFAULT_BTW_PERSONA_TEMPLATES,
+	prependToFirstUser,
+	resolveBtwPersonaTemplates,
+} from "../src/stage/btw.ts";
 import { StageEngine, type StageStreamFn } from "../src/stage/engine.ts";
 import { defaultState } from "../src/state.ts";
+import { DEFAULT_CONFIG } from "../src/types.ts";
 
 const TEST_AGENT_DIR = realpathSync(mkdtempSync(join(tmpdir(), "liyuan-btw-agent-")));
 process.env.LIYUAN_CODING_AGENT_DIR = TEST_AGENT_DIR;
@@ -100,6 +108,175 @@ test("btw 提示词与视野块：自定义与空缺回退、不混入卡级酒�
 	assert.equal(JSON.stringify(p1[0]), JSON.stringify(p2[0]), "同一视野下多次装配首条消息字节严格一致");
 	assert.ok(p1[0]!.content[0]!.text.endsWith("\n\n第一问"), "首轮用户提问仍在整条消息最末尾");
 	assert.equal(p1[2]!.content[0]!.text, "第二问", "后续轮次提问保持原样");
+});
+
+test("btw 轮次管理与独立模型：重试（含改问重试）、删除指定轮、回退 N 轮、跨重启持久化、独立模型与性格模板增删", async () => {
+	// 1. 性格模板增删与 btwModel 配置校验
+	assert.equal(resolveBtwPersonaTemplates(DEFAULT_CONFIG).length, DEFAULT_BTW_PERSONA_TEMPLATES.length, "未配置时返回默认三套模板");
+	const patchedCustom = applyConfigPatch(DEFAULT_CONFIG, {
+		btwModel: { provider: "  custom-prov ", entry: " fast-btw " },
+		btwPersonaTemplates: [
+			{ id: "sharp", name: "犀利搭子", content: "保留一套" },
+			{ id: "my-tpl", name: "毒舌军师", content: "毒舌点评剧情" },
+		],
+	});
+	assert.deepEqual(patchedCustom.btwModel, { provider: "custom-prov", entry: "fast-btw" }, "btwModel 规范化保存");
+	assert.equal(resolveBtwPersonaTemplates(patchedCustom).length, 2, "删除两个内置模板并新增一个自定义模板后为 2 个");
+	const patchedEmpty = applyConfigPatch(patchedCustom, { btwPersonaTemplates: [] });
+	assert.deepEqual(resolveBtwPersonaTemplates(patchedEmpty), [], "允许把全部内置模板删空为 []");
+	const patchedReset = applyConfigPatch(patchedEmpty, { btwPersonaTemplates: null, btwModel: null });
+	assert.equal(patchedReset.btwModel, undefined, "btwModel 传 null 恢复跟随主模型");
+	assert.equal(resolveBtwPersonaTemplates(patchedReset).length, 3, "btwPersonaTemplates 传 null 恢复默认三套模板");
+
+	// 2. BtwRunner 独立模型切换 + retry / deleteTurn / rewind
+	const cwd = realpathSync(mkdtempSync(join(tmpdir(), "liyuan-btw-ops-")));
+	const cardDir = join(cwd, "cards", "云澜");
+	const chat1Dir = join(cardDir, "对话", "chat-1");
+	const chat1SessDir = join(chat1Dir, "会话");
+	mkdirSync(chat1SessDir, { recursive: true });
+	const cardPathRel = "cards/云澜/云澜.json";
+	writeFileSync(
+		join(cardDir, "云澜.json"),
+		JSON.stringify({ data: { name: "云澜", description: "清冷剑修", scenario: "青峰山门", first_mes: "你来了。" } }),
+		"utf8",
+	);
+	writeFileSync(join(cwd, "liyuan.config.json"), JSON.stringify({ card: cardPathRel, userName: "沈舟" }), "utf8");
+
+	const reg = registerFauxProvider({ models: [{ id: "main-model" }, { id: "btw-dedicated-model" }] });
+	try {
+		const mainModel = reg.getModel("main-model")!;
+		const dedicatedModel = reg.getModel("btw-dedicated-model")!;
+		const modelRuntime = await ModelRuntime.create({ authPath: join(TEST_AGENT_DIR, "auth-ops.json"), modelsPath: null });
+		modelRuntime.registerProvider(String(mainModel.provider), {
+			api: mainModel.api,
+			baseUrl: mainModel.baseUrl,
+			apiKey: "test-key",
+			models: [mainModel as never, dedicatedModel as never],
+		});
+		await modelRuntime.setRuntimeApiKey(String(mainModel.provider), "test-key");
+		const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
+		const sm = SessionManager.create(cwd, chat1SessDir);
+		const resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir: TEST_AGENT_DIR,
+			settingsManager,
+			extensionFactories: [roleplayExtension],
+			noExtensions: true,
+			noSkills: true,
+			noPromptTemplates: true,
+			noThemes: true,
+			noContextFiles: true,
+		});
+		await resourceLoader.reload();
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir: TEST_AGENT_DIR,
+			modelRuntime,
+			settingsManager,
+			resourceLoader,
+			sessionManager: sm,
+			model: mainModel as never,
+			thinkingLevel: "off",
+		});
+		await session.bindExtensions({ mode: "rpc" });
+		session.agent.streamFunction = streamSimple as never;
+		activeSessions.push(session);
+
+		const engine = new StageEngine({
+			cwd,
+			getSession: () => session as never,
+			getModel: () => mainModel as never,
+			getAuth: async () => ({}),
+			sideStreamFn: streamSimple as unknown as StageStreamFn,
+		});
+
+		let useDedicated = true;
+		const syncSnapshots: number[] = [];
+		const btw = createBtwRunner({
+			cwd,
+			agentDir: TEST_AGENT_DIR,
+			stage: engine,
+			getServices: () => ({ modelRuntime, settingsManager }),
+			getModelState: () => ({
+				model: (useDedicated ? dedicatedModel : mainModel) as never,
+				thinkingLevel: "off",
+			}),
+			events: {
+				onSync: (msgs) => syncSnapshots.push(msgs.length),
+			},
+		});
+
+		try {
+			// 连续跑 3 轮对话，验证独立模型生效
+			reg.setResponses([
+				fauxAssistantMessage("回答一"),
+				fauxAssistantMessage("回答二"),
+				fauxAssistantMessage("回答三"),
+			] as never);
+			await btw.prompt("问题一");
+			await btw.prompt("问题二");
+			await btw.prompt("问题三");
+			assert.equal(btw.userTurnCount, 3);
+			assert.deepEqual(
+				btw.snapshot().map((m) => m.text),
+				["问题一", "回答一", "问题二", "回答二", "问题三", "回答三"],
+			);
+
+			// 测试 retry 最后一轮（不改词）
+			useDedicated = false;
+			reg.setResponses([fauxAssistantMessage("回答三（重试新版）")] as never);
+			const retryRes = await btw.retry();
+			assert.equal(retryRes.error, undefined);
+			assert.equal(btw.userTurnCount, 3);
+			assert.deepEqual(
+				btw.snapshot().map((m) => m.text),
+				["问题一", "回答一", "问题二", "回答二", "问题三", "回答三（重试新版）"],
+			);
+
+			// 测试 deleteTurn 删除中间第 2 轮（index = 1），保留第 1 轮和第 3 轮
+			const delRes = await btw.deleteTurn(1);
+			assert.equal(delRes.ok, true);
+			assert.equal(delRes.deletedIndex, 1);
+			assert.equal(delRes.remainingTurns, 2);
+			assert.deepEqual(
+				btw.snapshot().map((m) => m.text),
+				["问题一", "回答一", "问题三", "回答三（重试新版）"],
+			);
+
+			// 验证 dispose 重载后删除依然生效（磁盘已重写）
+			await btw.dispose();
+			assert.equal(btw.userTurnCount, 2);
+			assert.deepEqual(
+				btw.snapshot().map((m) => m.text),
+				["问题一", "回答一", "问题三", "回答三（重试新版）"],
+			);
+
+			// 测试 retry 第 2 轮并修改提问文本
+			reg.setResponses([fauxAssistantMessage("回答三（改问后）")] as never);
+			await btw.retry({ turnIndex: 1, text: "问题三（已修改）" });
+			assert.equal(btw.userTurnCount, 2);
+			assert.deepEqual(
+				btw.snapshot().map((m) => m.text),
+				["问题一", "回答一", "问题三（已修改）", "回答三（改问后）"],
+			);
+
+			// 测试 rewind 回退 1 轮
+			const rwRes = await btw.rewind(1);
+			assert.equal(rwRes.ok, true);
+			assert.equal(rwRes.turnsRewound, 1);
+			assert.equal(rwRes.remainingTurns, 1);
+			assert.deepEqual(
+				btw.snapshot().map((m) => m.text),
+				["问题一", "回答一"],
+			);
+			assert.ok(syncSnapshots.length >= 2, "每次轮次裁剪均触发 onSync");
+		} finally {
+			await btw.close();
+		}
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
 });
 
 test("btw 全链路：读干净台前视野 + 多轮改卡写记忆 + 叉掉即焚 + 主会话树与磁盘零污染 + 沙箱拦截", async () => {
@@ -317,6 +494,35 @@ test("btw 全链路：读干净台前视野 + 多轮改卡写记忆 + 叉掉即�
 			assert.match(lsResultText, /记忆\//, "无参 ls 默认落在本项目目录并直接放行");
 			assert.doesNotMatch(lsResultText, /chat-2|OTHER_PROJECT_SECRET/, "对卡根目录执行 find/grep 时严密过滤掉同卡其他项目的文件与内容");
 			assert.ok(toolLogs.some((l) => l.includes("卡创作工程 · inspect")), "card_project 发射带动作名的过程回执");
+
+			// 6. 旁路助手报错自动重试：半截输出从断点继续 + content_filter 截断处完整保留
+			settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } });
+			reg.setResponses([
+				fauxAssistantMessage("前半截点评，", { stopReason: "error", errorMessage: "502 Bad Gateway" }),
+				fauxAssistantMessage("后半截续写完成。"),
+			] as never);
+			const rRetry = await btw.prompt("测试旁路断点续写");
+			assert.equal(rRetry.error, undefined, "断点续写重试成功后应清除错误标记");
+			assert.equal(btw.snapshot().slice(-1)[0]?.text, "前半截点评，后半截续写完成。");
+
+			reg.setResponses([
+				fauxAssistantMessage("虽在末尾触发审查但已输出完毕的内容。", {
+					stopReason: "error",
+					errorMessage: "Provider finish_reason: content_filter",
+				}),
+				fauxAssistantMessage("", {
+					stopReason: "error",
+					errorMessage: "Provider finish_reason: content_filter",
+				}),
+			] as never);
+			await btw.prompt("测试旁路 content_filter 保字");
+			assert.equal(btw.snapshot().slice(-1)[0]?.text, "虽在末尾触发审查但已输出完毕的内容。");
+			await btw.dispose();
+			assert.equal(
+				btw.snapshot().slice(-1)[0]?.text,
+				"虽在末尾触发审查但已输出完毕的内容。",
+				"从磁盘重建后 content_filter 截断处已生成内容依然完整保留",
+			);
 		} finally {
 			await btw.close();
 		}

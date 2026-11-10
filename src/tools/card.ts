@@ -215,7 +215,7 @@ export const cardProject: ToolSpec<CardDeps> = {
 		"meta 按 key 改元数据（条目：comment / keys / secondary_keys / constant / enabled / selective / insertion_order / position / depth / role / probability；" +
 		"正则：scriptName / placement / disabled / markdownOnly / promptOnly / minDepth / maxDepth；脚本：name / enabled；settings-meta：tags；book：name / description / scan_depth / token_budget / recursive_scanning）；" +
 		"assign 把目录项归入板块；check 校验并组装；preview 在用户页面里渲染当前稿并回报错误与 DOM 摘要；apply 按 buildHash 应用且重载；undo 撤回最后一次应用；" +
-		"discard 放弃全部未应用改动；rebase 在原卡被其他入口改动后重新同步并列出冲突。资源也可用原生文件工具编辑。此工程不修改卡档案 AGENTS.md。",
+		"discard 放弃全部未应用改动；rebase 在原卡被其他入口改动后重新同步并列出冲突。所有卡字段、开场白、卡内世界书、正则与脚本均通过本工具修改，禁止用原生文件工具直接修改卡目录文件。",
 	parameters: () => ({
 		type: "object",
 		properties: {

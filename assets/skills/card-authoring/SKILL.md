@@ -34,7 +34,7 @@ mode: authoring
 1. `outline`（概览）→ `outline section=…` 或 `full=true` 看细项。E 类卡有几百条条目、单条正则几百 KB，**按需读，不整包读**。
 2. `read resource=<id>` 读正文，大文件用 `offset / limit` 分页；`read resource=draft` 是含未应用改动的整包 JSON，`raw` 是基线。
 3. 改：
-   - 正文 → `write resource text version`（version 是最近一次 read 回来的 hash；不对就重新 read）。也可用原生文件工具直接改 `sources/` 下的文件。
+   - 正文 → `write resource text version`（version 是最近一次 read 回来的 hash；不对就重新 read）。
    - 元数据 → `meta key fields`。字段白名单按类型：条目 `comment / keys / secondary_keys / constant / enabled / selective / insertion_order / position / depth / role / probability`；正则 `scriptName / placement / disabled / markdownOnly / promptOnly / minDepth / maxDepth / trimStrings / substituteRegex / runOnEdit`；脚本 `name / enabled`；`settings-meta` 的 `tags`；`book` 的 `name / description / scan_depth / token_budget / recursive_scanning`；`settings-depth-prompt` 的 `prompt / depth / role`。不在白名单的字段留在原包不动。
    - 新增 → `add kind fields`。`lore`（可带 `content`）、`greeting`（`content`，`group: true` 为群聊开场）、`regex`（元数据；匹配与替换新增后用 write 填）、`script`（`name`、`content`）。回执带新项的 `key` 与 `resources`。
    - 删除 → `remove key`；`restore key` 撤销。删除在应用时才真正剔除，之前资源 ID 都稳定。

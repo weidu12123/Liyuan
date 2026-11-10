@@ -351,6 +351,8 @@ export default function App() {
 	const [btwMessages, setBtwMessages] = useState<WireBtwMsg[]>([]);
 	const [btwStreaming, setBtwStreaming] = useState(false);
 	const [btwCardCollapsed, setBtwCardCollapsed] = useState(false);
+	const [btwEditingTurn, setBtwEditingTurn] = useState<number | null>(null);
+	const [btwEditDraft, setBtwEditDraft] = useState("");
 	const [sessions, setSessions] = useState<WireSessionInfo[] | null>(null);
 	/** 两层布局的子项目清单（null＝老布局/未下发 ⇒ 面板回落扁平列表） */
 	const [chats, setChats] = useState<WireChatInfo[] | null>(null);
@@ -1232,7 +1234,13 @@ export default function App() {
 						setBtwStreaming(false);
 						setBtwMessages([]);
 						setBtwCardCollapsed(false);
+						setBtwEditingTurn(null);
 					}
+					break;
+				case "btw_sync":
+					setBtwMessages(frame.messages ?? []);
+					if (frame.streaming !== undefined) setBtwStreaming(frame.streaming);
+					setBtwEditingTurn(null);
 					break;
 				case "btw_delta":
 					setBtwMessages((ms) => {
@@ -3254,10 +3262,44 @@ export default function App() {
 																)}
 															</summary>
 															<div className="btw-turn-content">
-																{uText && (
+																{btwEditingTurn === ti ? (
 																	<div className="btw-turn btw-turn-user">
-																		<span className="btw-user-text">{uText}</span>
+																		<textarea
+																			className="panel-search ta"
+																			rows={3}
+																			value={btwEditDraft}
+																			autoFocus
+																			onChange={(e) => setBtwEditDraft(e.target.value)}
+																		/>
+																		<div className="btw-turn-foot" style={{ marginTop: 6 }}>
+																			<button
+																				type="button"
+																				className="btw-inline-btn"
+																				disabled={!btwEditDraft.trim()}
+																				onClick={() => {
+																					const nextQ = btwEditDraft.trim();
+																					if (!nextQ) return;
+																					setBtwEditingTurn(null);
+																					ws.send({ type: "prompt", text: `/btw retry #${ti + 1} ${nextQ}` });
+																				}}
+																			>
+																				{t("保存并重试")}
+																			</button>
+																			<button
+																				type="button"
+																				className="btw-inline-btn"
+																				onClick={() => setBtwEditingTurn(null)}
+																			>
+																				{t("取消")}
+																			</button>
+																		</div>
 																	</div>
+																) : (
+																	uText && (
+																		<div className="btw-turn btw-turn-user">
+																			<span className="btw-user-text">{uText}</span>
+																		</div>
+																	)
 																)}
 																{aMsg && (
 																	<div className="btw-turn btw-turn-assistant">
@@ -3281,8 +3323,49 @@ export default function App() {
 																		) : btwStreaming && isLast ? (
 																			<div className="info-line pulse">{t("正在思考…")}</div>
 																		) : null}
-																		{aText.trim() && !(btwStreaming && isLast) && (
-																			<div className="btw-turn-foot">
+																	</div>
+																)}
+																{!btwStreaming && btwEditingTurn !== ti && (
+																	<div className="btw-turn-foot">
+																		<button
+																			type="button"
+																			className="btw-inline-btn"
+																			onClick={() => ws.send({ type: "prompt", text: `/btw retry #${ti + 1}` })}
+																			title={t("重新生成本轮助手回复")}
+																		>
+																			{t("重试")}
+																		</button>
+																		{uText && (
+																			<button
+																				type="button"
+																				className="btw-inline-btn"
+																				onClick={() => {
+																					setBtwEditDraft(uText);
+																					setBtwEditingTurn(ti);
+																				}}
+																				title={t("修改本轮提问并重新生成")}
+																			>
+																				{t("修改")}
+																			</button>
+																		)}
+																		<button
+																			type="button"
+																			className="btw-inline-btn"
+																			onClick={() => ws.send({ type: "prompt", text: `/btw rewind ${turns.length - ti}` })}
+																			title={t("回退到此轮之前（撤销本轮及之后的旁路对话）")}
+																		>
+																			{t("回退")}
+																		</button>
+																		<button
+																			type="button"
+																			className="btw-inline-btn"
+																			onClick={() => ws.send({ type: "prompt", text: `/btw delete ${ti + 1}` })}
+																			title={t("删除本轮旁路对话")}
+																		>
+																			{t("删除")}
+																		</button>
+																		{aText.trim() && (
+																			<>
 																				<button
 																					type="button"
 																					className="btw-inline-btn"
@@ -3309,7 +3392,7 @@ export default function App() {
 																				>
 																					{t("复制")}
 																				</button>
-																			</div>
+																			</>
 																		)}
 																	</div>
 																)}

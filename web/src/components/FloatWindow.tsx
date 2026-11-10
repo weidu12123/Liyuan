@@ -173,6 +173,7 @@ export function FloatWindow({
 		baseH: number;
 		dismiss: boolean;
 	} | null>(null);
+	const [dragging, setDragging] = useState(false);
 
 	// 换面板 = 换记忆键，读它自己的位置
 	useEffect(() => {
@@ -237,6 +238,7 @@ export function FloatWindow({
 			baseH: sheetRef.current,
 			dismiss: false,
 		};
+		setDragging(true);
 		(e.currentTarget as Element).setPointerCapture(e.pointerId);
 	}, []);
 
@@ -266,6 +268,7 @@ export function FloatWindow({
 			const d = dragRef.current;
 			if (!d) return;
 			dragRef.current = null;
+			setDragging(false);
 			try {
 				(e.currentTarget as Element).releasePointerCapture(e.pointerId);
 			} catch {
@@ -290,7 +293,7 @@ export function FloatWindow({
 
 	return (
 		<div
-			className={`floatwin ${mobile ? "as-sheet" : ""}`}
+			className={`floatwin ${mobile ? "as-sheet" : ""} ${dragging ? "is-dragging" : ""}`}
 			role="dialog"
 			aria-label={title}
 			// rect 一直发，手机上由 CSS 的 !important 盖掉。

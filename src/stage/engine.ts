@@ -328,8 +328,18 @@ export interface StageEngineDeps {
 	 * 未注入 = 列举不带来源标记、无书一级工具。
 	 */
 	loreHost?: {
+		write?: (input: { title: string; keys: string[]; content: string; constant?: boolean; book?: string }) => LorebookEntry | null;
+		update?: (
+			fingerprint: string,
+			patch: { title?: string; keys?: string[]; content?: string; constant?: boolean },
+		) => { entry: LorebookEntry; newFingerprint: string; path: string } | null;
+		remove?: (fingerprint: string) => { entry: LorebookEntry; path: string } | null;
 		listMarked: () => Array<LorebookEntry & { agentWritten?: boolean }>;
 		listBooks: () => { books: Array<{ path: string; name: string; entryCount: number }>; mounted: string[] };
+		createBook?: (
+			name: string,
+			first: { title: string; keys: string[]; content: string; constant?: boolean },
+		) => { path: string; mounted: string[] } | null;
 		mountBook: (path: string, mounted: boolean) => string[];
 	};
 	/**
@@ -777,7 +787,7 @@ export class StageEngine {
 		const materials = loadStageMaterials(cwd);
 		const { config } = materials;
 		const skillList = materials.skillFiles.filter((f) => f.mode !== "authoring").map((f) => ({ name: f.name, description: f.description }));
-		const readDeps = this.#toolDeps();
+		const readDeps = this.#toolDeps("collaborator");
 		const mcpTools = mcpStageTools(this.#deps.mcp);
 		const mediaOpts = { tts: this.#deps.ttsAvailable?.() === true };
 		const mediaTools = this.#deps.media ? mediaStageTools(config.language, mediaOpts) : [];
@@ -969,7 +979,7 @@ export class StageEngine {
 		// skill 全部走标准按需档：名字+描述上 skill_read 清单，读不读归模型（8/23 定案）。
 		// 写卡手册（frontmatter mode: authoring）不上 skill_read 清单：它是 card_project 的说明书，由该工具的 guide 操作按需读
 		const skillList = materials.skillFiles.filter((f) => f.mode !== "authoring").map((f) => ({ name: f.name, description: f.description }));
-		const readDeps = this.#toolDeps();
+		const readDeps = this.#toolDeps(agentTurn ? "collaborator" : "stage");
 		// MCP 外设（8/06 重接）：hub 里本会话已连接的工具并入清单。
 		// 空数组＝没启用/没连上，与「未注入 mcp 依赖」同效——都不上清单。
 		const mcpTools = mcpStageTools(this.#deps.mcp);
@@ -1179,19 +1189,54 @@ export class StageEngine {
 			const aborted = this.#abort?.signal.aborted === true || final?.stopReason === "aborted";
 			const liyuanMode = "agent" as const;
 			const timeline: TurnWorkspace["timeline"] = [];
+			let prevTimelinePartial = false;
 			for (const m of exchanges) {
-				if (m.role === "assistant" && Array.isArray(m.content)) for (const c of m.content) {
-					if (c.type === "text" && c.text) timeline.push({ kind: "text", text: c.text });
-					else if (c.type === "thinking" && c.thinking) timeline.push({ kind: "thinking", text: c.thinking });
-					else if (c.type === "toolCall") {
-						const change = fileChangeOf(c.name ?? "", c.arguments);
-						timeline.push({ kind: "tool", activities: [{ kind: "tool_start", name: c.name, detail: JSON.stringify(c.arguments).slice(0, 1200), ...(change ? { change } : {}) }] });
+				const isPartial = Boolean((m.details as { liyuanPartialContinuation?: boolean } | undefined)?.liyuanPartialContinuation);
+				if (m.role === "assistant" && Array.isArray(m.content)) {
+					for (const c of m.content) {
+						if (c.type === "text" && c.text) {
+							const prev = timeline[timeline.length - 1];
+							if (prevTimelinePartial && prev?.kind === "text") {
+								prev.text += c.text;
+							} else {
+								timeline.push({ kind: "text", text: c.text });
+							}
+						}
+						else if (c.type === "thinking" && c.thinking) timeline.push({ kind: "thinking", text: c.thinking });
+						else if (c.type === "toolCall") {
+							const change = fileChangeOf(c.name ?? "", c.arguments);
+							timeline.push({ kind: "tool", activities: [{ kind: "tool_start", name: c.name, detail: JSON.stringify(c.arguments).slice(0, 1200), ...(change ? { change } : {}) }] });
+						}
+					}
+					prevTimelinePartial = isPartial;
+				}
+				else if (m.role === "toolResult") {
+					prevTimelinePartial = false;
+					timeline.push({ kind: "tool", activities: [{ kind: "tool_end", name: String(m.toolName), detail: contextText(m.content).slice(0, 1200), isError: m.isError === true }] });
+				}
+			}
+			const bodyParts: string[] = [];
+			let prevBodyPartial = false;
+			for (const m of exchanges) {
+				if (m.role === "toolResult") {
+					prevBodyPartial = false;
+					continue;
+				}
+				if (m.role !== "assistant") continue;
+				const t = contextText(m.content);
+				const isPartial = Boolean((m.details as { liyuanPartialContinuation?: boolean } | undefined)?.liyuanPartialContinuation);
+				if (t) {
+					if (prevBodyPartial && bodyParts.length > 0) {
+						bodyParts[bodyParts.length - 1] += t;
+					} else {
+						bodyParts.push(t);
 					}
 				}
-				else if (m.role === "toolResult") timeline.push({ kind: "tool", activities: [{ kind: "tool_end", name: String(m.toolName), detail: contextText(m.content).slice(0, 1200), isError: m.isError === true }] });
+				prevBodyPartial = isPartial;
 			}
-			const body = exchanges.filter((m) => m.role === "assistant").map((m) => contextText(m.content)).filter(Boolean).join("\n\n");
+			const body = bodyParts.filter(Boolean).join("\n\n");
 			const entryId = final && (body || timeline.length) ? session.appendMessage({ ...final,
+				...(final.stopReason === "error" ? { stopReason: "stop", errorMessage: undefined } : {}),
 				content: [{ type: "text", text: body }],
 				details: { liyuanMode, liyuanAuthoringReply: true, rpTimeline: timeline },
 			}) : undefined;
@@ -1241,10 +1286,14 @@ export class StageEngine {
 				return { aborted, revisedEntryId: ws.revision.targetId };
 			}
 			if (!text) text = textOfAssistant(final);
-			if ((aborted || errored) && ws.mode === "write" && ws.preview?.content && ws.preview.version === ws.version) {
-				const preview = ws.preview;
-				const partial = preview.name === "draft_append" ? ws.draft + (ws.draft ? preview.separator ?? "\n\n" : "") + preview.content : preview.content;
-				runWriteTool(ws, wsDeps, "draft_write", { content: partial }, true);
+			if ((aborted || errored) && ws.mode === "write") {
+				if (ws.preview?.content && ws.preview.version === ws.version) {
+					const preview = ws.preview;
+					const partial = preview.name === "draft_append" ? ws.draft + (ws.draft ? preview.separator ?? "\n\n" : "") + preview.content : preview.content;
+					runWriteTool(ws, wsDeps, "draft_write", { content: partial }, true);
+				} else if (!ws.draft.trim() && text.trim()) {
+					runWriteTool(ws, wsDeps, "draft_write", { content: text }, true);
+				}
 			}
 
 			// 定稿 = 工作区稿（工件）；工作区空（中断半拍/循环认栽）退回直出正文
@@ -1288,7 +1337,7 @@ export class StageEngine {
 					...(noteLines.length ? { rpNotes: noteLines } : {}) };
 				entryId = session.appendMessage({
 					...final,
-					...(ws.sealed ? { stopReason: "stop" } : {}),
+					...(ws.sealed || final.stopReason === "error" ? { stopReason: "stop", errorMessage: undefined } : {}),
 					content: [...keep, { type: "text", text: finalText }],
 					...(details ? { details } : {}),
 				});
@@ -1398,6 +1447,10 @@ export class StageEngine {
 					// agent：讨论历史认讨论摘要（docs/PLAN-AGENT-CODING.md §六.3）；项目状态块压在本轮用户原话之前（同扮演「数据块之后才是提问」的装配锚点）
 					const history = agentTurn ? agentHistory(sm.getBranch() as BranchEntryLike[]) : authoringHistory(applyDraftRevisions(sm.getBranch() as BranchEntryLike[]));
 					if (agentTurn) prependToLastUser(history, agentStateBlock());
+					const tailMsg = piMessages[piMessages.length - 1] as ContextMessage | undefined;
+					if ((tailMsg?.details as { liyuanContinueRetry?: boolean } | undefined)?.liyuanContinueRetry) {
+						history.push(structuredClone(tailMsg));
+					}
 					return history;
 				}
 				const projected = projectToolContext([...messages, ...piMessages.slice(contextStart)]);
@@ -1440,12 +1493,54 @@ export class StageEngine {
 				}
 			},
 			messageEnd: (message) => {
+				if ((message.details as { liyuanContinueRetry?: boolean } | undefined)?.liyuanContinueRetry) {
+					return { persist: false };
+				}
 				if (message.role === "user" && agentTurn) message.details = { ...(message.details as object ?? {}), liyuanMode: "agent" };
 				if (message.role !== "assistant" && message.role !== "toolResult") return undefined;
 				if (message.role === "assistant" && (message as AssistantMsgLike).stopReason === "error") {
 					final = message as AssistantMsgLike;
 					errored = final.errorMessage || "provider error";
+					const partial = !agentTurn && roundText ? roundText : textOfAssistant(final);
+					if (!partial.trim()) {
+						return { persist: false };
+					}
+					if (!agentTurn && !roundText && partial) {
+						roundText = partial;
+						text += roundText;
+						if (round > 0) loopText += roundText;
+						if (ws.draft) recordSegment(ws, { kind: "text", text: roundText });
+					}
+					const raw = structuredClone(message) as ContextMessage;
+					const keepBlocks = Array.isArray(raw.content)
+						? (raw.content as Array<{ type?: string; text?: string; thinking?: string }>).filter(
+								(c) => c.type === "thinking" || c.type === "text",
+							)
+						: [{ type: "text", text: partial }];
+					const cleanPartial: ContextMessage = {
+						...raw,
+						stopReason: "length",
+						errorMessage: undefined,
+						content: keepBlocks.some((c) => c.type === "text")
+							? keepBlocks
+							: [...keepBlocks, { type: "text", text: partial }],
+						details: { ...(raw.details ?? {}), liyuanPartialContinuation: true },
+					};
+					exchanges.push(cleanPartial);
+					const userId = requestId();
+					if (userId) {
+						sm.appendCustomEntry(CONVERSATION_PROCESS_TYPE, { requestId: userId, mode, message: cleanPartial });
+						sm.flush();
+					}
+					if (!agentTurn) {
+						loopTail = tailStart >= 0 ? loopText.slice(tailStart) : loopText;
+						roundText = "";
+					}
+					attemptSnap = { text, loopText, timelineLen: ws.timeline.length, exchangesLen: exchanges.length, final };
 					return { persist: false };
+				}
+				if (message.role === "assistant") {
+					errored = undefined;
 				}
 				const raw = structuredClone(message) as ContextMessage;
 				exchanges.push(raw);
@@ -1542,6 +1637,7 @@ export class StageEngine {
 			},
 			end: async (willRetry) => {
 				if (willRetry) {
+					const hadUnarchivedRoundText = Boolean(roundText.trim());
 					text = attemptSnap.text;
 					loopText = attemptSnap.loopText;
 					ws.timeline.length = attemptSnap.timelineLen;
@@ -1549,8 +1645,10 @@ export class StageEngine {
 					final = attemptSnap.final;
 					roundText = "";
 					errored = undefined;
-					delete ws.preview;
-					ev.onStreamClear?.();
+					if (!text && !exchanges.length && !ws.preview?.content) {
+						delete ws.preview;
+						if (hadUnarchivedRoundText) ev.onStreamClear?.();
+					}
 					checkpoint(true);
 					return;
 				}
@@ -2010,7 +2108,7 @@ export class StageEngine {
 	 * 台上工具的执行依赖（每次取用现读素材/账本——工具看到的世界与装配同源）。
 	 * 写入许可统一由 RP 扩展的 tool_call 钩子判断。
 	 */
-	#toolDeps(): StageToolDeps {
+	#toolDeps(side: "stage" | "collaborator" = "stage"): StageToolDeps {
 		const cwd = this.#deps.cwd;
 		const sm = this.#deps.getSession().sessionManager;
 		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
@@ -2028,6 +2126,14 @@ export class StageEngine {
 			...(lh ? { listBooks: lh.listBooks, mountBook: lh.mountBook } : {}),
 			fingerprint: loreFingerprint,
 			...(this.#deps.setDisabledLore ? { toggleLore: this.#deps.setDisabledLore } : {}),
+			...(side === "collaborator" && lh
+				? {
+						...(lh.write ? { writeLore: lh.write } : {}),
+						...(lh.update ? { updateLore: lh.update } : {}),
+						...(lh.remove ? { deleteLore: lh.remove } : {}),
+						...(lh.createBook ? { createBook: lh.createBook } : {}),
+					}
+				: {}),
 			searchMemory: async (query) => {
 				const search = this.#deps.searchMemory;
 				let result: MemorySearchResult;
@@ -2278,8 +2384,13 @@ export class StageEngine {
 			this.#deps.events?.onActivity?.(line);
 			console.log(`[stage-side] ${line}`);
 		};
-		const maxRetries = 5;
-		const baseDelayMs = 2000;
+		const retryCfg = (
+			this.#deps.getSession?.() as
+				| { settingsManager?: { getRetrySettings?: () => { enabled: boolean; maxRetries: number; baseDelayMs: number } } }
+				| undefined
+		)?.settingsManager?.getRetrySettings?.();
+		const maxRetries = retryCfg ? (retryCfg.enabled ? retryCfg.maxRetries : 0) : 5;
+		const baseDelayMs = retryCfg?.baseDelayMs ?? 2000;
 		for (let attempt = 0; ; attempt++) {
 			thinkChars = 0;
 			try {

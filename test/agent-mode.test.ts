@@ -8,7 +8,7 @@ import { chatModeOfSessionDir, createChat } from "../src/cardspace.ts";
 import { CONVERSATION_PROCESS_TYPE } from "../src/conversation-mode.ts";
 import { collectChatEvidence, loadManifest, memoryPaths, saveManifest } from "../src/card-memory.ts";
 import { listCardMemory } from "../src/card-memory-tools.ts";
-import { filterSandboxResultText, harnessManagedPath, sandboxScope, sandboxVerdict } from "../src/sandbox.ts";
+import { createSandboxGate, filterSandboxResultText, harnessManagedPath, sandboxScope, sandboxVerdict } from "../src/sandbox.ts";
 import { buildAgentStateBlock } from "../src/stage/agent.ts";
 import { SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
 import { historyTokens, planCompaction } from "../src/stage/compact.ts";
@@ -233,10 +233,35 @@ test("多项目物理隔离：第二个项目绝对禁止读取或修改第一�
 		// 列出对话总根（探测其他项目）：拒绝
 		assert.equal(sandboxVerdict("ls", { path: join(cardDir, "对话") }, scope2, grants).kind, "deny");
 
-		// 读写 chat2 自己的正文与项目记忆资产：放行
+		// 读写 chat2 自己的正文与项目记忆资产（含相对路径）：放行
 		assert.equal(sandboxVerdict("read", { path: join(chat2.dir, "正文", "001-长街.md") }, scope2, grants).kind, "allow");
 		assert.equal(sandboxVerdict("write", { path: join(chat2.dir, "正文", "002-夜雨.md") }, scope2, grants).kind, "allow");
 		assert.equal(sandboxVerdict("write", { path: join(chat2.dir, "记忆", "大纲.md") }, scope2, grants).kind, "allow");
+		assert.equal(sandboxVerdict("write", { path: "正文/003-相对路径.md" }, scope2, grants).kind, "allow");
+		assert.equal(sandboxVerdict("write", { path: "APPEND_SYSTEM.md" }, scope2, grants).kind, "allow");
+
+		// 项目内由专用工具托管的内部文件（面板.json / 世界状态.json / 对话.json）禁止原生写工具直接改
+		const panelDeny = sandboxVerdict("write", { path: "面板.json" }, scope2, grants);
+		assert.equal(panelDeny.kind, "deny");
+		assert.match(panelDeny.kind === "deny" ? panelDeny.reason : "", /panel_write/);
+		const stateDeny = sandboxVerdict("edit", { path: "世界状态.json" }, scope2, grants);
+		assert.equal(stateDeny.kind, "deny");
+		assert.match(stateDeny.kind === "deny" ? stateDeny.reason : "", /world_state_update/);
+
+		// 项目外部文件（AGENTS.md / 卡本体 / 创作目录 / 外部目录）禁止原生写工具直接改，引导用 card_project
+		const agentsDeny = sandboxVerdict("edit", { path: join(cardDir, "AGENTS.md") }, scope2, grants);
+		assert.equal(agentsDeny.kind, "deny");
+		assert.match(agentsDeny.kind === "deny" ? agentsDeny.reason : "", /card_project/);
+		const cardJsonWriteDeny = sandboxVerdict("write", { path: join(cardDir, "某卡.json") }, scope2, grants);
+		assert.equal(cardJsonWriteDeny.kind, "deny");
+		assert.match(cardJsonWriteDeny.kind === "deny" ? cardJsonWriteDeny.reason : "", /card_project/);
+		const novelRawDeny = sandboxVerdict("write", { path: join(cardDir, "novel_raw", "001.txt") }, scope2, grants);
+		assert.equal(novelRawDeny.kind, "deny");
+
+		// 项目资产目录内调用 bash 免弹窗放行；越界 .. 或操作 AGENTS.md / 外部卡目录直接拦截
+		assert.equal(sandboxVerdict("bash", { command: "ls -la" }, scope2, grants).kind, "allow");
+		assert.equal(sandboxVerdict("bash", { command: "cat ../AGENTS.md" }, scope2, grants).kind, "deny");
+		assert.equal(sandboxVerdict("bash", { command: "echo x > cards/某卡/某卡.json" }, scope2, grants).kind, "deny");
 
 		// 读写已废除的卡根目录 记忆/：一律拒绝并引导至当前项目的 记忆/
 		assert.equal(sandboxVerdict("read", { path: join(cardDir, "记忆", "记忆.md") }, scope2, grants).kind, "deny");
@@ -269,6 +294,15 @@ test("多项目物理隔离：第二个项目绝对禁止读取或修改第一�
 			scope2,
 		);
 		assert.equal(grepFiltered, `对话/${chat2.id}/正文/001-长街.md:1: 项目2公开`);
+
+		// 项目目录内调用 ls 时，自动隐藏内部托管文件与目录（面板.json/世界状态.json/会话/历史/助手/向量记忆），只展示干净的项目资产
+		const chatLsFiltered = filterSandboxResultText(
+			"ls",
+			{ path: "." },
+			"正文/\n记忆/\nAPPEND_SYSTEM.md\n前情提要.md\n面板.json\n世界状态.json\n世界线.json\n对话.json\n会话/\n助手/\n历史/\n向量记忆/",
+			scope2,
+		);
+		assert.equal(chatLsFiltered, "正文/\n记忆/\nAPPEND_SYSTEM.md\n前情提要.md");
 
 		// 状态块装配：chat2 的状态块只带 chat2 的正文，无 residentSummary 时绝不出跨项目前情
 		const block2 = buildAgentStateBlock({ state: defaultState(), files: listStoryFiles(join(chat2.dir, "正文")) });

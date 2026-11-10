@@ -24,9 +24,9 @@ export function agentSystemPrompt(o: { cwd: string; cardPath: string; chatDir?: 
 	if (o.userRules?.chat?.trim()) sections.push(o.userRules.chat.trim());
 	if (o.chatMemoryIndex?.trim()) sections.push(applyMacros(o.chatMemoryIndex.trim(), o.macro));
 	if (o.cardAgents?.trim()) sections.push(applyMacros(o.cardAgents.trim(), o.macro));
-	const envLines = [`工作目录：${o.cwd}`, `当前角色卡：${o.cardPath}`];
-	if (o.chatDir) envLines.push(`当前项目目录：${o.chatDir}`);
-	envLines.push(`稿子目录：${o.storyDir}`);
+	const envLines = o.chatDir
+		? [`当前项目资产目录（工作目录）：${o.chatDir}`, `稿子目录：${o.storyDir}`]
+		: [`工作目录：${o.cwd}`, `稿子目录：${o.storyDir}`];
 	sections.push(envLines.join("\n"));
 	return sections.join("\n\n");
 }

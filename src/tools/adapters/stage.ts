@@ -35,9 +35,13 @@ const ctxFor = (language: string): ToolContext => ({ surface: "stage", language 
  */
 function availableSpecs(deps: UnifiedStageDeps): ToolSpec<UnifiedStageDeps>[] {
 	return STAGE_SPECS.filter((s) => {
+		if (s.name === "lorebook_write") return typeof deps.writeLore === "function";
+		if (s.name === "lorebook_update") return typeof deps.updateLore === "function";
+		if (s.name === "lorebook_delete") return typeof deps.deleteLore === "function";
 		if (s.name === "lorebook_list" || s.name === "lorebook_read") return typeof deps.listLore === "function" && typeof deps.fingerprint === "function";
 		if (s.name === "lorebook_toggle") return typeof deps.toggleLore === "function";
 		if (s.name === "lorebook_files") return typeof deps.listBooks === "function";
+		if (s.name === "lorebook_create") return typeof deps.createBook === "function";
 		if (s.name === "lorebook_mount") return typeof deps.mountBook === "function";
 		if (s.name === "memory_add") return typeof deps.addMemory === "function";
 		if (s.name === "memory_list") return typeof deps.listMemory === "function";

@@ -44,6 +44,7 @@ import {
 	applyEntryThinkingMap,
 	findModelEntry,
 	loadAgentConfig,
+	modelEntryKey,
 	normalizeAgentConfig,
 	syncAgentConfigToRuntime,
 } from "../src/agent-config.ts";
@@ -58,6 +59,7 @@ import { displayConversationBranch, storyBranch, messageMode } from "../src/conv
 import { cardProjectOperation, previewCardProject } from "../src/card-authoring.ts";
 import { buildCardPreviewRequest, CardPreviewHub } from "./card-preview.ts";
 import { createBtwRunner, type BtwRunner } from "./btw.ts";
+import { DEFAULT_BTW_PERSONA, resolveBtwPersonaTemplates } from "../src/stage/btw.ts";
 import { ScreenshotHub } from "./screenshot.ts";
 import { stateFromBranch, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
 import {
@@ -117,13 +119,19 @@ import {
 } from "../src/memory/index.ts";
 import {
 	createCardFile,
+	createLorebookWithEntry,
 	currentCardPath,
+	deleteLoreEntryAnywhere,
 	handleApiRequest,
 	loadCardFrontSnapshot,
 	loadConfig,
 	loadMergedLoreMarked,
 	lorebookShelf,
+	loreWriteTargets,
+	patchLoreEntryAnywhere,
+	saveConfig,
 	setLorebookMounted,
+	syncCardAuthoringLore,
 	syncCardFiles,
 	thinkingLevelOfEntry,
 	writeMaybeGzip,
@@ -153,10 +161,12 @@ import { DISCUSSION_SUMMARY_TYPE } from "../src/stage/discussion.ts";
 import { chatDirOf, chatSessionsDirOf, insidePath, sameCardPath } from "../src/paths.ts";
 import { readSessionCardInfo } from "../src/session-scan.ts";
 import { t } from "../src/i18n/index.ts";
-import { cardFileIn, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, listChatMarkdownAssets, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
+import { cardFileIn, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, isInternalChatWorkspacePath, listChatMarkdownAssets, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
 import { chatSessionsOf, chatsOfCard, ensureStorySessionDir, newChatSessionDir, storySessionTarget } from "../src/story-guide.ts";
 import { alreadyMigrated, applyCardMigration, migrateLegacyCardMemoryToChatAssets, planCardMigration, planOrphanSessions, promoteStagedCard } from "../src/migrate-cards.ts";
 import {
+	appendLorebookFileEntry,
+	mountedLorebookPaths,
 	toggleDisabledLore,
 } from "../src/lorebook.ts";
 import { syncStoryPanelsFromDisk, syncStoryStateFromDisk } from "../src/story-sync.ts";
@@ -1490,6 +1500,38 @@ const sideEntryOf = (): { model: StageModelLike; thinking?: string; label?: stri
 	}
 };
 
+let warnedBtwEntry = "";
+/**
+ * 旁路助手模型条目：`config.btwModel` 指向连接配置里的一条模型条目（provider + 条目名）。
+ * 没配或条目不可用 = 返回 undefined = 调用方跟随剧情主模型。
+ */
+const btwEntryOf = (): { model: StageModelLike; thinking?: string; label?: string; provider: string } | undefined => {
+	const sel = loadConfig(cwd).btwModel;
+	if (!sel) return undefined;
+	const tag = `${sel.provider}/${sel.entry}`;
+	const warn = (why: string): undefined => {
+		if (warnedBtwEntry !== tag + why) {
+			warnedBtwEntry = tag + why;
+			console.error(`[btw-model] 助手模型条目 ${tag} ${why}，本次回落跟随剧情模型`); // i18n-ignore：终端日志
+		}
+		return undefined;
+	};
+	try {
+		const agent = loadAgentConfig(cwd).config;
+		const entry = findModelEntry(agent.providers?.[sel.provider]?.models, sel.entry);
+		if (!entry) return warn("不在连接配置里"); // i18n-ignore：终端日志
+		const base = session.modelRuntime.getModel(sel.provider, entry.id);
+		if (!base) return warn(`模型 ${entry.id} 不在可用清单`); // i18n-ignore：终端日志
+		if (!session.modelRuntime.hasConfiguredAuth(base.provider)) return warn("缺少 API key"); // i18n-ignore：终端日志
+		const m = applyEntryThinkingMap(base, entry);
+		if (warnedBtwEntry) warnedBtwEntry = "";
+		const thinking = thinkingLevelOfEntry(agent, sel.provider, sel.entry);
+		return { model: m as never, ...(thinking ? { thinking } : {}), label: sel.entry, provider: sel.provider };
+	} catch (err) {
+		return warn(`解析失败（${err instanceof Error ? err.message : String(err)}）`); // i18n-ignore：终端日志
+	}
+};
+
 /**
  * 一次性旁路文本调用（单发）。restHost.runSideText（预设分拣等旁路声明）与
  * 跨会话记忆同步共用这一条——同 StageEngine.#sideText 的调用形状。
@@ -2810,10 +2852,51 @@ stage = new StageEngine({
 		void restHost.softRefreshConfig();
 		return fingerprints.length;
 	},
-	// 世界书宿主件：带来源标记的列举 + 书一级列/挂载（经 rest.ts 的共用寻址）。
+	// 世界书宿主件：条目增/改/删 + 带来源标记的列举 + 书一级列/建/挂载（经 rest.ts 的共用寻址）。
 	loreHost: {
+		write: (input) => {
+			const config = loadConfig(cwd);
+			const targetBook = input.book?.trim() || mountedLorebookPaths(config)[0];
+			if (!targetBook) {
+				throw new Error("当前尚未挂载任何独立世界书，请先调用 lorebook_create 新建世界书，或传入 book 指定目标世界书。"); // i18n-ignore：模型回执
+			}
+			const [abs] = loreWriteTargets(cwd, config, targetBook);
+			const entry = appendLorebookFileEntry(abs, {
+				comment: input.title,
+				keys: input.keys,
+				content: input.content,
+				...(input.constant !== undefined ? { constant: input.constant } : {}),
+			});
+			if (entry) void restHost.softRefreshConfig();
+			return entry;
+		},
+		update: (fingerprint, patch) => {
+			const r = patchLoreEntryAnywhere(cwd, loadConfig(cwd), fingerprint, {
+				...(patch.title !== undefined ? { comment: patch.title } : {}),
+				...(patch.keys !== undefined ? { keys: patch.keys } : {}),
+				...(patch.content !== undefined ? { content: patch.content } : {}),
+				...(patch.constant !== undefined ? { constant: patch.constant } : {}),
+			});
+			if (r) void restHost.softRefreshConfig();
+			return r;
+		},
+		remove: (fingerprint) => {
+			const r = deleteLoreEntryAnywhere(cwd, loadConfig(cwd), fingerprint);
+			if (r) void restHost.softRefreshConfig();
+			return r;
+		},
 		listMarked: () => loadMergedLoreMarked(cwd, loadConfig(cwd)),
 		listBooks: () => lorebookShelf(cwd, loadConfig(cwd)),
+		createBook: (name, first) => {
+			const r = createLorebookWithEntry(cwd, loadConfig(cwd), name, {
+				comment: first.title,
+				keys: first.keys,
+				content: first.content,
+				...(first.constant !== undefined ? { constant: first.constant } : {}),
+			});
+			if (r) void restHost.softRefreshConfig();
+			return r;
+		},
 		mountBook: (path, mounted) => {
 			const next = setLorebookMounted(cwd, loadConfig(cwd), path, mounted);
 			void restHost.softRefreshConfig();
@@ -2826,7 +2909,12 @@ stage = new StageEngine({
 			const config = loadConfig(cwd);
 			const path = currentCardPath(cwd, config);
 			if (args.action === "preview") return restHost.runCardPreview(args);
-			return cardProjectOperation(cwd, path, args);
+			const res = cardProjectOperation(cwd, path, args);
+			if (args.action === "apply" || args.action === "undo") {
+				syncCardAuthoringLore(cwd, path);
+				void restHost.softRefreshConfig();
+			}
+			return res;
 		},
 		createCard: (input) => {
 			const created = createCardFile(cwd, input);
@@ -2858,9 +2946,10 @@ stage = new StageEngine({
 		onTurnEnd: (info) => {
 			cli?.out(`[end] mode=${info.mode ?? "?"}${info.aborted ? " aborted" : ""}${info.error ? ` error=${info.error}` : ""}`);
 			broadcast({ type: "agent", state: "end" });
-			// reroll/编辑输入后无产出（aborted 无落树 / error）：回退到 reroll 前的旧叶——
+			// reroll/编辑输入后无产出（aborted 无落树 / error 无落树）：回退到 reroll 前的旧叶——
 			// 不许留下「只有 user 没有回复」的空拍（8/05：reroll 链上停止，前版本全消失）。
-			if (rerollFallbackLeaf && !info.revisedEntryId && (!info.entryId || info.error)) {
+			// 若已有截断处正文落树（info.entryId 存在），则保留新回复，不得回退抹除。
+			if (rerollFallbackLeaf && !info.revisedEntryId && !info.entryId) {
 				const sm = session.sessionManager;
 				if (sm.getLeafId() !== rerollFallbackLeaf) {
 					try {
@@ -2946,7 +3035,16 @@ btw = createBtwRunner({
 	agentDir: agentHome,
 	stage,
 	getServices: () => ({ modelRuntime: session.modelRuntime, settingsManager: session.settingsManager }),
-	getModelState: () => ({ model: session.model, thinkingLevel: session.thinkingLevel }),
+	getModelState: () => {
+		const custom = btwEntryOf();
+		if (custom) {
+			return {
+				model: custom.model as typeof session.model,
+				thinkingLevel: (custom.thinking || "off") as typeof session.thinkingLevel,
+			};
+		}
+		return { model: session.model, thinkingLevel: session.thinkingLevel };
+	},
 	events: {
 		onUser: (text) => broadcast({ type: "btw_user", text }),
 		onStart: () => {
@@ -2971,6 +3069,9 @@ btw = createBtwRunner({
 		},
 		onClear: () => {
 			broadcast({ type: "btw_state", state: "clear" });
+		},
+		onSync: (messages) => {
+			broadcast({ type: "btw_sync", messages, streaming: false });
 		},
 	},
 });
@@ -3033,10 +3134,14 @@ const handlePrompt = async (text: string) => {
 		}
 		const sub = (btwMatch[1] ?? "").trim();
 		if (!sub) {
+			const customModel = btwEntryOf();
+			const modelDesc = customModel
+				? `${customModel.provider}/${customModel.label}${customModel.thinking ? ` (${customModel.thinking})` : ""}`
+				: `跟随主模型 (${session.model ? `${session.model.provider}/${session.model.id}` : "未配置"})`; // i18n-ignore：CLI 终端输出
 			if (btw?.hasSession) {
-				cli?.out(`[btw] 当前草稿会话进行中（已对话 ${btw.userTurnCount} 轮；/btw <内容> 继续，/btw clear 关闭清空）`); // i18n-ignore：CLI 终端输出
+				cli?.out(`[btw] 当前助手会话进行中（已对话 ${btw.userTurnCount} 轮｜模型：${modelDesc}；/btw <内容> 继续｜/btw retry 重试｜/btw rewind [N] 回退｜/btw delete [序号] 删除｜/btw clear 清空｜/btw model 切模型｜/btw template 性格模板）`); // i18n-ignore：CLI 终端输出
 			} else {
-				cli?.out("[btw] 当前无活跃草稿（用法：/btw <问题或指令>｜/btw clear 关闭清空｜/btw stop 停止当前回复）"); // i18n-ignore：CLI 终端输出
+				cli?.out(`[btw] 当前无活跃对话（模型：${modelDesc}；用法：/btw <问题或指令>｜/btw retry 重试｜/btw rewind [N] 回退｜/btw delete [序号] 删除｜/btw clear 清空｜/btw model 切模型｜/btw template 性格模板）`); // i18n-ignore：CLI 终端输出
 			}
 			return;
 		}
@@ -3054,6 +3159,202 @@ const handlePrompt = async (text: string) => {
 			} else {
 				cli?.out("[btw] 当前没有正在生成的旁路回复"); // i18n-ignore：CLI 终端输出
 			}
+			return;
+		}
+		// /btw retry [#序号] [修改后的问题] 或 /btw reroll [#序号] [修改后的问题]
+		const retryM = /^(?:retry|reroll)(?:[ \t]+(?:#(\d+))?(?:[ \t]*([\s\S]*))?)?$/i.exec(sub);
+		if (retryM) {
+			const rawNum = retryM[1] ? Number.parseInt(retryM[1], 10) : undefined;
+			const extraText = (retryM[2] ?? "").trim();
+			// 若是 /btw retry 后面直接跟了非 #序号 的普通句子，为避免误伤，/btw reroll 支持直接带新问题，/btw retry 也支持带新问题
+			const turnIndex = rawNum !== undefined && rawNum >= 1 ? rawNum - 1 : undefined;
+			await btw?.retry({
+				...(turnIndex !== undefined ? { turnIndex } : {}),
+				...(extraText ? { text: extraText } : {}),
+			});
+			return;
+		}
+		// /btw rewind [N]：回退最后 N 轮（默认 1）
+		const rewindM = /^rewind(?:[ \t]+(\d+))?$/i.exec(sub);
+		if (rewindM) {
+			const n = rewindM[1] ? Math.max(1, Number.parseInt(rewindM[1], 10)) : 1;
+			const r = await btw?.rewind(n);
+			if (r?.ok) {
+				const msg =
+					r.remainingTurns > 0
+						? t("已回退 {n} 轮旁路对话（剩余 {rem} 轮）", { n: r.turnsRewound, rem: r.remainingTurns })
+						: t("已回退全部旁路对话");
+				cli?.out(`[btw] ${msg}`); // i18n-ignore：CLI 终端输出
+				broadcast({ type: "notify", level: "info", text: msg });
+			}
+			return;
+		}
+		// /btw delete [#序号] 或 /btw drop [#序号]：删除指定轮次（1-based，默认最后一轮）
+		const delM = /^(?:delete|drop)(?:[ \t]+#?(\d+))?$/i.exec(sub);
+		if (delM) {
+			const rawNum = delM[1] ? Number.parseInt(delM[1], 10) : undefined;
+			const turnIndex = rawNum !== undefined ? rawNum - 1 : undefined;
+			const r = await btw?.deleteTurn(turnIndex);
+			if (r?.ok) {
+				const msg =
+					r.remainingTurns > 0
+						? t("已删除第 {idx} 轮旁路对话（剩余 {rem} 轮）", { idx: r.deletedIndex + 1, rem: r.remainingTurns })
+						: t("已删除最后一轮旁路对话");
+				cli?.out(`[btw] ${msg}`); // i18n-ignore：CLI 终端输出
+				broadcast({ type: "notify", level: "info", text: msg });
+			}
+			return;
+		}
+		// /btw model [follow | <provider>/<entry> | <entry>]
+		const modelM = /^model(?:[ \t]+([\s\S]*))?$/i.exec(sub);
+		if (modelM) {
+			const arg = (modelM[1] ?? "").trim();
+			const cfg = loadConfig(cwd);
+			const agent = loadAgentConfig(cwd).config;
+			const allEntries: Array<{ provider: string; entry: string; id: string; thinking?: string }> = [];
+			for (const [provName, prov] of Object.entries(agent.providers ?? {})) {
+				for (const m of prov?.models ?? []) {
+					const key = modelEntryKey(m);
+					allEntries.push({
+						provider: provName,
+						entry: key,
+						id: String(m.id),
+						...(typeof m.thinkingLevel === "string" && m.thinkingLevel.trim() ? { thinking: m.thinkingLevel.trim() } : {}),
+					});
+				}
+			}
+			if (!arg || arg === "list") {
+				const cur = cfg.btwModel ? `${cfg.btwModel.provider}/${cfg.btwModel.entry}` : "跟随主模型"; // i18n-ignore：CLI 终端输出
+				const lines = [
+					`[btw:model] 当前助手模型：${cur}`, // i18n-ignore：CLI 终端输出
+					`  * follow — 跟随剧情主模型（${session.model ? `${session.model.provider}/${session.model.id}` : "未配置"}）`, // i18n-ignore：CLI 终端输出
+					...allEntries.map((e) => {
+						const active = cfg.btwModel?.provider === e.provider && cfg.btwModel?.entry === e.entry;
+						return `  ${active ? "*" : " "} ${e.provider}/${e.entry} (id=${e.id}${e.thinking ? `, thinking=${e.thinking}` : ""})`;
+					}),
+				];
+				cli?.out(lines.join("\n"));
+				return;
+			}
+			if (/^(follow|default|reset|clear|none|off)$/i.test(arg)) {
+				saveConfig(cwd, { btwModel: null });
+				await restHost.softRefreshConfig();
+				const msg = t("助手模型已设为：跟随主模型");
+				cli?.out(`[btw:model] ${msg}`); // i18n-ignore：CLI 终端输出
+				broadcast({ type: "notify", level: "info", text: msg });
+				return;
+			}
+			const slashIdx = arg.indexOf("/");
+			let matched =
+				slashIdx > 0
+					? allEntries.find(
+							(e) =>
+								e.provider.toLowerCase() === arg.slice(0, slashIdx).trim().toLowerCase() &&
+								e.entry.toLowerCase() === arg.slice(slashIdx + 1).trim().toLowerCase(),
+						)
+					: undefined;
+			if (!matched) {
+				matched = allEntries.find((e) => e.entry.toLowerCase() === arg.toLowerCase() || e.id.toLowerCase() === arg.toLowerCase());
+			}
+			if (!matched) {
+				const msg = t("未找到模型条目「{arg}」（可用 /btw model 查看可选条目）", { arg });
+				cli?.out(`[btw:model] ${msg}`); // i18n-ignore：CLI 终端输出
+				broadcast({ type: "notify", level: "warning", text: msg });
+				return;
+			}
+			saveConfig(cwd, { btwModel: { provider: matched.provider, entry: matched.entry } });
+			await restHost.softRefreshConfig();
+			const msg = t("助手模型已切换为：{entry}", { entry: `${matched.provider}/${matched.entry}` });
+			cli?.out(`[btw:model] ${msg}`); // i18n-ignore：CLI 终端输出
+			broadcast({ type: "notify", level: "info", text: msg });
+			return;
+		}
+		// /btw template [list | use <id或名> | add <名> :: <内容> | del <id或名> | reset]
+		const tplM = /^template(?:[ \t]+([\s\S]*))?$/i.exec(sub);
+		if (tplM) {
+			const arg = (tplM[1] ?? "").trim();
+			const cfg = loadConfig(cwd);
+			const templates = resolveBtwPersonaTemplates(cfg);
+			const curPersona = (cfg.btwPersona?.trim() || DEFAULT_BTW_PERSONA).trim();
+			if (!arg || /^list$/i.test(arg)) {
+				if (templates.length === 0) {
+					cli?.out("[btw:template] 当前无性格模板（用法：/btw template add <名称> :: <内容>｜/btw template reset 恢复默认）"); // i18n-ignore：CLI 终端输出
+					return;
+				}
+				const lines = templates.map((tp, idx) => {
+					const active = tp.content.trim() === curPersona;
+					const preview = tp.content.replace(/\s+/g, " ").slice(0, 40);
+					return `  ${active ? "*" : " "} [${idx + 1}] ${tp.name} (${tp.id}) — ${preview}…`;
+				}); // i18n-ignore：CLI 终端输出
+				cli?.out(`[btw:template] 助手性格模板（共 ${templates.length} 个）：\n${lines.join("\n")}`); // i18n-ignore：CLI 终端输出
+				return;
+			}
+			if (/^reset$/i.test(arg)) {
+				saveConfig(cwd, { btwPersonaTemplates: null });
+				await restHost.softRefreshConfig();
+				const msg = t("已恢复默认助手性格模板");
+				cli?.out(`[btw:template] ${msg}`); // i18n-ignore：CLI 终端输出
+				broadcast({ type: "notify", level: "info", text: msg });
+				return;
+			}
+			const addM = /^add[ \t]+([^:：]+?)[ \t]*(?:::|：：)[ \t]*([\s\S]+)$/i.exec(arg);
+			if (addM) {
+				const name = addM[1].trim();
+				const content = addM[2].trim();
+				const id = `tpl-${Date.now()}`;
+				const nextList = [...templates, { id, name, content }];
+				saveConfig(cwd, { btwPersonaTemplates: nextList, btwPersona: content });
+				await restHost.softRefreshConfig();
+				const msg = t("已新增并应用性格模板「{name}」", { name });
+				cli?.out(`[btw:template] ${msg}`); // i18n-ignore：CLI 终端输出
+				broadcast({ type: "notify", level: "info", text: msg });
+				return;
+			}
+			const delM2 = /^(?:del|delete|rm)[ \t]+([\s\S]+)$/i.exec(arg);
+			if (delM2) {
+				const key = delM2[1].trim();
+				const num = /^\d+$/.test(key) ? Number.parseInt(key, 10) - 1 : -1;
+				const idx =
+					num >= 0 && num < templates.length
+						? num
+						: templates.findIndex((tp) => tp.id === key || tp.name === key);
+				if (idx < 0) {
+					const msg = t("未找到性格模板「{key}」", { key });
+					cli?.out(`[btw:template] ${msg}`); // i18n-ignore：CLI 终端输出
+					broadcast({ type: "notify", level: "warning", text: msg });
+					return;
+				}
+				const removed = templates[idx];
+				const nextList = templates.filter((_, i) => i !== idx);
+				saveConfig(cwd, { btwPersonaTemplates: nextList });
+				await restHost.softRefreshConfig();
+				const msg = t("已删除性格模板「{name}」", { name: removed.name });
+				cli?.out(`[btw:template] ${msg}`); // i18n-ignore：CLI 终端输出
+				broadcast({ type: "notify", level: "info", text: msg });
+				return;
+			}
+			const useM = /^use[ \t]+([\s\S]+)$/i.exec(arg);
+			if (useM) {
+				const key = useM[1].trim();
+				const num = /^\d+$/.test(key) ? Number.parseInt(key, 10) - 1 : -1;
+				const hit =
+					num >= 0 && num < templates.length
+						? templates[num]
+						: templates.find((tp) => tp.id === key || tp.name === key);
+				if (!hit) {
+					const msg = t("未找到性格模板「{key}」", { key });
+					cli?.out(`[btw:template] ${msg}`); // i18n-ignore：CLI 终端输出
+					broadcast({ type: "notify", level: "warning", text: msg });
+					return;
+				}
+				saveConfig(cwd, { btwPersona: hit.content });
+				await restHost.softRefreshConfig();
+				const msg = t("已切换助手性格为「{name}」", { name: hit.name });
+				cli?.out(`[btw:template] ${msg}`); // i18n-ignore：CLI 终端输出
+				broadcast({ type: "notify", level: "info", text: msg });
+				return;
+			}
+			cli?.out("[btw:template] 用法：/btw template list｜/btw template use <名称或序号>｜/btw template add <名称> :: <内容>｜/btw template del <名称或序号>｜/btw template reset"); // i18n-ignore：CLI 终端输出
 			return;
 		}
 		await btw?.prompt(sub);
@@ -3161,7 +3462,7 @@ const handlePrompt = async (text: string) => {
 		if (readM) {
 			const rel = readM[1]!.replace(/\\/g, "/");
 			const target = resolve(curChatDir, rel);
-			if (!insidePath(curChatDir, target) || !target.toLowerCase().endsWith(".md") || !existsSync(target)) {
+			if (!insidePath(curChatDir, target) || isInternalChatWorkspacePath(rel) || !existsSync(target)) {
 				cli?.out(`[assets] 文件不存在或路径无效：${rel}`); // i18n-ignore：CLI 终端输出
 				return;
 			}
@@ -3173,7 +3474,7 @@ const handlePrompt = async (text: string) => {
 			const rel = writeM[1]!.replace(/\\/g, "/");
 			const content = writeM[2]!;
 			const target = resolve(curChatDir, rel);
-			if (!insidePath(curChatDir, target) || !target.toLowerCase().endsWith(".md")) {
+			if (!insidePath(curChatDir, target) || isInternalChatWorkspacePath(rel)) {
 				cli?.out(`[assets] 路径无效（仅限当前项目内 .md 文件）：${rel}`); // i18n-ignore：CLI 终端输出
 				return;
 			}

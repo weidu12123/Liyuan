@@ -182,6 +182,23 @@ export interface RpConfig {
 	btwAvatar?: string;
 	/** 旁路助手性格设定（在「角色 → 助手」中编辑；留空回退内置默认性格） */
 	btwPersona?: string;
+	/**
+	 * 旁路助手性格模板列表（用户可自由新增或删除，包括删除默认内置模板）。
+	 * undefined = 尚未自定义，使用内置默认三套模板；空数组 [] = 已全部删空。
+	 */
+	btwPersonaTemplates?: BtwPersonaTemplate[];
+	/**
+	 * 旁路助手专用模型：指向连接配置里的一条模型条目（provider + 条目名）。
+	 * 缺省 = 跟随剧情主模型。思考档跟着条目走。
+	 */
+	btwModel?: { provider: string; entry: string };
+}
+
+/** 旁路助手性格设定模板条目 */
+export interface BtwPersonaTemplate {
+	id: string;
+	name: string;
+	content: string;
 }
 
 export const DEFAULT_CONFIG: RpConfig = {

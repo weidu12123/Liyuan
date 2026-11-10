@@ -195,7 +195,7 @@ function Stage-Clean {
   )
   $xf = @(
     "*.log", "*.tsbuildinfo", ".DS_Store", "Thumbs.db",
-    "*.bak",
+    "*.bak", "*.zip",
     ".liyuan-personas.json",
     ".liyuan-mcp.json",
     ".mcp.json",
@@ -289,8 +289,9 @@ function Stage-Clean {
     "scripts\_*.py",
     "scripts\_*.ps1",
     "scripts\_*.sh",
-    # root-level dev scratch (underscore convention) + probe dumps
+    # root-level dev scratch (underscore convention) + probe dumps + local export bundles
     "_*",
+    "导出*",
     "TESTING.md",
     "CLAUDE.md",
     # 根 AGENTS.md 同为开发者指令（铁律/src 索引/测试命令）；扮演会话的

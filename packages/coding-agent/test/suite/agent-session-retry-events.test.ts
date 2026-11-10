@@ -324,7 +324,7 @@ describe("AgentSession retry and event characterization", () => {
 	});
 
 	it("emits agent_end for error responses", async () => {
-		const harness = await createHarness();
+		const harness = await createHarness({ settings: { retry: { enabled: false } } });
 		harnesses.push(harness);
 		harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "broken" })]);
 

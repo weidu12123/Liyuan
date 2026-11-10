@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 
 import { applyMacros } from "../card.ts";
 import { formatState } from "../state.ts";
-import type { MacroContext, WorldState } from "../types.ts";
+import type { BtwPersonaTemplate, MacroContext, RpConfig, WorldState } from "../types.ts";
 import type { UserRules } from "../user-rules.ts";
 
 const shippedBtwRules = (): string => readFileSync(new URL("../../assets/BTW_APPEND_SYSTEM.md", import.meta.url), "utf8");
@@ -20,6 +20,35 @@ const shippedBtwRules = (): string => readFileSync(new URL("../../assets/BTW_APP
 export const DEFAULT_BTW_PERSONA = `你是用户的看戏搭子与幕后共创朋友，和用户站在同一边聊戏。
 眼光敏锐、直率真诚，有一说一，不端着架子也不说客服套话。
 用自然直接的聊天口吻交流，不用括号或星号演动作旁白；闲聊吐槽时简短利落，拆解剧情或查改设定时条理清晰、直奔重点。`;
+
+/** 旁路助手初始内置性格模板（首次未自定义 config.btwPersonaTemplates 时的种子列表，用户可随时删改或新增） */
+export const DEFAULT_BTW_PERSONA_TEMPLATES: BtwPersonaTemplate[] = [
+	{
+		id: "sharp",
+		name: "犀利搭子",
+		content: DEFAULT_BTW_PERSONA,
+	},
+	{
+		id: "gentle",
+		name: "温柔共创",
+		content:
+			"你是陪伴用户沉浸看戏与共创故事的贴心搭子，温柔真诚、善解人意。\n无论用户想吐槽剧情、放飞脑洞还是微调设定，都会温和接住并捕捉其中的闪光点往下推演。\n用自然亲切的聊天口吻交流，不用括号或星号演动作旁白，聊起天来轻松温暖、细致周到。",
+	},
+	{
+		id: "scholar",
+		name: "严谨考据",
+		content:
+			"你是本局故事的幕后设定顾问与世界观考据搭档，逻辑严密、实事求是。\n对时间线冲突、人物弧光与设定前后一致性极其敏锐；说话干脆利落不讲废话，擅长把零散灵感整理成结构严密的设定与大纲。",
+	},
+];
+
+/** 解析当前生效的助手性格模板列表（undefined 回落初始内置列表，已自定义则按用户列表返回，允许删空） */
+export function resolveBtwPersonaTemplates(config?: Pick<RpConfig, "btwPersonaTemplates"> | null): BtwPersonaTemplate[] {
+	if (Array.isArray(config?.btwPersonaTemplates)) {
+		return config.btwPersonaTemplates.map((t) => ({ id: t.id, name: t.name, content: t.content }));
+	}
+	return DEFAULT_BTW_PERSONA_TEMPLATES.map((t) => ({ ...t }));
+}
 
 export function btwSystemPrompt(o: {
 	cwd: string;
@@ -37,9 +66,9 @@ export function btwSystemPrompt(o: {
 	if (o.userRules?.chat?.trim()) sections.push(applyMacros(o.userRules.chat.trim(), o.macro));
 	if (o.cardBrief?.trim()) sections.push(o.cardBrief.trim());
 	if (o.chatMemoryIndex?.trim()) sections.push(applyMacros(o.chatMemoryIndex.trim(), o.macro));
-	const envLines = [`工作目录：${o.cwd}`, `当前角色卡：${o.cardPath}`];
-	if (o.cardDir) envLines.push(`当前卡目录：${o.cardDir}`);
-	if (o.chatDir) envLines.push(`当前项目目录：${o.chatDir}`);
+	const envLines = o.chatDir
+		? [`当前项目资产目录（工作目录）：${o.chatDir}`]
+		: [`工作目录：${o.cwd}`];
 	sections.push(envLines.join("\n"));
 	sections.push(applyMacros((o.userRules?.btw?.trim() || shippedBtwRules()).trim(), o.macro));
 	const persona = (o.btwPersona?.trim() || DEFAULT_BTW_PERSONA).trim();

@@ -1078,5 +1078,50 @@ test("第3步·预设三通道 A/B/C、正则查询、global/preset 变量与 re
 	assert.equal((bCall!.params.patch as any).prompts?.[0]?.content, "现代白描");
 });
 
+test("第4步刀3：ToolManager.canPerformToolCalls 在 liyuan 模式下返回 false 防止假工具劫持，在 pure 模式下返回 true", () => {
+	const { win, parentWin } = createIframeSandbox({ iframeName: "TH-script--preset--jimi" });
+	const ctx = win.SillyTavern.getContext();
+	(parentWin as any).__liyuanRuntimeContext.presetMode = "liyuan";
+	assert.equal(ctx.ToolManager.canPerformToolCalls(), false);
+	assert.equal(ctx.ToolManager.isToolCallingSupported(), false);
+	ctx.registerFunctionTool({ name: "publish_story", description: "fake", parameters: { type: "object", properties: {} } });
+	assert.equal(ctx.ToolManager.tools.length, 1, "liyuan 模式下保留空壳不抛 TypeError");
+
+	(parentWin as any).__liyuanRuntimeContext.presetMode = "pure";
+	assert.equal(ctx.ToolManager.canPerformToolCalls(), true);
+	assert.equal(ctx.ToolManager.isToolCallingSupported(), true);
+});
+
+test("第4步刀5：SillyTavern.getContext() 补齐 POPUP_TYPE/POPUP_RESULT/callGenericPopup/generating/onlineStatus/messageFormatting/updateMessageBlock 等实扫缺失接口", async () => {
+	const { win, parentWin } = createIframeSandbox({ iframeName: "TH-script--preset--compat" });
+	(parentWin as any).__liyuanRuntimeContext.streaming = true;
+	(parentWin as any).__liyuanRuntimeContext.model = "claude-sonnet-4-6";
+	const ctx = win.SillyTavern.getContext();
+
+	assert.equal(ctx.generating, true);
+	assert.equal(ctx.onlineStatus, "online");
+	assert.equal(ctx.getChatCompletionModel(), "claude-sonnet-4-6");
+	assert.equal(ctx.POPUP_TYPE.CONFIRM, 2);
+	assert.equal(ctx.POPUP_RESULT.AFFIRMATIVE, 1);
+	assert.equal(typeof ctx.callGenericPopup, "function");
+	assert.equal(typeof ctx.saveChat, "function");
+	assert.equal(typeof ctx.generate, "function");
+	assert.equal(typeof ctx.updateReasoningUI, "function");
+	assert.equal(ctx.messageFormatting("你好"), "你好");
+
+	const popupConfirm = await ctx.callGenericPopup("确认清空？", ctx.POPUP_TYPE.CONFIRM);
+	assert.equal(popupConfirm, 1);
+	const popupInput = await ctx.callGenericPopup("输入名：", ctx.POPUP_TYPE.INPUT, "默认值");
+	assert.equal(popupInput, "默认值");
+
+	await ctx.updateMessageBlock(2, { message: "更新后楼层" });
+	assert.equal(win.getChatMessages(2)[0].message, "更新后楼层");
+
+	(parentWin as any).__liyuanRuntimeContext.streaming = false;
+	assert.equal(win.SillyTavern.getContext().generating, false);
+});
+
+
+
 
 

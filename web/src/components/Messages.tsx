@@ -239,10 +239,10 @@ export function Paragraphs({ text }: { text: string }) {
  * 作者正则皮肤 → HTML 块（seamless 帧）→ 其余 RP 排版。
  * 状态栏是作者正则产出的 HTML，走 html 分支；梨园不再按标签名抠「统一状态卡」。
  */
-export function RichContent({ text, skin, messageId }: { text: string; skin?: SkinProp | null; messageId?: number }) {
+export function RichContent({ text, skin, messageId, live }: { text: string; skin?: SkinProp | null; messageId?: number; live?: boolean }) {
 	// 缓存切分（8/19）：每次重渲染都重跑一遍作者正则＋HTML 切分是白花钱——
 	// 流式期间父组件每个增量都会重渲染整列消息，未缓存时全列消息逐条重跑
-	const parts = useMemo(() => splitRichContentParts(text, skin), [text, skin]);
+	const parts = useMemo(() => splitRichContentParts(text, skin, live ? { live: true } : undefined), [text, skin, live]);
 	const first = parts[0];
 	if (parts.length === 1 && first.kind === "text") {
 		return <Paragraphs text={first.text} />;
@@ -348,7 +348,7 @@ export function TurnTimeline({
 		return (
 			<>
 				{texts.map((seg, i) => (
-					plain ? <Paragraphs key={i} text={(seg as Extract<TurnSegment, { kind: "text" }>).text} /> : <RichContent key={i} text={(seg as Extract<TurnSegment, { kind: "text" }>).text} skin={skin} messageId={messageId} />
+					plain ? <Paragraphs key={i} text={(seg as Extract<TurnSegment, { kind: "text" }>).text} /> : <RichContent key={i} text={(seg as Extract<TurnSegment, { kind: "text" }>).text} skin={skin} messageId={messageId} live={live} />
 				))}
 				{process.length > 0 && (
 					<details className="turn-process">
@@ -384,7 +384,7 @@ export function TurnTimeline({
 	return (
 		<>
 			{groups.map((g, gi) => {
-				if (g.kind === "text") return plain ? <Paragraphs key={gi} text={g.seg.text} /> : <RichContent key={gi} text={g.seg.text} skin={skin} messageId={messageId} />;
+				if (g.kind === "text") return plain ? <Paragraphs key={gi} text={g.seg.text} /> : <RichContent key={gi} text={g.seg.text} skin={skin} messageId={messageId} live={live} />;
 				const active = gi === groups.length - 1; // 最新过程组=正在动的，展开跟读
 				const { thinks, calls } = countOf(g.segs);
 				return (

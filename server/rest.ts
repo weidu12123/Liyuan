@@ -3207,6 +3207,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				const config = loadConfig(host.cwd);
 				sendJson(res, 200, {
 					active: config.preset ?? null,
+					presetMode: config.presetMode ?? "liyuan",
 					presets: listPresetFiles(host.cwd),
 				});
 				return true;

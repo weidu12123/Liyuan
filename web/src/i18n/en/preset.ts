@@ -103,4 +103,11 @@ export const preset: Record<string, string> = {
 	"已重命名预设": "Preset renamed",
 	"输入新预设名…": "Enter a new preset name…",
 	"确定": "OK",
+	"预设运行模式": "Preset Engine Mode",
+	"梨园模式": "Liyuan Mode",
+	"纯酒馆模式": "Pure Tavern Mode",
+	"已切换为纯酒馆模式": "Switched to Pure Tavern mode",
+	"已切换为梨园模式": "Switched to Liyuan mode",
+	"纯酒馆模式：单发直出与请求级脚本透传，兼容极端破限与假工具预设。": "Pure Tavern mode: single-turn raw pass-through with request-level scripts for strict jailbreak or tool-spoofing presets.",
+	"梨园模式：多轮检索、稿纸工件、记忆档案与场记记账，预设动态投影生效。": "Liyuan mode: multi-turn retrieval, draft artifact workflow, memory archive, and scribe tracking with dynamic preset projection.",
 };

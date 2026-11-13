@@ -39,6 +39,8 @@ export interface LiyuanRuntimeContextSnapshot {
 	chatId: string | null;
 	sessionId: string;
 	mode: "roleplay" | "agent";
+	presetMode?: "liyuan" | "pure";
+	model?: string;
 	streaming: boolean;
 	messages: LiyuanRuntimeMessageLite[];
 	presetName?: string;

@@ -290,6 +290,17 @@ export function PresetPanel({
 			bumpWatchPanels();
 		});
 
+	/** 切换预设运行模式（梨园多轮工具模式 / 纯酒馆透传模式） */
+	const switchPresetMode = (nextMode: "liyuan" | "pure") =>
+		run(async () => {
+			if ((files.data?.presetMode ?? "liyuan") === nextMode) return;
+			await apiPut("/api/config", { presetMode: nextMode });
+			toast("info", nextMode === "pure" ? t("已切换为纯酒馆模式") : t("已切换为梨园模式"));
+			apiGetCacheClear("/api/presets");
+			files.reload();
+			bumpWatchPanels();
+		});
+
 	// ---------------- 库内任意预设：不装载也能展开拨开关（2026-09-14 用户点名） ----------------
 
 	type BlockRow = PresetBlockView & { content: string };
@@ -820,6 +831,34 @@ export function PresetPanel({
 
 			{tab === "library" && (
 				<>
+					<section className="sp-section">
+						<div className="preset-chan-head">
+							<h4>{t("预设运行模式")}</h4>
+							<div className="seg" role="group" aria-label={t("预设运行模式")}>
+								<button
+									type="button"
+									className={`seg-btn ${(files.data?.presetMode ?? "liyuan") === "liyuan" ? "active" : ""}`}
+									disabled={busy}
+									onClick={() => void switchPresetMode("liyuan")}
+								>
+									{t("梨园模式")}
+								</button>
+								<button
+									type="button"
+									className={`seg-btn ${files.data?.presetMode === "pure" ? "active" : ""}`}
+									disabled={busy}
+									onClick={() => void switchPresetMode("pure")}
+								>
+									{t("纯酒馆模式")}
+								</button>
+							</div>
+						</div>
+						<div className="sp-hint">
+							{files.data?.presetMode === "pure"
+								? t("纯酒馆模式：单发直出与请求级脚本透传，兼容极端破限与假工具预设。")
+								: t("梨园模式：多轮检索、稿纸工件、记忆档案与场记记账，预设动态投影生效。")}
+						</div>
+					</section>
 					<section className="sp-section">
 						<div className="preset-chan-head">
 							<h4>{t("预设库")}</h4>

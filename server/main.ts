@@ -2556,7 +2556,9 @@ const httpServer = createServer((req, res) => {
 			}
 			const body = await readJsonBody(req);
 			const userText = typeof body.userText === "string" ? body.userText.trim() : "";
-			const reuseUserMessage = body.reuseUserMessage === true;
+			const reroll = body.reroll === true;
+			const editUserText = typeof body.editUserText === "string" ? body.editUserText.trim() : "";
+			const reuseUserMessage = body.reuseUserMessage === true || (reroll && !editUserText);
 			const model = session.model as StageModelLike | undefined;
 			if (!model) {
 				res.writeHead(400, { "content-type": "application/json" });
@@ -2566,10 +2568,29 @@ const httpServer = createServer((req, res) => {
 			const materials = loadStageMaterials(cwd);
 			const { config, card } = materials;
 			const sm = session.sessionManager;
+			const rawBranch = sm.getBranch() as Array<{ id?: string; parentId?: string | null } & BranchEntryLike>;
+			let baseBranch: BranchEntryLike[] = rawBranch;
+			let effectivePromptUser = userText;
+			if (reroll) {
+				const uid = lastStoryUserId();
+				const idx = uid ? rawBranch.findIndex((e) => e.id === uid) : -1;
+				if (idx < 0) {
+					res.writeHead(400, { "content-type": "application/json" });
+					res.end(JSON.stringify({ ok: false, error: t("没有可重新生成的剧情轮（需要先有一条用户输入）") }));
+					return;
+				}
+				if (editUserText) {
+					baseBranch = rawBranch.slice(0, idx);
+					effectivePromptUser = editUserText;
+				} else {
+					baseBranch = rawBranch.slice(0, idx + 1);
+					effectivePromptUser = "";
+				}
+			}
 			const branch = [
-				...sm.getBranch(),
-				...(!reuseUserMessage && userText
-					? [{ type: "message", message: { role: "user", content: [{ type: "text", text: userText }], timestamp: Date.now() } }]
+				...baseBranch,
+				...(!reuseUserMessage && effectivePromptUser
+					? [{ type: "message", message: { role: "user", content: [{ type: "text", text: effectivePromptUser }], timestamp: Date.now() } }]
 					: []),
 			] as BranchEntryLike[];
 			const { history } = rebuildHistory(branch, materials.promptRules, {
@@ -2729,17 +2750,34 @@ const httpServer = createServer((req, res) => {
 		if (req.method === "POST" && urlPath === "/api/pure-tavern/commit") {
 			const body = await readJsonBody(req);
 			const userText = typeof body.userText === "string" ? body.userText.trim() : "";
+			const reroll = body.reroll === true;
+			const editUserText = typeof body.editUserText === "string" ? body.editUserText.trim() : "";
 			const assistantText = typeof body.assistantText === "string" ? body.assistantText : "";
 			const thinking = typeof body.thinking === "string" ? body.thinking : "";
 			const aborted = body.aborted === true;
-			const reuseUserMessage = body.reuseUserMessage === true;
+			const reuseUserMessage = body.reuseUserMessage === true || (reroll && !editUserText);
 			const notes = Array.isArray(body.notes) ? body.notes.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
 			const modelInfo = body.model && typeof body.model === "object" ? (body.model as { provider?: string; id?: string }) : undefined;
 			const sm = session.sessionManager;
-			if (!reuseUserMessage && userText) {
+			if (reroll) {
+				const uid = lastStoryUserId();
+				if (uid) {
+					const rawBranch = sm.getBranch() as Array<{ id?: string; parentId?: string | null }>;
+					const userEntry = rawBranch.find((e) => e.id === uid);
+					if (editUserText && userEntry) {
+						const parent = userEntry.parentId ?? null;
+						if (parent === null) sm.resetLeaf();
+						else session.setLeaf(parent);
+					} else if (sm.getLeafId() !== uid) {
+						session.setLeaf(uid);
+					}
+				}
+			}
+			const commitUserText = editUserText || userText;
+			if (!reuseUserMessage && commitUserText) {
 				sm.appendMessage({
 					role: "user",
-					content: [{ type: "text", text: userText }],
+					content: [{ type: "text", text: commitUserText }],
 					timestamp: Date.now(),
 				} as never);
 			}
@@ -4586,7 +4624,10 @@ wss.on("connection", (ws, req) => {
 						}
 					case "prompt": {
 						const text = String(frame.text ?? "").trim();
-						if (text) await handlePrompt(text);
+						if (text) {
+							if (Array.isArray(frame.runtimeInjections)) stage?.setRuntimeInjections(frame.runtimeInjections);
+							await handlePrompt(text);
+						}
 						break;
 					}
 					case "abort": {
@@ -4647,6 +4688,7 @@ wss.on("connection", (ws, req) => {
 							}
 							break;
 						}
+						if (Array.isArray(frame.runtimeInjections)) stage?.setRuntimeInjections(frame.runtimeInjections);
 						// 无参 = ST sibling 变体；有参 = 改用户文案后整轮重来（扩展 /reroll）
 						await handlePrompt(tText ? `/reroll ${tText}` : "/reroll");
 						break;
@@ -4654,7 +4696,11 @@ wss.on("connection", (ws, req) => {
 					case "swipe": {
 						if (refuseWhileStreaming(ws, t("切换回复变体"))) return;
 						const dir = frame.dir === "prev" || frame.dir === "next" || frame.dir === "new" ? frame.dir : "next";
+						if (Array.isArray(frame.runtimeInjections) && dir !== "prev") {
+							stage?.setRuntimeInjections(frame.runtimeInjections);
+						}
 						await handleSwipe(dir);
+						if (dir === "prev") stage?.setRuntimeInjections([]);
 						break;
 					}
 					case "compact":

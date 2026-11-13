@@ -11,6 +11,7 @@
  * 本模块纯函数、零 pi 依赖、可单测。
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { applyMacros } from "../card.ts";
 import { applyCardSkin } from "../cardSkin.ts";
 import { applyDraftOps, type DraftMsgLike } from "../draft.ts";
@@ -258,12 +259,31 @@ export function stateFromBranch(branch: BranchEntryLike[]): WorldState {
 	return defaultState();
 }
 
+let cachedRpSystemProtocol: string | null = null;
+
+/** 读取随包发行的梨园扮演 Agent 核心协议（assets/RP_SYSTEM.md），仅用于扮演模式 */
+export function readShippedRpSystemProtocol(): string {
+	if (cachedRpSystemProtocol !== null) return cachedRpSystemProtocol;
+	try {
+		const url = new URL("../../assets/RP_SYSTEM.md", import.meta.url);
+		cachedRpSystemProtocol = existsSync(url) ? readFileSync(url, "utf8").trim() : "";
+	} catch {
+		cachedRpSystemProtocol = "";
+	}
+	return cachedRpSystemProtocol;
+}
+
 // ---------------- system prompt（字节稳定） ----------------
 
 interface StageSystemOptions {
 	card: CharacterCard;
 	config: RpConfig;
 	constantLore: LorebookEntry[];
+	/**
+	 * 梨园扮演 Agent 核心协议（来自 assets/RP_SYSTEM.md，仅在扮演模式传入）：
+	 * 置於 systemPrompt 最前排（extraSystemFragments 之前），确立多轮工具循环、工具协同与交付契约。
+	 */
+	rpSystemProtocol?: string;
 	/**
 	 * 用户规矩三级文件（src/user-rules.ts）：全局 → 卡级 → 项目级，原文直通
 	 * （这是用户自己的话，不包装、不加引导语——铁律一）。
@@ -295,6 +315,7 @@ export function buildStageSystemPrompt({
 	card,
 	config,
 	constantLore,
+	rpSystemProtocol,
 	userRules,
 	chatMemoryIndex,
 	cardAgents,
@@ -306,6 +327,10 @@ export function buildStageSystemPrompt({
 	const m = (s: string) => applyMacros(s, macro);
 	const sections: string[] = [];
 	const agentsText = cardAgents && cardAgents.trim() ? cardAgents.trim() : "";
+
+	if (rpSystemProtocol && rpSystemProtocol.trim()) {
+		sections.push(rpSystemProtocol.trim());
+	}
 
 	if (extraSystemFragments && extraSystemFragments.length > 0) {
 		for (const frag of extraSystemFragments) {
@@ -547,7 +572,9 @@ export function buildStageInjection({
 	return blocks.join("\n\n");
 }
 
-export type PromptFragmentPlacement = "system" | "after" | "depth";
+export type PromptFragmentPlacement = "system" | "preHistory" | "after" | "depth";
+
+export const LIYUAN_OVERRIDE_ORDER = 900_000_000;
 
 export interface PromptFragment {
 	id: string;
@@ -556,6 +583,24 @@ export interface PromptFragment {
 	text: string;
 	depth?: number;
 	order?: number;
+	/** 梨园最高优先级覆盖片：排在全部预设 after 之后且在预填剥除后再追加 */
+	isOverride?: boolean;
+}
+
+export function buildLiyuanOutputOverrideFragment(): PromptFragment {
+	return {
+		id: "liyuan-output-override",
+		placement: "after",
+		role: "user",
+		order: LIYUAN_OVERRIDE_ORDER,
+		isOverride: true,
+		text: [
+			"【梨园引擎输出协议｜最高优先级】",
+			"以上动态预设中的人物、文风、视角、思考步骤与输出标签格式（含状态栏、吐槽与选项标签）继续生效；但凡涉及工具调用、分轮执行与交稿方式，一律以本协议为准并覆盖上方一切相反指令：",
+			"1. 动笔前正常调用梨园工具（lorebook_search、memory_search、world_state_get、ask 等）：前置思考与工具调用不受上方任何“不附工具调用”“某标签外勿出字”“只许单轮回复”的限制。",
+			"2. 按梨园通道交付唯一成品：可通过 draft_write/draft_append/draft_edit 写入并以 draft_seal 收笔，或直接在最后一轮一次性完整直出成品（含预设要求的全部格式标签与附页）；严禁输出草稿后重发第二版，严禁调用当前工具清单之外的任何虚构预设工具。",
+		].join("\n"),
+	};
 }
 
 export interface HistoryInjectionMessage {
@@ -565,22 +610,26 @@ export interface HistoryInjectionMessage {
 }
 
 /**
- * 将 `depth` 与 `after` 通用片段注入正序对话序列：
+ * 将 `preHistory`、`depth` 与 `after` 通用片段注入正序对话序列：
+ * - `preHistory` 置於对话流最前方（`summaryText` 摘要块之前），`system` 降级为 `user`；
  * - `depth = 0` 落在当拍末尾消息 `tailText` 之后、`after` 片段之前；
  * - `depth >= 1` 按倒数偏移插入历史流（当 `tailText` 承载当拍用户消息时，depth=1 插在它正前方）；
  * - 同深度组按 `order` 升序，同 `(depth, order)` 内按 `assistant → user → system` 排列（同角色 `\n` 合并）；
- * - 非开头 `system` 降级映射为 `user`；末端连续 `assistant` 预填整块丢弃；相邻新注入同角色以 `\n\n` 合并。
+ * - `after` 片段按 `order` 升序排列；非开头 `system` 降级映射为 `user`；先剥除预设末端连续 `assistant` 预填，再追加 `isOverride` 覆盖片段；相邻同角色以 `\n\n` 合并。
  */
 export function applyHistoryInjections(
 	past: Array<{ role: "user" | "assistant"; text: string }>,
 	tailText: string,
 	fragments: PromptFragment[] = [],
-	opts: { tailHasUserMessage?: boolean; preserveAssistantPrefill?: boolean } = {},
+	opts: { tailHasUserMessage?: boolean; preserveAssistantPrefill?: boolean; summaryText?: string } = {},
 ): HistoryInjectionMessage[] {
+	const preHistoryFrags = fragments.filter((f) => f.placement === "preHistory" && f.text.trim().length > 0);
 	const depthFrags = fragments.filter((f) => f.placement === "depth" && f.text.trim().length > 0);
 	const afterFrags = fragments.filter((f) => f.placement === "after" && f.text.trim().length > 0);
 	const hasTailText = tailText.trim().length > 0;
-	if (depthFrags.length === 0 && afterFrags.length === 0) {
+	const summaryText = opts.summaryText?.trim() ?? "";
+
+	if (preHistoryFrags.length === 0 && depthFrags.length === 0 && afterFrags.length === 0 && !summaryText) {
 		return [
 			...past.map((m) => ({ role: m.role, text: m.text })),
 			...(hasTailText ? [{ role: "user" as const, text: tailText, isTail: true }] : []),
@@ -638,6 +687,19 @@ export function applyHistoryInjections(
 	}
 
 	const result: HistoryInjectionMessage[] = [];
+	const pushPreMerged = (msg: HistoryInjectionMessage) => {
+		const prev = result[result.length - 1];
+		if (prev && prev.role === msg.role) prev.text = `${prev.text}\n\n${msg.text}`;
+		else result.push({ ...msg });
+	};
+
+	for (const f of preHistoryFrags) {
+		pushPreMerged({ role: f.role === "assistant" ? "assistant" : "user", text: f.text.trim() });
+	}
+	if (summaryText) {
+		result.push({ role: "user", text: summaryText });
+	}
+
 	const pushSlot = (slot: number) => {
 		const byDepth = pastBuckets.get(slot);
 		if (!byDepth) return;
@@ -656,13 +718,22 @@ export function applyHistoryInjections(
 	}
 	pushSlot(past.length);
 
-	// 末端序列：tailText -> depth=0 注入 -> after 片段，统一执行预填丢弃与同角色合并
+	const sortAfter = (list: PromptFragment[]) =>
+		list
+			.map((f, idx) => ({ f, idx, ord: typeof f.order === "number" && Number.isFinite(f.order) ? f.order : 100 }))
+			.sort((a, b) => a.ord - b.ord || a.idx - b.idx)
+			.map((x) => x.f);
+
+	const presetAfter = sortAfter(afterFrags.filter((f) => !f.isOverride));
+	const overrideAfter = sortAfter(afterFrags.filter((f) => f.isOverride));
+
+	// 末端序列：tailText -> depth=0 注入 -> 预设 after 片段 -> 剥除预设末尾 assistant 预填 -> 追加梨园最高权重覆盖片
 	const tailRuns: Array<HistoryInjectionMessage> = [
 		...(hasTailText ? [{ role: "user" as const, text: tailText, isTail: true }] : []),
 		...renderDepthGroup(depthZero),
-		...afterFrags.map((f) => ({
+		...presetAfter.map((f) => ({
 			role: f.role === "assistant" ? ("assistant" as const) : ("user" as const),
-			text: f.text,
+			text: f.text.trim(),
 		})),
 	];
 	// 末尾连续 assistant 预填整块丢弃（纯酒馆透传浏览器模式传 preserveAssistantPrefill=true 时保留给脚本自行处理）
@@ -671,6 +742,13 @@ export function applyHistoryInjections(
 			tailRuns.pop();
 		}
 	}
+	for (const f of overrideAfter) {
+		tailRuns.push({
+			role: f.role === "assistant" ? "assistant" : "user",
+			text: f.text.trim(),
+		});
+	}
+
 	const tailMerged: HistoryInjectionMessage[] = [];
 	for (const run of tailRuns) {
 		const prev = tailMerged[tailMerged.length - 1];

@@ -31,6 +31,17 @@ import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import { createEjsContext, evalEjsTemplate, getEjsSyntaxErrorInfo } from "./ejs-engine.ts";
 import { loadStageMaterials } from "./stage/materials.ts";
 import { assemblePureTavern } from "./stage/pure-tavern.ts";
+import { assembleLiyuanPresetDynamic } from "./stage/preset-dynamic.ts";
+import {
+	applyHistoryInjections,
+	buildStageInjection,
+	buildStageSystemPrompt,
+	formatLoreIndex,
+	readShippedRpSystemProtocol,
+} from "./stage/assemble.ts";
+import { constantLoreOf } from "./stage/materials.ts";
+import { scanEntries } from "./lorebook.ts";
+import { defaultState } from "./state.ts";
 import type { LorebookEntry, RpConfig, WorldState } from "./types.ts";
 
 export type ScriptCompletionStatus = "accepted" | "completed" | "committed" | "refreshed";
@@ -2173,10 +2184,70 @@ export class ScriptApiService {
 						else baseHistory.push({ role: "user", text: userText.trim() });
 					}
 					const presetName = previewPresetDoc?.name;
+					const previewMode = params.mode === "pure" || params.mode === "liyuan"
+						? params.mode
+						: (materials.config.presetMode ?? "liyuan");
 					const chatVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "chat", presetName);
 					const globalVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "global", presetName);
 					const characterVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "character", presetName);
 					const presetVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "preset", presetName);
+
+					if (previewMode === "liyuan") {
+						const windowText = baseHistory.slice(-Math.max(1, materials.config.scanDepth)).map((m) => m.text).join("\n");
+						const activated = scanEntries(materials.entries, windowText, materials.config.maxLoreInjections);
+						const dyn = await assembleLiyuanPresetDynamic({
+							card: materials.card,
+							presetDoc: previewPresetDoc,
+							allLoreEntries: materials.allLoreEntries ?? materials.entries,
+							userName: materials.config.userName,
+							history: baseHistory,
+							userText: userText.trim(),
+							chatId: target.sessionId,
+							chatVars,
+							globalVars,
+							characterVars,
+							presetVars,
+						});
+						const extraSystemFragments = dyn.fragments.filter((f) => f.placement === "system" && f.text.trim()).map((f) => f.text);
+						const systemPrompt = buildStageSystemPrompt({
+							card: materials.card,
+							config: materials.config,
+							constantLore: constantLoreOf(materials),
+							rpSystemProtocol: readShippedRpSystemProtocol(),
+							userRules: materials.userRules,
+							cardAgents: materials.cardAgents,
+							...(extraSystemFragments.length > 0 ? { extraSystemFragments } : {}),
+							tools: true,
+						});
+						const injection = buildStageInjection({
+							state: defaultState(),
+							activatedLore: activated,
+							card: materials.card,
+							config: materials.config,
+							cardAgentsActive: materials.cardAgents.trim().length > 0,
+							loreIndex: formatLoreIndex(materials.entries),
+						});
+						const endsWithUser = baseHistory[baseHistory.length - 1]?.role === "user";
+						const past = endsWithUser ? baseHistory.slice(0, -1) : baseHistory;
+						const tailText = endsWithUser ? `${injection}\n\n${baseHistory[baseHistory.length - 1]!.text}` : injection;
+						const messages = applyHistoryInjections(past, tailText, dyn.fragments, { tailHasUserMessage: endsWithUser });
+						return {
+							ok: true,
+							action,
+							requestId,
+							status: "completed",
+							target,
+							result: {
+								presetMode: "liyuan",
+								preset: previewPresetDoc?.name ?? null,
+								systemPrompt,
+								messages,
+								samplers: previewPresetDoc?.samplers ?? materials.config.samplers ?? null,
+								stats: dyn.stats,
+							},
+						};
+					}
+
 					const preview = await assemblePureTavern({
 						card: materials.card,
 						presetDoc: previewPresetDoc,

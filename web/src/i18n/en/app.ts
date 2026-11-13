@@ -214,4 +214,5 @@ export const app: Record<string, string> = {
 	"该模板的性格设定内容…": "Personality prompt for this template…",
 	"保存并应用": "Save & Apply",
 	"删除模板「{name}」": "Delete template “{name}”",
+	"梨园多轮模式下已拦截脚本自动重生成": "Blocked automatic script re-generation in Liyuan multi-turn mode",
 };

@@ -517,6 +517,7 @@ export interface PresetFileInfo {
 
 export interface PresetsResponse {
 	active: string | null;
+	presetMode?: "liyuan" | "pure";
 	presets: PresetFileInfo[];
 }
 

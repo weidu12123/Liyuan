@@ -370,24 +370,34 @@ export type ServerFrame =
 	| { type: "btw_sync"; messages: WireBtwMsg[]; streaming?: boolean }
 	| { type: "error"; text: string };
 
+/** 浏览器脚本通过 injectPrompts / setExtensionPrompt 注册的运行期临时片段 */
+export interface WireRuntimeInjection {
+	id: string;
+	role: "system" | "user" | "assistant";
+	position: "in_chat" | "before_prompt" | "in_prompt" | "none";
+	depth: number;
+	order: number;
+	content: string;
+}
+
 /** Client → Server 帧 */
 export type ClientFrame =
 	| { type: "draft_history"; id: string }
 	| { type: "draft_restore"; id: string; version: number; expectedVersion: number }
-	| { type: "prompt"; text: string }
+	| { type: "prompt"; text: string; runtimeInjections?: WireRuntimeInjection[] }
 	| { type: "abort" }
 	/**
 	 * 重新生成最后一轮。
 	 * - text 缺省：ST 式——同一条用户消息下新开 sibling 变体（原回复保留，不产生世界线）
 	 * - text 给出：编辑用户输入后整轮重来（旧 user+回复进旁支）
 	 */
-	| { type: "reroll"; text?: string }
+	| { type: "reroll"; text?: string; runtimeInjections?: WireRuntimeInjection[] }
 	/**
 	 * ST 式变体导航 / 再生成（不写世界线）。
 	 * prev|next：在同一 user 下的 sibling 间切换；在末条 next = 等同 reroll 无参。
 	 * new：强制再生成一条变体。
 	 */
-	| { type: "swipe"; dir: "prev" | "next" | "new" }
+	| { type: "swipe"; dir: "prev" | "next" | "new"; runtimeInjections?: WireRuntimeInjection[] }
 	| { type: "compact" }
 	| { type: "sessions" }
 	| { type: "open"; path: string }

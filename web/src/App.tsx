@@ -48,7 +48,7 @@ import {
 	tavern_events,
 } from "./tavernShim.ts";
 import { runPureTavernBrowserTurn } from "./pureTavernRunner.ts";
-import { syncCardRuntimeContext, syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
+import { collectRuntimeInjectedPrompts, syncCardRuntimeContext, syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
 import { setAtHome, shouldShowHomeOnBoot, touchVisit } from "./visit.ts";
 import { getTheme, setTheme } from "./theme.ts";
 import { getWallpaperConfig, type WallpaperConfig } from "./themes.ts";
@@ -657,6 +657,12 @@ export default function App() {
 	const runtimeFetchSeqRef = useRef(0);
 	const presetModeRef = useRef<"liyuan" | "pure">("liyuan");
 	const pureAbortRef = useRef<AbortController | null>(null);
+	const liyuanPostGenGuardUntilRef = useRef(0);
+	const collectLiyuanInjections = useCallback(() => {
+		if (modeRef.current !== "roleplay" || presetModeRef.current !== "liyuan") return undefined;
+		const items = collectRuntimeInjectedPrompts();
+		return items.length > 0 ? items : undefined;
+	}, []);
 
 	useEffect(() => {
 		const onMsg = (ev: MessageEvent) => {
@@ -796,6 +802,7 @@ export default function App() {
 			chatId: currentSession?.chatId ?? null,
 			sessionId: sessionIdRef.current,
 			mode: conversationMode === "agent" ? "agent" : "roleplay",
+			presetMode: presetModeRef.current,
 			streaming: busy,
 			messages: runtimeMsgs,
 			presetName: loadedPreset.name,
@@ -1305,6 +1312,19 @@ export default function App() {
 						if (wasAborting) {
 							emitCardRuntimeEvent(tavern_events.GENERATION_STOPPED);
 						} else {
+							if (modeRef.current === "roleplay" && presetModeRef.current === "liyuan") {
+								liyuanPostGenGuardUntilRef.current = Date.now() + 450;
+								void Promise.all([
+									callLiyuanScriptApi<{ data?: Record<string, unknown> }>("data.read", { scope: "chat" }),
+									callLiyuanScriptApi<{ data?: Record<string, unknown> }>("data.read", { scope: "global" }),
+								]).then(([chatEnv, globalEnv]) => {
+									setLoadedScriptVars((prev) => ({
+										...prev,
+										...(chatEnv.ok && chatEnv.result?.data ? { chat: chatEnv.result.data } : {}),
+										...(globalEnv.ok && globalEnv.result?.data ? { global: globalEnv.result.data } : {}),
+									}));
+								});
+							}
 							emitCardRuntimeEvent(tavern_events.GENERATION_ENDED);
 						}
 						// 本轮 agent 可能写了技能/知识库/世界书等资产：通知 watchAgent 面板重拉
@@ -1725,7 +1745,7 @@ export default function App() {
 	const isAddressingBtw = conversationMode === "roleplay" && parseBtwText(input) !== null;
 
 	const dispatchPureTavernTurn = useCallback(
-		async (text: string, notes: string[] = []) => {
+		async (text: string, notes: string[] = [], opts?: { reroll?: boolean; editUserText?: string }) => {
 			if (pureAbortRef.current) {
 				pushToast("warning", t("生成中"));
 				return;
@@ -1733,7 +1753,19 @@ export default function App() {
 			const ac = new AbortController();
 			pureAbortRef.current = ac;
 			(window as unknown as { __liyuanAbortPureGeneration?: () => void }).__liyuanAbortPureGeneration = () => ac.abort();
-			setMessages((ms) => [...ms, { channel: "user", name: userName, text }]);
+			if (opts?.reroll) {
+				setMessages((ms) => {
+					const lastUserIdx = [...ms].map((m, i) => ({ m, i })).reverse().find((x) => x.m.channel === "user")?.i ?? -1;
+					if (lastUserIdx < 0) return ms;
+					const sliced = ms.slice(0, lastUserIdx + 1);
+					if (opts.editUserText) {
+						sliced[lastUserIdx] = { ...sliced[lastUserIdx]!, text: opts.editUserText };
+					}
+					return sliced;
+				});
+			} else {
+				setMessages((ms) => [...ms, { channel: "user", name: userName, text }]);
+			}
 			clearStream();
 			resetSegs();
 			resetActs();
@@ -1743,6 +1775,8 @@ export default function App() {
 			try {
 				const r = await runPureTavernBrowserTurn({
 					userText: text,
+					reroll: opts?.reroll,
+					editUserText: opts?.editUserText,
 					notes,
 					signal: ac.signal,
 					onStreamDelta: (fullText, fullThinking) => {
@@ -1870,6 +1904,12 @@ export default function App() {
 			sent = typed === "/compact" || /^\/compact\s*$/i.test(typed)
 				? ws.send({ type: "compact" })
 				: ws.send({ type: "prompt", text: typed });
+		} else if (conversationMode === "roleplay" && presetModeRef.current === "pure" && /^\/reroll(?:\s|$)/i.test(typed)) {
+			const editBody = typed.replace(/^\/reroll\s*/i, "").trim();
+			const notes = noteRows.map((s) => s.trim()).filter(Boolean);
+			if (notes.length > 0) setNoteRows([]);
+			void dispatchPureTavernTurn("", notes, { reroll: true, ...(editBody ? { editUserText: editBody } : {}) });
+			sent = true;
 		} else if (conversationMode === "roleplay" && presetModeRef.current === "pure" && !typed.startsWith("/")) {
 			const notes = noteRows.map((s) => s.trim()).filter(Boolean);
 			if (notes.length > 0) setNoteRows([]);
@@ -1881,7 +1921,8 @@ export default function App() {
 				pushToast("warning", t("连接还没好，内容还在输入框里"));
 				return;
 			}
-			sent = ws.send({ type: "prompt", text });
+			const runtimeInjections = collectLiyuanInjections();
+			sent = ws.send({ type: "prompt", text, ...(runtimeInjections ? { runtimeInjections } : {}) });
 		}
 		if (!sent) {
 			pushToast("warning", t("连接还没好，内容还在输入框里"));
@@ -1925,6 +1966,10 @@ export default function App() {
 					pushToast("warning", t("连接未就绪，无法从界面发送"));
 					return;
 				}
+				if (modeRef.current === "roleplay" && presetModeRef.current === "liyuan" && Date.now() < liyuanPostGenGuardUntilRef.current) {
+					pushToast("info", t("梨园多轮模式下已拦截脚本自动重生成"));
+					return;
+				}
 				const body = (text || inputRefForBridge.current || "").trim();
 				if (!body) {
 					pushToast("warning", t("没有可发送的内容"));
@@ -1936,7 +1981,8 @@ export default function App() {
 				if (modeRef.current === "roleplay" && presetModeRef.current === "pure" && !body.startsWith("/")) {
 					void dispatchPureTavernTurn(body);
 				} else {
-					ws.send({ type: "prompt", text: body });
+					const runtimeInjections = collectLiyuanInjections();
+					ws.send({ type: "prompt", text: body, ...(runtimeInjections ? { runtimeInjections } : {}) });
 				}
 				setInput("");
 				setPending([]);
@@ -1947,11 +1993,21 @@ export default function App() {
 			},
 			runCommand: (cmd) => {
 				if (connRef.current !== "open") return;
-				ws.send({ type: "prompt", text: cmd });
+				if (
+					modeRef.current === "roleplay" &&
+					presetModeRef.current === "liyuan" &&
+					Date.now() < liyuanPostGenGuardUntilRef.current &&
+					/^\/(?:reroll|trigger|swipe\s+(?:new|next))\b/i.test(cmd.trim())
+				) {
+					pushToast("info", t("梨园多轮模式下已拦截脚本自动重生成"));
+					return;
+				}
+				const runtimeInjections = collectLiyuanInjections();
+				ws.send({ type: "prompt", text: cmd, ...(runtimeInjections ? { runtimeInjections } : {}) });
 			},
 		});
 		return () => registerTavernChatBridge(null);
-	}, [ws, pushToast]);
+	}, [ws, pushToast, collectLiyuanInjections]);
 
 	// 作者脚本的 toastr → 梨园通知条（子帧经 parent.__liyuanToast 调；缺它就只落 console）
 	useEffect(() => {
@@ -2009,20 +2065,36 @@ export default function App() {
 			const attachLine =
 				attachments.length > 0 ? buildAttachmentLine(attachments.map((a) => a.file)) : "";
 			const full = attachLine ? `${text}\n${attachLine}` : text;
+			if (conversationMode === "roleplay" && presetModeRef.current === "pure") {
+				const notes = noteRows.map((s) => s.trim()).filter(Boolean);
+				if (notes.length > 0) setNoteRows([]);
+				void dispatchPureTavernTurn("", notes, { reroll: true, editUserText: full });
+				setMsgEdit(null);
+				return;
+			}
 			// 改写输入后重 roll：备注同样随行（先 /note 再 /reroll）
 			if (!sendNotes()) {
 				pushToast("warning", t("连接还没好，改写还在编辑框里"));
 				return;
 			}
-			sent = ws.send({ type: "reroll", text: full });
+			const runtimeInjections = collectLiyuanInjections();
+			sent = ws.send({ type: "reroll", text: full, ...(runtimeInjections ? { runtimeInjections } : {}) });
 		} else {
 			const orig = (messages[msgEdit.idx]?.text ?? "").trim();
 			if (text === orig && msgEdit.kind === "narrative") {
+				if (conversationMode === "roleplay" && presetModeRef.current === "pure") {
+					const notes = noteRows.map((s) => s.trim()).filter(Boolean);
+					if (notes.length > 0) setNoteRows([]);
+					void dispatchPureTavernTurn("", notes, { reroll: true });
+					setMsgEdit(null);
+					return;
+				}
 				if (!sendNotes()) {
 					pushToast("warning", t("连接还没好，改写还在编辑框里"));
 					return;
 				}
-				sent = ws.send({ type: "reroll" });
+				const runtimeInjections = collectLiyuanInjections();
+				sent = ws.send({ type: "reroll", ...(runtimeInjections ? { runtimeInjections } : {}) });
 			} else {
 				sent = ws.send({ type: "prompt", text: `/editreply ${text}` });
 			}
@@ -3345,7 +3417,16 @@ export default function App() {
 												onReroll={
 													!busy && !msgEdit
 														? b.msg.channel === "narrative" && b.idx === lastNarrativeIdx
-															? () => { if (sendNotes()) ws.send({ type: "swipe", dir: "new" }); }
+															? () => {
+																if (conversationMode === "roleplay" && presetModeRef.current === "pure") {
+																	const notes = noteRows.map((s) => s.trim()).filter(Boolean);
+																	if (notes.length > 0) setNoteRows([]);
+																	void dispatchPureTavernTurn("", notes, { reroll: true });
+																} else if (sendNotes()) {
+																	const runtimeInjections = collectLiyuanInjections();
+																	ws.send({ type: "swipe", dir: "new", ...(runtimeInjections ? { runtimeInjections } : {}) });
+																}
+															}
 															: isAgentMode && b.msg.channel === "authoring" && b.idx === lastNarrativeIdx
 																? () => { ws.send({ type: "reroll" }); }
 																: undefined
@@ -3360,7 +3441,18 @@ export default function App() {
 																index: b.msg.swipe?.index ?? 0,
 																total: b.msg.swipe?.total ?? 1,
 																onPrev: () => ws.send({ type: "swipe", dir: "prev" }),
-																onNext: () => ws.send({ type: "swipe", dir: "next" }),
+																onNext: () => {
+																	const curIdx = b.msg.swipe?.index ?? 0;
+																	const totalCnt = b.msg.swipe?.total ?? 1;
+																	if (conversationMode === "roleplay" && presetModeRef.current === "pure" && curIdx + 1 >= totalCnt) {
+																		const notes = noteRows.map((s) => s.trim()).filter(Boolean);
+																		if (notes.length > 0) setNoteRows([]);
+																		void dispatchPureTavernTurn("", notes, { reroll: true });
+																	} else {
+																		const runtimeInjections = collectLiyuanInjections();
+																		ws.send({ type: "swipe", dir: "next", ...(runtimeInjections ? { runtimeInjections } : {}) });
+																	}
+																},
 															}
 														: undefined
 												}
@@ -3948,6 +4040,7 @@ export default function App() {
 								}}
 							/>
 							<textarea
+								id="send_textarea"
 								ref={inputRef}
 								value={input}
 								placeholder={conn === "open" ? (conversationMode === "authoring" ? t("描述要做的事：改卡、写前端或脚本、整理文件…") : conversationMode === "agent" ? t("讨论剧情、下达写作指令；正文由 agent 写入文件…") : userName ? t("以「{name}」的身份发言…", { name: userName }) : t("输入消息…")) : t("等待连接…")}
@@ -4174,7 +4267,8 @@ export default function App() {
 								{isAddressingBtw ? (
 									btwStreaming ? (
 										<button
-											className="btn btn-stop"
+											id="mes_stop"
+											className="btn btn-stop mes_stop"
 											onClick={() => ws.send({ type: "prompt", text: "/btw stop" })}
 											title={t("停止")}
 											aria-label={t("停止生成")}
@@ -4194,7 +4288,8 @@ export default function App() {
 									)
 								) : busy ? (
 									<button
-										className="btn btn-stop"
+										id="mes_stop"
+										className="btn btn-stop mes_stop"
 										onClick={() => {
 											// 强制停止：本地立刻解锁输入，冻结流式，不等待服务端确认。
 											// abortingRef 保持到下一次 agent:start，防止服务端乐观 end 后迟到 delta 复活。

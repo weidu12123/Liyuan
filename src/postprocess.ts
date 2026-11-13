@@ -71,7 +71,7 @@ function isHtmlNonProseTag(tag: string): boolean {
 }
 
 /** 标签名：字母/中文起头，允许数字 _ - . 与中文（兼容 <haurki准则> <draft_notes>） */
-const TAG_NAME = String.raw`[A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff.\-]*`;
+const TAG_NAME = String.raw`[A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff.\-~]*`;
 
 /** 开标签（非闭合、非注释、非 DOCTYPE） */
 const OPEN_TAG_RE = new RegExp(`<(${TAG_NAME})(\\s[^>]*)?>`, "g");
@@ -121,6 +121,43 @@ export function addHistoryStripTags(tags: Iterable<string>): void {
 		const n = normalizeTagName(t);
 		if (n) historyOnlyStrip.add(n);
 	}
+}
+
+/**
+ * 从预设/卡自带的 `regex_scripts` 自动发现「对 AI 隐藏并清空」的标签名（纯数据驱动，零作者词表）：
+ * 仅提取未禁用、作用于 AI 输出（placement=2）、标为 promptOnly、replaceString 为空且无 maxDepth 限定的
+ * `<tag>` / `<(tag1|tag2)>` 清空类规则，供 `cleanAssistantText` 剥除作者非正文附页/思维块。
+ */
+export function extractHistoryStripTagsFromRegexScripts(scripts: unknown[]): string[] {
+	if (!Array.isArray(scripts)) return [];
+	const out = new Set<string>();
+	for (const item of scripts) {
+		if (!item || typeof item !== "object") continue;
+		const r = item as Record<string, unknown>;
+		if (r.disabled === true || r.promptOnly !== true) continue;
+		if (typeof r.replaceString === "string" && r.replaceString.trim() !== "") continue;
+		if (typeof r.maxDepth === "number" && Number.isFinite(r.maxDepth)) continue;
+		const placement = Array.isArray(r.placement) ? r.placement : [];
+		if (!placement.includes(2)) continue;
+		const rawRe = typeof r.findRegex === "string" ? r.findRegex : "";
+		if (!rawRe) continue;
+
+		// 匹配常见单标签或分组标签：<tag> / <(a|b)> / <\/(think_?fox~?)>
+		for (const m of rawRe.matchAll(/<(?:\\?\/)?\(?([A-Za-z_一-鿿][\w一-鿿.\-|?~]*)\)?/g)) {
+			const group = m[1] ?? "";
+			for (const part of group.split("|")) {
+				const rawPart = part.replace(/[*+()\\]/g, "").trim();
+				const base = rawPart.replace(/\?/g, "");
+				const variants = rawPart.endsWith("~?") ? [base, base.slice(0, -1)] : [base];
+				for (const v of variants) {
+					if (v.length >= 2 && !isHtmlNonProseTag(v) && !/^(?:content|body|game|story|text|narrative)$/i.test(v)) {
+						out.add(v);
+					}
+				}
+			}
+		}
+	}
+	return [...out];
 }
 
 /** 该标签是否「只在历史剥」 */

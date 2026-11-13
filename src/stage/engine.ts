@@ -33,7 +33,8 @@ import {
 import { formatPanelIndex, formatPanelSnapshot, loadPanels } from "../panels.ts";
 import { cardDirOfChatDir, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, readChatMemoryIndex, readChatSummary, resolveCardSpace, writeChatSummary } from "../cardspace.ts";
 import { changeChatMemory, listChatMemory, readChatMemory, searchChatMemory, writeChatMemoryDoc } from "../card-memory-tools.ts";
-import { classifyTag, scanTaggedBlocks } from "../postprocess.ts";
+import { applySkinKeepingBody } from "../cardSkin.ts";
+import { classifyTag, cleanAssistantText, scanTaggedBlocks } from "../postprocess.ts";
 import { formatRosterIndex, formatState, saveState } from "../state.ts";
 import type { LorebookEntry, WorldState } from "../types.ts";
 import {
@@ -42,11 +43,13 @@ import {
 	buildStageSystemPrompt,
 	detectsLanguageMismatch,
 	formatLoreIndex,
+	readShippedRpSystemProtocol,
 	rebuildHistory,
 	stateFromBranch,
 	type BranchEntryLike,
 	type PromptFragment,
 } from "./assemble.ts";
+import { assembleLiyuanPresetDynamic } from "./preset-dynamic.ts";
 import {
 	constantLoreOf,
 	loadStageConfig,
@@ -409,6 +412,28 @@ const textOfAssistant = (m: AssistantMsgLike | null): string => {
 		.join("");
 };
 
+/** 场记输入净化：剥除清空型 promptOnly 规则及思考/注释/选项壳，只留干净剧情正文与状态栏供记账 */
+export function prepareScribeAssistantText(
+	text: string,
+	promptRules: Array<{ name: string; source: string; flags: string; replace: string; minDepth?: number; maxDepth?: number }>,
+	macroCtx: { charName: string; userName: string },
+): string {
+	if (!text.trim()) return text;
+	const clearRules = promptRules.filter(
+		(r) =>
+			r.replace.trim() === "" &&
+			r.maxDepth === undefined &&
+			!r.source.trim().startsWith("^") &&
+			!r.source.trim().endsWith("$"),
+	);
+	let t = text;
+	if (clearRules.length > 0) {
+		t = applySkinKeepingBody(t, clearRules, macroCtx);
+	}
+	const cleaned = cleanAssistantText(t).trim();
+	return cleaned || text;
+}
+
 /** 把数据块压在最后一条 user 消息的原话之前（不动树，只改这份送模副本） */
 export const prependToLastUser = (history: ContextMessage[], block: string): void => {
 	for (let i = history.length - 1; i >= 0; i--) {
@@ -450,7 +475,7 @@ const lastUserMode = (branch: BranchEntryLike[]): unknown => {
  * draft_write 只交了 679 字正文，状态栏与咪咪点评凭空蒸发）。
  * 但也不能无脑全拼——纯文本尾巴（"就这样吧。"）是收笔闲聊，不该进正文。
  */
-const TAG_NAME_SRC = "[A-Za-z_\\u4e00-\\u9fff][\\w\\u4e00-\\u9fff.\\-]*";
+const TAG_NAME_SRC = "[A-Za-z_\\u4e00-\\u9fff][\\w\\u4e00-\\u9fff.\\-~]*";
 const FENCE_LINE_RE = /^```/m;
 const FENCE_BLOCK_RE = /```[\s\S]*?```/g;
 /** 逐个扫标签名，用于跳过 fold/strip 类（它们不是格式内容） */
@@ -597,6 +622,45 @@ export class StageEngine {
 	#abort: AbortController | null = null;
 	#warnedProtocolDrop = "";
 	#workspace?: { ws: TurnWorkspace; deps: WorkspaceDeps };
+	#pendingRuntimeInjections: PromptFragment[] = [];
+
+	/** 接收前端脚本通过 injectPrompts / setExtensionPrompt 注册的一拍有效运行期片段 */
+	setRuntimeInjections(
+		items?: Array<{
+			id: string;
+			role?: "system" | "user" | "assistant";
+			position?: string;
+			depth?: number;
+			order?: number;
+			content?: string;
+		}>,
+	): void {
+		if (!Array.isArray(items) || items.length === 0) {
+			this.#pendingRuntimeInjections = [];
+			return;
+		}
+		const mapped: PromptFragment[] = [];
+		for (const item of items) {
+			if (!item || typeof item.content !== "string" || !item.content.trim()) continue;
+			if (item.position === "none") continue;
+			const role = item.role === "user" || item.role === "assistant" ? item.role : "system";
+			const placement =
+				item.position === "before_prompt"
+					? "system"
+					: item.position === "in_prompt"
+						? "after"
+						: "depth";
+			mapped.push({
+				id: String(item.id || `runtime-${mapped.length}`),
+				placement,
+				role,
+				text: item.content.trim(),
+				...(placement === "depth" ? { depth: typeof item.depth === "number" ? Math.max(0, Math.trunc(item.depth)) : 0 } : {}),
+				order: typeof item.order === "number" && Number.isFinite(item.order) ? item.order : 100,
+			});
+		}
+		this.#pendingRuntimeInjections = mapped;
+	}
 	#turnMode?: ConversationMode;
 	/** 子项目形态缓存（对话.json 只在建项目时写，按会话目录记一次即可） */
 	#chatMode?: { sessionDir: string; mode: "agent" | undefined };
@@ -1150,15 +1214,47 @@ export class StageEngine {
 
 			const memoryRecall = agentTurn ? undefined : await this.#recallForBeat(sm.getSessionId(), lastUserText);
 
-			const fragments = this.#deps.getPromptFragments
-				? await this.#deps.getPromptFragments({ materials, state, lastUserText, history })
-				: [];
+			const runtimeFragments = this.#pendingRuntimeInjections.splice(0);
+			const customFragments = [
+				...(this.#deps.getPromptFragments
+					? await this.#deps.getPromptFragments({ materials, state, lastUserText, history })
+					: []),
+				...runtimeFragments,
+			];
+			let fragments: PromptFragment[] = customFragments;
+			if (!agentTurn && materials.presetDoc) {
+				const sessionId = sm.getSessionId();
+				const presetName = materials.presetDoc.name;
+				const chatVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "chat", presetName);
+				const globalVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "global", presetName);
+				const characterVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "character", presetName);
+				const presetVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "preset", presetName);
+				const dyn = await assembleLiyuanPresetDynamic({
+					card,
+					presetDoc: materials.presetDoc,
+					allLoreEntries: materials.allLoreEntries ?? materials.entries,
+					userName: config.userName,
+					history,
+					userText: lastUserText,
+					chatId: sessionId,
+					model: model.id,
+					chatVars,
+					globalVars,
+					characterVars,
+					presetVars,
+					extensionPrompts: customFragments,
+				});
+				fragments = dyn.fragments;
+				writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "chat", dyn.dirtyLocal, presetName);
+				writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "global", dyn.dirtyGlobal, presetName);
+			}
 			const extraSystemFragments = fragments.filter((f) => f.placement === "system" && f.text.trim()).map((f) => f.text);
 
 			systemPrompt = buildStageSystemPrompt({
 				card,
 				config,
 				constantLore: constantLoreOf({ ...materials, entries: effectiveEntries }),
+				...(!agentTurn ? { rpSystemProtocol: readShippedRpSystemProtocol() } : {}),
 				userRules,
 				chatMemoryIndex,
 				cardAgents: effectiveCardAgents,
@@ -1188,27 +1284,16 @@ export class StageEngine {
 			const endsWithUser = history[history.length - 1]?.role === "user";
 			const past = endsWithUser ? history.slice(0, -1) : history;
 			const tailText = endsWithUser ? `${injection}\n\n${history[history.length - 1].text}` : injection;
+			const summaryCombined = [summary, residentSummary].filter(Boolean).join("\n\n");
+			const summaryText = summaryCombined
+				? `【前情提要】以下是更早剧情的接力摘要，是既定事实：\n\n${summaryCombined}`
+				: undefined;
 
-			const timeline = applyHistoryInjections(past, tailText, fragments, { tailHasUserMessage: endsWithUser });
-			messages = [
-				...(summary || residentSummary
-					? [
-							{
-								role: "user",
-								content: [
-									{
-										type: "text",
-										text: `【前情提要】以下是更早剧情的接力摘要，是既定事实：\n\n${[summary, residentSummary]
-											.filter(Boolean)
-											.join("\n\n")}`,
-									},
-								],
-								timestamp: 0,
-							},
-						]
-					: []),
-				...timeline.map((m) => (m.role === "user" ? asUser(m.text, m.isTail ? nowTs : 0) : asAssistant(m.text, m.isTail ? nowTs : 0))),
-			];
+			const timeline = applyHistoryInjections(past, tailText, fragments, {
+				tailHasUserMessage: endsWithUser,
+				summaryText,
+			});
+			messages = timeline.map((m) => (m.role === "user" ? asUser(m.text, m.isTail ? nowTs : 0) : asAssistant(m.text, m.isTail ? nowTs : 0)));
 		}
 
 		const { apiKey, headers } = await this.#deps.getAuth(model);
@@ -1461,7 +1546,11 @@ export class StageEngine {
 			// 触发是结构信号（本拍有正文＝封笔），扮演者无感；场记读「已写出的正文＋当前账本」
 			// 出 patch，判断在模型、落账由 harness 死板执行（叶守卫在 runScribeTurn 内）。
 			if (!purePresetMode && entryId && !aborted && finalText) {
-				await this.#scribe({ model, auth: { apiKey, headers }, materials, sm, ev, state, userText: lastUserText, assistantText: finalText });
+				const cleanForScribe = prepareScribeAssistantText(finalText, materials.promptRules, {
+					charName: card.name,
+					userName: config.userName,
+				});
+				await this.#scribe({ model, auth: { apiKey, headers }, materials, sm, ev, state, userText: lastUserText, assistantText: cleanForScribe });
 			}
 			this.#pendingPanelData = {};
 

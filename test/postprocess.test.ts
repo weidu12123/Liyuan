@@ -3,16 +3,20 @@ import { test } from "node:test";
 
 import {
 	addFoldTags,
+	addHistoryStripTags,
 	classifyTag,
 	cleanAssistantText,
 	discoverFoldTagsFromTexts,
 	displayAssistantText,
+	extractHistoryStripTagsFromRegexScripts,
 	extractScaffoldThinking,
 	isHtmlDisplayPayload,
 	prepareDisplayText,
 	resetDisplayTagExtras,
 } from "../src/postprocess.ts";
 import { applySkinKeepingBody } from "../src/cardSkin.ts";
+import { prepareScribeAssistantText } from "../src/stage/engine.ts";
+import { splitRichContentParts } from "../web/src/richContentParts.ts";
 
 test("结构块：分析 fold 删除，状态/plot unwrap 留正文（状态栏渲染归作者正则，非名单）", () => {
 	const raw = `<descriptive_analysis>
@@ -414,3 +418,45 @@ test("displayAssistantText：自闭合的残留标签也清掉——有无空格
 	// 句中的自闭合标签不动（本条只管「单独成行的残留」）
 	assert.ok(displayAssistantText("他说<foo/>然后走了。").includes("<foo/>"));
 });
+
+test("第4步刀4：extractHistoryStripTagsFromRegexScripts 自动识别 promptOnly 清空标签、场记输入净化与流式注释隐藏", () => {
+	resetDisplayTagExtras();
+	const scripts = [
+		{ scriptName: "隐藏狐策", findRegex: "<fox_selc>[\\s\\S]*?<\\/fox_selc>", replaceString: "", placement: [2], promptOnly: true, disabled: false },
+		{ scriptName: "隐藏思考", findRegex: "/([\\s\\S]*?)<\\/(think_?fox~?)>/g", replaceString: "", placement: [2], promptOnly: true, disabled: false },
+		{ scriptName: "只管显示", findRegex: "<style>.+</style>", replaceString: "", placement: [2], markdownOnly: true, promptOnly: false, disabled: false },
+		{ scriptName: "限深摘要", findRegex: "<summary>[\\s\\S]*</summary>", replaceString: "", placement: [2], promptOnly: true, maxDepth: 5, disabled: false },
+	];
+	const discovered = extractHistoryStripTagsFromRegexScripts(scripts);
+	assert.ok(discovered.includes("fox_selc"));
+	assert.ok(discovered.includes("think_fox"));
+	assert.equal(discovered.includes("summary"), false, "带 maxDepth 限制的不无条件剥");
+
+	addHistoryStripTags(discovered);
+	const rawModelOut = `<think_fox~>推演18步</think_fox~><content>两人推门进殿。<!-- 模拟段落:废稿 -->\n\n「坐吧。」</content><fox_selc><font color="red">选项1</font></fox_selc>`;
+	const cleanedHistory = cleanAssistantText(rawModelOut);
+	assert.ok(cleanedHistory.includes("两人推门进殿。") && cleanedHistory.includes("「坐吧。」"));
+	assert.equal(cleanedHistory.includes("推演18步"), false);
+	assert.equal(cleanedHistory.includes("选项1"), false);
+	assert.equal(cleanedHistory.includes("模拟段落"), false);
+
+	const scribeInput = prepareScribeAssistantText(
+		rawModelOut,
+		[
+			{ name: "隐藏狐策", source: "<fox_selc>[\\s\\S]*?<\\/fox_selc>", flags: "g", replace: "", minDepth: 2 },
+			{ name: "全局包装排除", source: "^([\\s\\S]*)$", flags: "", replace: "<ai>$1</ai>" },
+		],
+		{ charName: "师姐", userName: "沈舟" },
+	);
+	assert.ok(scribeInput.includes("两人推门进殿。"));
+	assert.equal(scribeInput.includes("选项1"), false, "即使带 minDepth 也应剥掉供场记");
+	assert.equal(scribeInput.includes("<ai>"), false, "带替换模板的包裹规则不得污染场记");
+
+	// 流式渲染隐去完整与尾部未闭合注释，保留正常文本与 HTML 块
+	const liveParts = splitRichContentParts("正文第一句。<!-- 模拟段落:草稿1 --> 正文第二句。<!-- 未闭合草稿", null, { live: true });
+	const liveText = liveParts.filter((p) => p.kind === "text").map((p) => p.text).join("");
+	assert.ok(liveText.includes("正文第一句。") && liveText.includes("正文第二句。"));
+	assert.equal(liveText.includes("草稿1"), false);
+	assert.equal(liveText.includes("未闭合草稿"), false);
+});
+

@@ -49,7 +49,11 @@ export function alreadyDisplayHtml(text: string): boolean {
  * @param skin 仅在「原文尚未皮肤化」时使用（流式半截、或未走 wire 的本地文本）。
  *             已由 prepareDisplayText 处理过的消息务必仍可传入 skin，但会被跳过。
  */
-export function splitRichContentParts(text: string, skin?: SkinMacros | null): RichPart[] {
+export function splitRichContentParts(
+	text: string,
+	skin?: SkinMacros | null,
+	opts?: { live?: boolean },
+): RichPart[] {
 	const needSkin = Boolean(skin && skin.rules.length > 0 && !alreadyDisplayHtml(text));
 	const skinned = needSkin ? applySkinKeepingBody(text, skin!.rules, skin!) : text;
 
@@ -61,7 +65,12 @@ export function splitRichContentParts(text: string, skin?: SkinMacros | null): R
 			out.push({ kind: "html", html: p.html, scripts: p.scripts });
 			continue;
 		}
-		if (p.text.trim()) out.push({ kind: "text", text: p.text });
+		// 对非 HTML 正文部分隐去内联 HTML 草稿注释（流式期同时隐去尾部尚未闭合的 `<!-- ...` 避免闪现源码）
+		let prose = p.text.replace(/<!--[\s\S]*?-->/g, "");
+		if (opts?.live) {
+			prose = prose.replace(/<!--[\s\S]*$/, "");
+		}
+		if (prose.trim()) out.push({ kind: "text", text: prose });
 	}
 	return out;
 }

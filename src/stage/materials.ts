@@ -22,7 +22,7 @@ import {
 	mountedLorebookPaths,
 	setMountedLorebooks,
 } from "../lorebook.ts";
-import { addHistoryStripTags, resetDisplayTagExtras } from "../postprocess.ts";
+import { addHistoryStripTags, extractHistoryStripTagsFromRegexScripts, resetDisplayTagExtras } from "../postprocess.ts";
 import type { ProtocolDrop } from "../protocol-detect.ts";
 import { applyDeclarations, declarationPathFor, readDeclaration } from "../lorebook-declare.ts";
 import { agentRulesPath, btwRulesPath, cardRulesPath, globalRulesPath, readUserRules, type UserRules } from "../user-rules.ts";
@@ -346,14 +346,17 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 	const cardAgentsRaw = cardAgents;
 	cardAgents = renderForModel(cardAgents);
 
+	const allRegexScripts = [...(presetDoc?.raw?.extensions?.regex_scripts ?? []), ...cardRegexScripts];
+
 	// 显示层折叠标签：**猜名单已退役（8/19）**。
-	// 折不折叠归作者的 regex_scripts，格式栈标签仍只注册到历史剥通道。
+	// 折不折叠归作者的 regex_scripts，格式栈标签仍只注册到历史剥通道，并从预设自带 promptOnly 清空正则自动派生。
 	resetDisplayTagExtras();
 	if (presetDoc) {
 		addHistoryStripTags(FORMAT_STACK_TAGS);
 	}
-
-	const allRegexScripts = [...(presetDoc?.raw?.extensions?.regex_scripts ?? []), ...cardRegexScripts];
+	if (allRegexScripts.length > 0) {
+		addHistoryStripTags(extractHistoryStripTagsFromRegexScripts(allRegexScripts));
+	}
 
 	const materials: StageMaterials = {
 		config,

@@ -3037,7 +3037,21 @@ try{
     if(out.length===1)out.push("default");
     return out;
   };
-  g.loadPreset=function(){return true;};
+  function apiFetchJson(url,init){
+    var f=(g.fetch)||(presetHost&&presetHost.fetch);
+    if(typeof f!=="function")return Promise.resolve(null);
+    return f(url,init).then(function(r){return r.ok?r.json().catch(function(){return null;}):null;}).catch(function(){return null;});
+  }
+  g.loadPreset=function(name){
+    var nm=String(name||"").trim();
+    if(!nm)return Promise.resolve(false);
+    return apiFetchJson("/api/presets").then(function(data){
+      var list=(data&&Array.isArray(data.presets))?data.presets:[];
+      var hit=list.find(function(x){return x&&(x.name===nm||x.file===nm);});
+      if(!hit)return false;
+      return apiFetchJson("/api/presets/select",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:hit.file})}).then(function(res){return Boolean(res&&res.ok);});
+    });
+  };
   g.getPreset=function(name){
     var target=(!name||name==="in_use"||name===g.getLoadedPresetName())?"in_use":String(name);
     var raw=getSharedPresetRaw();
@@ -3059,10 +3073,30 @@ try{
       if(!opts||opts.render!=="none")syncPromptManagerDom(shared);
       return commitPresetFromSharedState().then(function(){return true;});
     }
-    return Promise.resolve(true);
+    var rawToSave=fromPreset(preset||g.default_preset,{});
+    return apiFetchJson("/api/presets/saveas",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:String(name),raw:rawToSave})}).then(function(r){return r?Boolean(r.ok!==false):true;});
   };
-  g.deletePreset=function(){return Promise.resolve(true);};
-  g.renamePreset=function(){return Promise.resolve(true);};
+  g.deletePreset=function(name){
+    var nm=String(name||"").trim();
+    if(!nm)return Promise.resolve(true);
+    return apiFetchJson("/api/presets").then(function(data){
+      var list=(data&&Array.isArray(data.presets))?data.presets:[];
+      var hit=list.find(function(x){return x&&(x.name===nm||x.file===nm);});
+      if(!hit)return true;
+      return apiFetchJson("/api/presets?file="+encodeURIComponent(hit.file),{method:"DELETE"}).then(function(r){return r?Boolean(r.ok!==false):true;});
+    });
+  };
+  g.renamePreset=function(oldName,newName){
+    var o=String(oldName||"").trim();
+    var n=String(newName||"").trim();
+    if(!o||!n)return Promise.resolve(false);
+    return apiFetchJson("/api/presets").then(function(data){
+      var list=(data&&Array.isArray(data.presets))?data.presets:[];
+      var hit=list.find(function(x){return x&&(x.name===o||x.file===o);});
+      if(!hit)return false;
+      return apiFetchJson("/api/presets/rename",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:hit.file,name:n})}).then(function(r){return r?Boolean(r.ok!==false):true;});
+    });
+  };
   g.replacePreset=function(name,preset,opts){
     var target=(!name||name==="in_use"||name===g.getLoadedPresetName())?"in_use":String(name);
     if(target!=="in_use")return Promise.resolve();
@@ -3726,9 +3760,9 @@ try{
       if(!n)return g.getLoadedPresetName();
       return list.indexOf(n)>=0?n:undefined;
     },
-    selectPreset:function(){return true;},
+    selectPreset:function(name){return g.loadPreset(name);},
     savePreset:function(){return commitPresetFromSharedState().then(function(){return true;});},
-    deletePreset:function(){return Promise.resolve(true);},
+    deletePreset:function(name){return g.deletePreset(name);},
     getPresetList:function(){
       var names=g.getPresetNames();
       var map={};
@@ -3790,8 +3824,14 @@ try{
         if(nm===name)list.splice(i,1);
       }
     },
-    isToolCallingSupported:function(){return true;},
-    canPerformToolCalls:function(){return true;}
+    isToolCallingSupported:function(){
+      var c=readRuntimeCtx();
+      return !(c&&c.presetMode==="liyuan");
+    },
+    canPerformToolCalls:function(){
+      var c=readRuntimeCtx();
+      return !(c&&c.presetMode==="liyuan");
+    }
   };
   function buildStContext(){
     var c=readRuntimeCtx();
@@ -3941,7 +3981,92 @@ try{
       },
       reloadCurrentChat:function(){return Promise.resolve();},
       clearChat:function(){return Promise.resolve();},
-      addOneMessage:function(){}
+      addOneMessage:function(){},
+      get generating(){
+        var ctxNow=readRuntimeCtx();
+        return Boolean(ctxNow&&ctxNow.streaming);
+      },
+      onlineStatus:"online",
+      getChatCompletionModel:function(){
+        var ctxNow=readRuntimeCtx();
+        var s=getSharedPresetRaw();
+        return String((ctxNow&&ctxNow.model)||(s&&(s.model||s.openai_model))||"");
+      },
+      saveChat:function(){return Promise.resolve();},
+      generate:function(type,opts){
+        var cfg=(opts&&typeof opts==="object")?Object.assign({},opts):{};
+        if(type&&typeof type==="string"&&!cfg.type)cfg.type=type;
+        if(type==="quiet"&&cfg.should_silence===undefined)cfg.should_silence=true;
+        return g.TavernHelper.generate(cfg);
+      },
+      messageFormatting:function(mes){
+        return g.formatAsDisplayedMessage(String(mes==null?"":mes));
+      },
+      updateMessageBlock:function(mesId,mesObj){
+        if(typeof mesId!=="number"||!mesObj||typeof mesObj!=="object")return;
+        return g.setChatMessage(mesObj,mesId);
+      },
+      updateReasoningUI:function(){},
+      POPUP_TYPE:{TEXT:1,CONFIRM:2,INPUT:3,DISPLAY:4},
+      POPUP_RESULT:{AFFIRMATIVE:1,NEGATIVE:0,CANCELLED:null,CUSTOM:2},
+      callGenericPopup:function(content,type,inputValue,options){
+        var pDoc=(presetHost&&presetHost.document)||g.document;
+        var pType=typeof type==="number"?type:1;
+        var defVal=inputValue==null?"":String(inputValue);
+        if(!pDoc||!pDoc.body||typeof pDoc.createElement!=="function"){
+          if(pType===3)return Promise.resolve(defVal);
+          return Promise.resolve(pType===2?1:1);
+        }
+        return new Promise(function(resolve){
+          var overlay=pDoc.createElement("div");
+          overlay.setAttribute("style","position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,0.48);display:flex;align-items:center;justify-content:center;padding:16px;");
+          var box=pDoc.createElement("div");
+          box.setAttribute("style","min-width:280px;max-width:520px;width:100%;max-height:85vh;overflow:auto;background:var(--bg-elevated,#1f1f24);color:var(--ink,#f1f1f3);border:1px solid rgba(255,255,255,0.14);border-radius:12px;padding:18px;box-shadow:0 14px 40px rgba(0,0,0,0.45);font:inherit;");
+          var body=pDoc.createElement("div");
+          body.setAttribute("style","margin-bottom:14px;line-height:1.55;word-break:break-word;");
+          if(typeof content==="string")body.innerHTML=content;
+          else if(content&&typeof content==="object"&&content.nodeType)body.appendChild(content);
+          else body.textContent=String(content==null?"":content);
+          box.appendChild(body);
+          var inputEl=null;
+          if(pType===3){
+            inputEl=pDoc.createElement("input");
+            inputEl.type="text";
+            inputEl.value=defVal;
+            inputEl.setAttribute("style","width:100%;box-sizing:border-box;padding:8px 10px;margin-bottom:14px;border-radius:6px;border:1px solid rgba(255,255,255,0.22);background:rgba(0,0,0,0.22);color:inherit;font:inherit;");
+            box.appendChild(inputEl);
+          }
+          var actions=pDoc.createElement("div");
+          actions.setAttribute("style","display:flex;justify-content:flex-end;gap:8px;");
+          var optsObj=(options&&typeof options==="object")?options:{};
+          var done=false;
+          function finish(val){
+            if(done)return;
+            done=true;
+            try{if(overlay.parentNode)overlay.parentNode.removeChild(overlay);}catch(e){}
+            resolve(val);
+          }
+          if(pType===2||pType===3||optsObj.allowVerticalScrolling===false){
+            var cancelBtn=pDoc.createElement("button");
+            cancelBtn.type="button";
+            cancelBtn.textContent=String(optsObj.cancelButton||"Cancel");
+            cancelBtn.setAttribute("style","padding:6px 14px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:transparent;color:inherit;cursor:pointer;");
+            cancelBtn.onclick=function(){finish(pType===3?null:0);};
+            actions.appendChild(cancelBtn);
+          }
+          var okBtn=pDoc.createElement("button");
+          okBtn.type="button";
+          okBtn.textContent=String(optsObj.okButton||"OK");
+          okBtn.setAttribute("style","padding:6px 14px;border-radius:6px;border:0;background:var(--accent,#c84b31);color:#fff;cursor:pointer;font-weight:600;");
+          okBtn.onclick=function(){finish(pType===3?(inputEl?inputEl.value:""):1);};
+          actions.appendChild(okBtn);
+          box.appendChild(actions);
+          overlay.appendChild(box);
+          overlay.onclick=function(ev){if(ev&&ev.target===overlay)finish(null);};
+          pDoc.body.appendChild(overlay);
+          if(inputEl&&typeof inputEl.focus==="function")inputEl.focus();
+        });
+      }
     };
   }
   if(!g.SillyTavern){

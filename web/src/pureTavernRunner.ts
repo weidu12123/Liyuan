@@ -89,6 +89,8 @@ function applySamplersToOpenAiPayload(payload: Record<string, unknown>, samplers
 export async function runPureTavernBrowserTurn(opts: {
 	userText: string;
 	reuseUserMessage?: boolean;
+	reroll?: boolean;
+	editUserText?: string;
 	notes?: string[];
 	signal: AbortSignal;
 	onStreamDelta: (fullText: string, fullThinking: string) => void;
@@ -99,6 +101,8 @@ export async function runPureTavernBrowserTurn(opts: {
 		body: JSON.stringify({
 			userText: opts.userText,
 			reuseUserMessage: opts.reuseUserMessage === true,
+			...(opts.reroll ? { reroll: true } : {}),
+			...(opts.editUserText ? { editUserText: opts.editUserText } : {}),
 		}),
 		signal: opts.signal,
 	});
@@ -363,6 +367,8 @@ export async function runPureTavernBrowserTurn(opts: {
 			thinking: rawThinking,
 			aborted,
 			reuseUserMessage: opts.reuseUserMessage === true,
+			...(opts.reroll ? { reroll: true } : {}),
+			...(opts.editUserText ? { editUserText: opts.editUserText } : {}),
 			notes: opts.notes,
 			model: prep.model,
 		}),

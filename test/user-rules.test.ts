@@ -1,77 +1,49 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { loadPresetDoc } from "../src/preset-doc.ts";
-import { loadStageMaterials } from "../src/stage/materials.ts";
-import { translatePresetToRules, translateReport } from "../src/user-rules.ts";
+import { syncCardFiles } from "../server/rest.ts";
+import { cardAgentsPath } from "../src/card-agents.ts";
 import { buildStageSystemPrompt } from "../src/stage/assemble.ts";
+import { loadStageMaterials } from "../src/stage/materials.ts";
+import { cardRulesPath } from "../src/user-rules.ts";
 import type { RpConfig } from "../src/types.ts";
 import { DEFAULT_CONFIG } from "../src/types.ts";
 
-/** 一份小而全的酒馆形状预设：历史前/后块、marker 槽位、关闭块、深度注入、末尾 assistant 预填、采样 */
-const FIXTURE = {
-	name: "测试预设",
-	temperature: 0.9,
-	top_p: 0.95,
-	prompts: [
-		{ identifier: "main", name: "主提示词", system_prompt: true, content: "你是{{char}}。", enabled: true, injection_position: 0, injection_order: 100 },
-		{ identifier: "worldInfoBefore", name: "World Info (before)", system_prompt: true, marker: true, content: "", enabled: true, injection_position: 0, injection_order: 200 },
-		{ identifier: "style", name: "文风", system_prompt: true, content: "写 800 字。称呼 {{user}} 为大人。", enabled: true, injection_position: 0, injection_order: 300 },
-		{ identifier: "chatHistory", name: "Chat History", system_prompt: true, marker: true, content: "", enabled: true, injection_position: 0, injection_order: 400 },
-		{ identifier: "cot", name: "思考引导", system_prompt: true, content: "先想后写。", enabled: true, injection_position: 0, injection_order: 500 },
-		{ identifier: "nsfw-off", name: "关闭的块", system_prompt: true, content: "不该出现", enabled: false, injection_position: 0, injection_order: 600 },
-		{ identifier: "depth-inject", name: "深度注入", system_prompt: true, content: "深度块。", enabled: true, injection_position: 1, injection_order: 100, injection_depth: 4 },
-		{ identifier: "prefill", name: "预填", role: "assistant", system_prompt: false, content: "OUTPUT <status>", enabled: true, injection_position: 0, injection_order: 900 },
-	],
-	prompt_order: [
-		{ character_id: 100001, order: [
-			{ identifier: "main", enabled: true },
-			{ identifier: "worldInfoBefore", enabled: true },
-			{ identifier: "style", enabled: true },
-			{ identifier: "chatHistory", enabled: true },
-			{ identifier: "cot", enabled: true },
-			{ identifier: "nsfw-off", enabled: false },
-			{ identifier: "depth-inject", enabled: true },
-			{ identifier: "prefill", enabled: true },
-		] },
-	],
-};
+test("syncCardFiles：停用静态转译后自动剥离历史遗留的（预设）条目，保留用户条款与世界书镜像", () => {
+	const cwd = mkdtempSync(join(tmpdir(), "liyuan-strip-preset-"));
+	process.env.LIYUAN_CODING_AGENT_DIR = join(cwd, "agentDir");
+	try {
+		mkdirSync(join(cwd, "agentDir"), { recursive: true });
+		writeFileSync(join(cwd, "card.json"), JSON.stringify({ data: { name: "冷鹰", description: "监察院使", first_mes: "你来了。" } }));
+		writeFileSync(join(cwd, "大世界.json"), JSON.stringify({ entries: [{ uid: 1, key: ["门派"], comment: "门派", content: "门派设定。", constant: true }] }));
+		writeFileSync(join(cwd, "liyuan.config.json"), JSON.stringify({ card: "card.json", userName: "怀瑾", lorebooks: ["大世界.json"] }));
 
-test("转译：块去向全对——前/后分段、宏求值、marker 跳过、关闭不进、预填丢弃、samplers 迁出", () => {
-	const doc = loadPresetDoc(FIXTURE as never, "测试预设");
-	const r = translatePresetToRules(doc, { charName: "冷鹰", userName: "怀瑾" });
+		// 1. APPEND_SYSTEM.md 仅包含旧转译产物：剥光后直接删除该空文件
+		const rulesAbs = cardRulesPath(cwd);
+		writeFileSync(rulesAbs, "# 预设提示词（预设）\n\n## 身份（预设）\n你是写手。\n", "utf8");
 
-	// 宏已求值
-	assert.ok(r.markdown.includes("你是冷鹰。"), "{{char}} 求值");
-	assert.ok(r.markdown.includes("称呼 怀瑾 为大人"), "{{user}} 求值");
-	// 分段
-	assert.ok(r.markdown.indexOf("你是冷鹰") < r.markdown.indexOf("## 以下原在聊天记录之后"), "历史前段在前");
-	assert.ok(r.markdown.includes("先想后写"), "历史后段收录");
-	assert.ok(r.markdown.includes("深度块"), "深度注入收录");
-	assert.ok(r.markdown.includes("此前从未生效"), "深度段有如注脚手架");
-	// 不该出现的
-	assert.ok(!r.markdown.includes("不该出现"), "关闭块不进产物");
-	assert.ok(!r.markdown.includes("OUTPUT"), "预填丢弃");
-	// 去向账
-	const byName = new Map(r.lines.map((l) => [l.name, l]));
-	assert.equal(byName.get("主提示词")?.action, "included");
-	assert.equal(byName.get("主提示词")?.where, "before");
-	assert.equal(byName.get("思考引导")?.where, "after", "chatHistory 之后的块归历史后段");
-	assert.equal(byName.get("关闭的块")?.action, "skipped-disabled");
-	assert.equal(byName.get("预填")?.action, "dropped-prefill");
-	assert.equal(byName.get("深度注入")?.where, "depth");
-	const marker = r.lines.find((l) => l.action === "skipped-marker");
-	assert.ok(marker && /World Info|槽位|Chat/.test(marker.name + "") || r.lines.some((l) => l.action === "skipped-marker"), "marker 槽位进报告");
-	// samplers
-	assert.deepEqual(r.samplers, { temperature: 0.9, top_p: 0.95 });
-	// 报告逐块有行
-	const report = translateReport(doc, r, "assets/presets/测试预设.json");
-	assert.ok(report.includes("逐块去向"));
-	assert.ok(report.includes("丢弃"), "预填在报告里点名");
-	assert.ok(report.includes("config.samplers"));
+		// 2. AGENTS.md 混合了用户条款 + 旧预设条目 + 世界书镜像：仅剥除预设条目
+		const agentsAbs = cardAgentsPath(cwd);
+		writeFileSync(
+			agentsAbs,
+			"# 用户档案\n\n## 自写条款\n保持古风。\n\n## 写作规则（预设）\n旧预设内容。\n\n<!-- ## 思考（预设）\n停用预设内容。\n-->\n",
+			"utf8",
+		);
+
+		const res = syncCardFiles(cwd);
+		assert.equal(res.strippedPresetEntries, true, "触发历史预设条目剥离");
+		assert.equal(existsSync(rulesAbs), false, "仅含旧预设的 APPEND_SYSTEM.md 已删除");
+		const nextAgents = readFileSync(agentsAbs, "utf8");
+		assert.ok(nextAgents.includes("## 自写条款\n保持古风。"), "用户自写条款完好保留");
+		assert.ok(!nextAgents.includes("（预设）") && !nextAgents.includes("旧预设内容") && !nextAgents.includes("停用预设内容"), "所有活动/注释的预设条目均被剥净");
+		assert.ok(nextAgents.includes("## 门派（世界书·大世界）"), "世界书蓝灯镜像照常同步");
+	} finally {
+		delete process.env.LIYUAN_CODING_AGENT_DIR;
+		rmSync(cwd, { recursive: true, force: true });
+	}
 });
 
 test("用户规矩进 system：全局在前、卡级在后、原文直通无包装", () => {

@@ -7,7 +7,6 @@ export const rest: Record<string, string> = {
 	"非法预设路径": "Invalid preset path",
 	"当前未配置预设文件": "No preset file is configured",
 	"预设文件不存在：{file}": "Preset file not found: {file}",
-	"声明模型刚失败过，稍后再试": "The declaring model just failed; try again later",
 	"不是已知的世界书文件": "Not a known lorebook file",
 	"不是有效的世界书文件（空书要先写入条目）：{path}": "Not a valid lorebook file (write an entry into an empty book first): {path}",
 	"书名无效": "Invalid lorebook name",

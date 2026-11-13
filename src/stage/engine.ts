@@ -5,8 +5,7 @@
  * 本层保留 RP 的拍级队列、稿纸、合并、媒体与旁路工作，不再自持模型循环。
  */
 
-import { basename, join } from "node:path";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { isRetryableAssistantError } from "@liyuan/ai/compat";
 
 import { applyProjectedSamplers } from "../samplers.ts";
@@ -26,7 +25,6 @@ import { readFileSync } from "node:fs";
 import { createSandboxGate, filterSandboxToolContent, sandboxGrantsFromBranch, sandboxScope, SANDBOX_GRANT_TYPE } from "../sandbox.ts";
 import { fileChangeOf } from "../activity-format.ts";
 import type { CardDeps } from "../tools/card.ts";
-import { extractDraftRules } from "../draft.ts";
 import {
 	loreFingerprint,
 	scanEntries,
@@ -37,7 +35,6 @@ import { cardDirOfChatDir, chatDataPath, chatDirOfSessionDir, chatModeOfSessionD
 import { changeChatMemory, listChatMemory, readChatMemory, searchChatMemory, writeChatMemoryDoc } from "../card-memory-tools.ts";
 import { classifyTag, scanTaggedBlocks } from "../postprocess.ts";
 import { formatRosterIndex, formatState, saveState } from "../state.ts";
-import { isBackstageText } from "../stance.ts";
 import type { LorebookEntry, WorldState } from "../types.ts";
 import {
 	buildStageInjection,
@@ -49,12 +46,10 @@ import {
 	type BranchEntryLike,
 } from "./assemble.ts";
 import {
-	assemblePresetAfter,
 	constantLoreOf,
 	loadStageConfig,
 	loadStageMaterials,
 	readStageSkill,
-	type AssembledPiece,
 	type StageMaterials,
 } from "./materials.ts";
 import {
@@ -589,9 +584,7 @@ export class StageEngine {
 	#busy = false;
 	#queue: Array<{ text: string; note?: string; onDone?: (info: StageTurnEndInfo) => void }> = [];
 	#abort: AbortController | null = null;
-	#warnedMacros = "";
 	#warnedProtocolDrop = "";
-	#lastAssemblyJson = "";
 	#workspace?: { ws: TurnWorkspace; deps: WorkspaceDeps };
 	#turnMode?: ConversationMode;
 	/** 子项目形态缓存（对话.json 只在建项目时写，按会话目录记一次即可） */
@@ -930,13 +923,6 @@ export class StageEngine {
 		// 素材现读：改卡/改预设/挂书即时生效
 		const materials = loadStageMaterials(cwd);
 		const { config, card } = materials;
-		if (materials.macroWarnings.length > 0) {
-			const key = materials.macroWarnings.join(",");
-			if (key !== this.#warnedMacros) {
-				this.#warnedMacros = key;
-				ev.onNotify?.("warning", `预设含未支持的宏（已置空处理）：${materials.macroWarnings.join("、")}`);
-			}
-		}
 
 		const model = this.#deps.getModel();
 		if (!model) {
@@ -1024,11 +1010,6 @@ export class StageEngine {
 			panelIndex = undefined;
 		}
 
-		// 旧会话遗留的戏外轮：不注预设末端模板（不按剧情模板硬写）
-		const legacyBackstage = !!lastUserText && isBackstageText(lastUserText);
-
-		// 历史后段每拍重装（{{lastusermessage}} 在此生效）：原文原序直通末端，不再拆层。
-		const phAll = legacyBackstage ? [] : (assemblePresetAfter(materials, lastUserText) ?? []);
 		// M-C2：外部插件协议条目退场（世界书/卡内嵌通道 H 类）——每套组合只播报一次
 		if (materials.protocolDrops.length > 0) {
 			const key = materials.protocolDrops.map((d) => `${d.family}:${d.title}`).join("|");
@@ -1041,9 +1022,6 @@ export class StageEngine {
 				);
 			}
 		}
-
-		// 装配报告落盘（PLAN §5.3 可视化）：装载期静态面 + 本拍历史后段；内容变了才写
-		this.#writeAssemblyReport(cwd, materials, phAll);
 
 		// M-A 工具组 + skill_read（M-R2 名称制：文件包+进口包非空才挂——不凭空点名）。
 		// 回合工作区 = 正文工件的落点；字数目标在此提取一次（数据，供末端注入）。
@@ -1089,7 +1067,7 @@ export class StageEngine {
 		const draftStore = new DraftStore(draftDirectory(cwd, sm.getSessionDir?.(), sm.getSessionId()), ws.id);
 		const previousDraft = new PreviousDraftEditor(() => sm.getBranch() as BranchEntryLike[], draftDirectory(cwd, sm.getSessionDir?.(), sm.getSessionId()));
 		const wsDeps: WorkspaceDeps = {
-			rules: extractDraftRules([...materials.presetRuleTexts, ...phAll.map((b) => b.text)]),
+			rules: {},
 			userName: config.userName,
 			charName: card.name,
 			file: draftStore.file,
@@ -1110,9 +1088,6 @@ export class StageEngine {
 			userRules,
 			chatMemoryIndex,
 			cardAgents: effectiveCardAgents,
-			// 预设装配段：原文原序，marker 已按预设作者的位置填入梨园材料
-			presetBefore: materials.presetBefore.map((p) => p.text),
-			filledMarkers: materials.filledMarkers,
 			tools: tools.length > 0,
 			// MCP 外设索引进 system（不进每拍注入）：会话内字节稳定，不破前缀缓存。
 			// 与旧 director.ts 同一位置——工具清单里有 mcp__ 工具，这里说明它们是什么。
@@ -1127,7 +1102,6 @@ export class StageEngine {
 			languageMismatch,
 			cardAgentsActive: effectiveCardAgents.trim().length > 0,
 			panelIndex,
-			...(wsDeps.rules.wordRange ? { wordRange: wsDeps.rules.wordRange } : {}),
 			loreIndex: formatLoreIndex(effectiveEntries),
 			rosterIndex,
 			...(memoryRecall ? { memoryRecall } : {}),
@@ -1142,27 +1116,12 @@ export class StageEngine {
 		// agent 模式的项目状态块（docs/PLAN-AGENT-CODING.md §六）：与扮演同一份数据，多带稿子目录（不带正文）；每次装配现读目录。
 		const agentStateBlock = (): string => buildAgentStateBlock({ state, rosterIndex, summary, residentSummary, files: listStoryFiles(storyDir!) });
 
-		// 末端消息 = 梨园数据块 + 本拍用户原话 + 预设 after 段（各按自己的 role）。
-		// 顺序要紧：用户当拍的话必须落在**梨园数据块之后**。数据块压在提问之后时，模型会把提问
-		// 读成历史里的旧话，于是既不检索也不正面回应——8/03 实测：同一提问，挪到注入之后立刻触发 lorebook_search。
-		// ⚠ after 段排在原话之后（实测最长把原话推离生成点 9190 字，双人成行）：那是预设作者指定的
-		// 位置，且 after 段是元指令（格式/CoT 开头/预填）而非剧情数据，与 8/03 那批被误读成旧话的数据不同性质。
+		// 末端消息 = 梨园数据块 + 本拍用户原话。
+		// 顺序要紧：用户当拍的话必须落在梨园数据块之后。
 		const endsWithUser = history[history.length - 1]?.role === "user";
 		const past = endsWithUser ? history.slice(0, -1) : history;
 		const tailText = endsWithUser ? `${injection}\n\n${history[history.length - 1].text}` : injection;
 
-		// 预设 after 段（酒馆 chatHistory 槽位之后的条目）：按作者声明的 role 落成真实消息。
-		// 降级规则照抄酒馆 src/prompt-converters.js，不是梨园自创：
-		//  ① packages/ai 的消息只有 user/assistant（system 只走 streamFn 的独立参数）；酒馆
-		//     convertClaudeMessages 同样只把**开头连续**的 system 收进 system 参数，其后
-		//     role==='system' 一律改成 'user'——故历史之后的 system 块在此作 user。
-		//  ② 连续同角色合并成一条（convertClaudeMessages 的 mergedMessages：轮次只支持 user/assistant）。
-		//  ③ 末条 assistant 是酒馆的预填位（addAssistantPrefix）。**梨园不要预填，整块丢弃**
-		//     （8/23 用户定案）。降级成 user 是假动作：role 变了，那段字仍顶在生成点前，模型照样
-		//     接着写——实测预填 `OUTPUT <think_fox~>` 让 provider 把整段输出（思维链+正文+状态栏）
-		//     判成思维链切进 reasoning_content，text 通道只剩切分边界后的残字，正文全丢。
-		//     丢弃后生成点前是预设自己的末块，模型从头写、自己打标签，正文回到 text 通道。
-		//     认的是**协议角色+位置**（历史之后的末条 assistant＝预填位），不认任何标签名（铁律三）。
 		const asUser = (text: string, timestamp = 0) => ({ role: "user", content: [{ type: "text", text }], timestamp });
 		const asAssistant = (text: string, timestamp = 0) => ({
 			role: "assistant",
@@ -1177,20 +1136,6 @@ export class StageEngine {
 			stopReason: "stop",
 			timestamp,
 		});
-		const tailRuns: Array<{ role: "user" | "assistant"; text: string }> = [
-			{ role: "user", text: tailText },
-			...phAll
-				.filter((p) => p.text.trim().length > 0)
-				.map((p) => ({ role: p.role === "assistant" ? ("assistant" as const) : ("user" as const), text: p.text })),
-		];
-		// 预填位丢弃：末尾连续的 assistant 块整块不发（tailRuns[0] 恒为 user，循环不会掏空）。
-		while (tailRuns.length > 0 && tailRuns[tailRuns.length - 1].role === "assistant") tailRuns.pop();
-		const tailMerged: Array<{ role: "user" | "assistant"; text: string }> = [];
-		for (const run of tailRuns) {
-			const prev = tailMerged[tailMerged.length - 1];
-			if (prev && prev.role === run.role) prev.text = `${prev.text}\n\n${run.text}`;
-			else tailMerged.push({ ...run });
-		}
 
 		const messages: unknown[] = [
 			// M4 前情提要：被 rp-summary 覆盖的早期剧情在此回读（历史里那段已整体不存在）。
@@ -1213,7 +1158,7 @@ export class StageEngine {
 					]
 				: []),
 			...past.map((m) => (m.role === "user" ? asUser(m.text) : asAssistant(m.text))),
-			...tailMerged.map((r) => (r.role === "user" ? asUser(r.text, Date.now()) : asAssistant(r.text, Date.now()))),
+			asUser(tailText, Date.now()),
 		];
 
 		const { apiKey, headers } = await this.#deps.getAuth(model);
@@ -2390,39 +2335,6 @@ export class StageEngine {
 			return undefined;
 		} finally {
 			if (timer) clearTimeout(timer);
-		}
-	}
-
-	/** 装配报告写盘（.liyuan/preset-assembly.json）——每块预设去向可查；内容不变不写 */
-	#writeAssemblyReport(cwd: string, materials: StageMaterials, phAfter: AssembledPiece[]): void {
-		try {
-			const chars = (a: AssembledPiece[]) => a.reduce((n, p) => n + p.text.length, 0);
-			const report = {
-				preset: materials.presetDoc?.name ?? null,
-				kind: materials.presetDoc?.kind ?? null,
-				/** 送模字数：历史前段 + 本拍历史后段（深度注入数据层保真，尚未消费） */
-				chars: {
-					before: chars(materials.presetBefore),
-					after: chars(phAfter),
-					depth: chars(materials.presetDepth),
-				},
-				filledMarkers: [...materials.filledMarkers],
-				// 刀3：卡常驻内容的来源——file=卡 AGENTS.md（chars 是文件字数）；projection=自动投影
-				cardAgents: materials.cardAgents.trim()
-					? { source: "file", chars: materials.cardAgents.length }
-					: { source: "projection" },
-				// M-C2：世界书/卡内嵌通道被判死的外部插件协议条目（判据可回溯）
-				protocolDrops: materials.protocolDrops,
-				blocks: materials.presetAssembly,
-			};
-			const json = JSON.stringify(report, null, "\t");
-			if (json === this.#lastAssemblyJson) return;
-			this.#lastAssemblyJson = json;
-			const outDir = join(cwd, ".liyuan");
-			mkdirSync(outDir, { recursive: true });
-			writeFileSync(join(outDir, "preset-assembly.json"), json, "utf8");
-		} catch {
-			// 报告写失败不影响演出
 		}
 	}
 

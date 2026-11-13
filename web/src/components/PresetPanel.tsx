@@ -117,14 +117,14 @@ const LOCAL_PROMPT_SLOTS: PromptSlotMeta[] = [
 		title: () => t("局部系统提示词"),
 		file: "APPEND_SYSTEM.md", // i18n-ignore
 		effect: "beat",
-		hint: () => t("当前角色卡的系统提示词（APPEND_SYSTEM.md），仅对本卡生效；预设转译的身份/破限条目也会落入此处。"),
+		hint: () => t("当前角色卡的系统提示词（APPEND_SYSTEM.md），仅对本卡生效。"),
 	},
 	{
 		scope: "agents",
 		title: () => t("提示词"),
 		file: "AGENTS.md", // i18n-ignore
 		effect: "beat",
-		hint: () => t("当前角色卡的常驻提示词档案（AGENTS.md），包含角色设定、预设写作规则与挂载世界书常驻条目。"),
+		hint: () => t("当前角色卡的常驻提示词档案（AGENTS.md），包含角色设定与挂载世界书常驻条目。"),
 	},
 ];
 
@@ -179,7 +179,7 @@ function diffPreview(base: string, mine: string): string {
 function SourceBadge({ entry }: { entry: PromptEntry }) {
 	const s = entry.source;
 	if (!s) return null;
-	if (s.kind === "preset") return <span className="preset-src-badge preset" title={t("预设转译条目：随预设装载/开关自动更新")}>{t("预设")}</span>;
+	if (s.kind === "preset") return <span className="preset-src-badge preset">{t("预设")}</span>;
 	return (
 		<span className="preset-src-badge lore" title={t("挂载书常驻条目的镜像：挂上就有、卸下就没、书改了跟着改")}>
 			{t("世界书·{book}", { book: s.book })}
@@ -211,8 +211,7 @@ export function PresetPanel({
 		card: false,
 		agents: false,
 	});
-	const [openAgentsCats, setOpenAgentsCats] = useState<Record<"preset" | "lorebook" | "custom", boolean>>({
-		preset: false,
+	const [openAgentsCats, setOpenAgentsCats] = useState<Record<"lorebook" | "custom", boolean>>({
 		lorebook: false,
 		custom: false,
 	});
@@ -269,17 +268,11 @@ export function PresetPanel({
 
 	// ---------------- 预设库：装载 / 保存（2026-09-14 用户定序：先编辑原版，再装载处理） ----------------
 
-	/** 装载：设为活动预设（config.preset）——服务端随即按开关转译进这张卡的提示词文件（首次约 30 秒，问一次模型）。
-	 *  重新装载（活动预设）：丢弃草稿与这份预设的声明缓存，全部重问一次模型后重落条目。 */
-	const loadPreset = (file: string, redeclare = false) =>
+	/** 装载：设为活动预设（config.preset） */
+	const loadPreset = (file: string) =>
 		run(async () => {
-			await apiPost("/api/presets/select", { file, ...(redeclare ? { redeclare: true } : {}) });
-			toast(
-				"info",
-				redeclare
-					? t("已重新装载——重问一次模型（约 30 秒）后落新条目")
-					: t("已装载并转译——在上方预设库里展开该预设拨开关即自动更新"),
-			);
+			await apiPost("/api/presets/select", { file });
+			toast("info", t("已装载预设"));
 			files.reload();
 			rules.reload();
 			agents.reload();
@@ -431,7 +424,7 @@ export function PresetPanel({
 				"/api/presets/import",
 				{ name: file.name.replace(/\.json$/i, ""), json },
 			);
-			toast("info", t("已导入预设库（{blocks} 条 · 启用 {enabled}）——已设为活动预设并转译", { blocks: r.blockCount, enabled: r.enabledCount }));
+			toast("info", t("已导入并设为活动预设（{blocks} 条 · 启用 {enabled}）", { blocks: r.blockCount, enabled: r.enabledCount }));
 			files.reload();
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
@@ -626,12 +619,6 @@ export function PresetPanel({
 							<div className="agents-subcat-list">
 								{(
 									[
-										{
-											key: "preset" as const,
-											label: t("预设"),
-											items: entries.filter((e) => e.source?.kind === "preset"),
-											emptyHint: t("暂无预设转译条目。"),
-										},
 										{
 											key: "lorebook" as const,
 											label: t("世界书"),
@@ -885,24 +872,21 @@ export function PresetPanel({
 												</div>
 											</button>
 											<div className="preset-block-acts">
-												<button
-													type="button"
-													className="act"
-													disabled={busy}
-													title={
-														isActive
-															? t("丢弃草稿与声明缓存，重新编译并重问一次模型（约 30 秒）")
-															: undefined
-													}
-													onClick={() => void loadPreset(p.file, isActive)}
-												>
-													{isActive ? t("重新装载") : t("装载")}
-												</button>
+												{!isActive && (
+													<button
+														type="button"
+														className="act"
+														disabled={busy}
+														onClick={() => void loadPreset(p.file)}
+													>
+														{t("装载")}
+													</button>
+												)}
 												{isActive && (
 													<ConfirmButton
 														className="act"
 														disabled={busy}
-														confirmText={t("确认卸载（卡文件里的预设条目一并移除，预设文件保留）")}
+														confirmText={t("确认卸载（预设文件保留在库里）")}
 														onConfirm={() => void unloadPreset()}
 													>
 														{t("卸载")}
@@ -1017,7 +1001,7 @@ export function PresetPanel({
 													<>
 														{isDirtyPreset && (
 															<div className="field-hint preset-dirty-hint">
-																{t("有未保存修改：已转译、已用于对话；点「保存」写回预设文件。")}
+																{t("有未保存修改：点「保存」写回预设文件。")}
 															</div>
 														)}
 														{visibleBlocks.length === 0 && (
@@ -1074,7 +1058,7 @@ export function PresetPanel({
 															);
 														})}
 														<div className="field-hint">
-															{t("拨开关＝编辑这份预设的原版选项：活动预设进草稿（「保存」落盘）并即时重转译；未装载的直接写文件，装载时生效。")}
+															{t("拨开关＝编辑这份预设的原版选项：活动预设暂存草稿（「保存」落盘），未装载的直接写文件。")}
 														</div>
 													</>
 												)}

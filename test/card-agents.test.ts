@@ -70,7 +70,7 @@ test("AGENTS.md 在场 ⇒ 注入侧卡末端指令让位（B8）", () => {
 	assert.ok(noFile.includes("【卡作者末端指令】"), "无档案时注入照旧");
 });
 
-test("端到端：AGENTS.md 文件存在 ⇒ materials 读到 + marker 材料让位；指纹变化即失效", () => {
+test("端到端：AGENTS.md 文件存在 ⇒ materials 读到 + system 投影让位；指纹变化即失效", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "liyuan-agents-"));
 	process.env.LIYUAN_CODING_AGENT_DIR = join(cwd, "agentDir");
 	try {
@@ -81,13 +81,15 @@ test("端到端：AGENTS.md 文件存在 ⇒ materials 读到 + marker 材料让
 		// 无档案：投影路径
 		const m1 = loadStageMaterials(cwd);
 		assert.equal(m1.cardAgents, "");
-		assert.equal(m1.markerMaterials.charDescription, "公房里的院使", "无档案时 marker 照常交货");
+		const sp1 = buildStageSystemPrompt({ card: m1.card, config: m1.config, constantLore: [], cardAgents: m1.cardAgents, tools: false });
+		assert.ok(sp1.includes("公房里的院使"), "无档案时卡描述投影在场");
 
 		// 建档案：文件为准
 		writeFileSync(cardAgentsPath(cwd), "# 你扮演的角色：冷鹰\n档案版。", "utf8");
 		const m2 = loadStageMaterials(cwd);
 		assert.ok(m2.cardAgents.includes("档案版。"), "档案读到");
-		assert.equal(m2.markerMaterials.charDescription, undefined, "档案在场时 marker 卡字段让位（不双份）");
+		const sp2 = buildStageSystemPrompt({ card: m2.card, config: m2.config, constantLore: [], cardAgents: m2.cardAgents, tools: false });
+		assert.ok(sp2.includes("档案版。") && !sp2.includes("公房里的院使"), "档案在场时卡投影让位（不双份）");
 	} finally {
 		delete process.env.LIYUAN_CODING_AGENT_DIR;
 		rmSync(cwd, { recursive: true, force: true });

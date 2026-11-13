@@ -13,10 +13,7 @@ import {
 	type BranchEntryLike,
 } from "../src/stage/assemble.ts";
 import type { DisplayRule } from "../src/cardfront.ts";
-import { extractDraftRules } from "../src/draft.ts";
-import { assemblePresetAfter, constantLoreOf, loadStageMaterials } from "../src/stage/materials.ts";
-import { declarePieces, assembleForDeclare, parseDeclareResponse, translatePresetWithDeclaration } from "../src/preset-declare.ts";
-import { renderForModel } from "../src/prompt-entries.ts";
+import { constantLoreOf, loadStageMaterials } from "../src/stage/materials.ts";
 import { defaultState } from "../src/state.ts";
 import { DEFAULT_CONFIG, type RpConfig } from "../src/types.ts";
 
@@ -184,39 +181,19 @@ const card = {
 };
 const config: RpConfig = { ...DEFAULT_CONFIG, userName: "沈舟" };
 
-test("system prompt：marker 归位——材料真进了预设槽位，梨园不再按自己版式重出一遍", () => {
+test("system prompt：纯净底座——卡字段按自己版式出，无档案时不双份，人设为空时占位到位", () => {
 	const rich = { ...card, description: "云澜是师姐。", personality: "冷。", scenario: "山门外。" };
-	const filledCase = buildStageSystemPrompt({
-		card: rich,
-		config,
-		constantLore: [],
-		presetBefore: ["【预设槽位里的卡描述】云澜是师姐。"],
-		filledMarkers: new Set(["charDescription", "charPersonality", "personaDescription"]),
-	});
-	assert.ok(filledCase.includes("# 用户扮演：沈舟"), "用户是谁无条件出——名字只有这一条通道（消息流是裸 role:user）");
-	assert.ok(!filledCase.includes("（沈舟 的具体形象由用户在剧情中自行呈现）"), "人设正文已被槽位收走，此处不重复");
-	assert.ok(!filledCase.includes("## 性格"), "charPersonality 已归位");
-	assert.ok(filledCase.includes("## 当前场景"), "scenario 没归位 → 梨园兜底补上，卡内容不丢");
+	const noFile = buildStageSystemPrompt({ card: rich, config, constantLore: [] });
+	assert.ok(noFile.includes("# 你扮演的角色：云澜") && noFile.includes("云澜是师姐。"), "角色描述在场");
+	assert.ok(noFile.includes("## 性格\n冷。"), "性格在场");
+	assert.ok(noFile.includes("## 当前场景\n山门外。"), "场景在场");
+	assert.ok(noFile.includes("# 用户扮演：沈舟"), "用户身份无条件出");
 
-	const none = buildStageSystemPrompt({ card: rich, config, constantLore: [], presetBefore: ["旧格式预设无 marker。"] });
-	assert.ok(none.includes("# 你扮演的角色：云澜") && none.includes("云澜是师姐。"), "一个槽位都没归位时全走兜底版式");
-	assert.ok(none.includes("# 用户扮演："), "人设兜底在场");
-});
-
-/**
- * 「用户身份整段消失」的回归（2026-09-02）：预设**声明**了 personaDescription 槽位、
- * 但人设正文为空 ⇒ 槽位无料什么都没送。此时兜底必须照常补，否则模型永远不知道用户是谁。
- * 判据一旦退回「声明过就算数」，这条立刻红。
- */
-test("system prompt：预设声明了人设槽位却没料时，用户身份仍无条件到位", () => {
 	const emptyPersona: RpConfig = { ...DEFAULT_CONFIG, userName: "沈舟", userPersona: "" };
-	// filledMarkers 只收真交了料的 ⇒ 空人设的 personaDescription 不在其中
 	const sys = buildStageSystemPrompt({
 		card,
 		config: emptyPersona,
 		constantLore: [],
-		presetBefore: ["【预设正文】"],
-		filledMarkers: new Set(["charDescription"]),
 	});
 	assert.ok(sys.includes("# 用户扮演：沈舟"), "名字到位");
 	assert.ok(sys.includes("（沈舟 的具体形象由用户在剧情中自行呈现）"), "人设为空时占位到位");
@@ -283,20 +260,7 @@ test("detectsLanguageMismatch：中文目标才判、样本要够长", () => {
 
 // ---------------- 素材装载 ----------------
 
-/** 装载态的转译产物（与 server/rest.ts syncPresetTranslation 同一条纯函数链）：全部段落按「拿不准一律留」落写作条目 */
-const translatedOf = (m: ReturnType<typeof loadStageMaterials>) => {
-	const doc = m.presetDoc!;
-	const macro = { charName: m.card.name, userName: m.config.userName };
-	const pieces = declarePieces(assembleForDeclare(doc, macro));
-	const parsed = parseDeclareResponse("[]", pieces);
-	return translatePresetWithDeclaration(
-		doc,
-		{ version: 1, preset: doc.name, card: m.card.name, createdAt: "2026-09-12T00:00:00.000Z", entries: parsed.entries },
-		macro,
-	);
-};
-
-test("loadStageMaterials：装载的预设不直接进提示词——文档在（采样/名字），装配段空；宏链经转译进条目", () => {
+test("loadStageMaterials：第 1 步清零态——保留 presetDoc（采样与正则），不直接装配或写入预设文本", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "liyuan-mat-"));
 	try {
 		writeFileSync(
@@ -307,9 +271,8 @@ test("loadStageMaterials：装载的预设不直接进提示词——文档在�
 			join(cwd, "preset.json"),
 			JSON.stringify({
 				blocks: [
-					{ id: "s1", channel: "system", enabled: true, content: "{{setvar::tone::清冷}}文风基调：{{getvar::tone}}。" },
-					{ id: "s2", channel: "system", enabled: false, content: "不该出现" },
-					{ id: "p1", channel: "postHistory", enabled: true, content: "回应用户，保持{{getvar::tone}}。" },
+					{ id: "s1", channel: "system", enabled: true, content: "文风基调：清冷。" },
+					{ id: "p1", channel: "postHistory", enabled: true, content: "回应用户。" },
 				],
 				samplers: { temperature: 0.9 },
 			}),
@@ -323,131 +286,31 @@ test("loadStageMaterials：装载的预设不直接进提示词——文档在�
 		const m = loadStageMaterials(cwd);
 		assert.equal(m.card.name, "云澜");
 		assert.equal(m.presetDoc?.kind, "rp", "旧梨园格式仍能读");
+		assert.equal(m.presetDoc?.name, "preset", "预设名取文件名");
 		assert.equal(m.presetDoc?.samplers.temperature, 0.9, "采样参数从装载的预设取");
-		assert.equal(m.presetActive, false, "装载态不直接喂：模型看的是转译进卡文件的条目");
-		assert.deepEqual(m.presetBefore, []);
-		assert.equal(assemblePresetAfter(m, "我上前行礼。"), undefined, "历史后段随转译并入常驻，不再每拍重装");
-		assert.equal(m.macroWarnings.length, 0);
 		assert.equal(constantLoreOf(m).length, 0);
-
-		// 转译产物：setvar/getvar 跨块生效、历史后段照样看得到前面块设的变量、关闭块不出现
-		const t = translatedOf(m).agentsSection;
-		assert.ok(t.includes("文风基调：清冷"), "setvar/getvar 链跨块生效");
-		assert.ok(t.includes("保持清冷"), "历史后段照样看得到前面块设的变量");
-		assert.ok(!t.includes("不该出现"), "预设里关着的块不落任何形态");
-	} finally {
-		rmSync(cwd, { recursive: true, force: true });
-	}
-});
-
-test("loadStageMaterials：启用块全量成条目——没有块被偷偷扔掉；进提示词走 cardAgents 那一份", () => {
-	const cwd = mkdtempSync(join(tmpdir(), "liyuan-pol-"));
-	try {
-		writeFileSync(join(cwd, "card.json"), JSON.stringify({ data: { name: "云澜", first_mes: "你来了。" } }));
-		writeFileSync(
-			join(cwd, "preset.json"),
-			JSON.stringify({
-				blocks: [
-					{ id: "style", channel: "system", enabled: true, content: "文风：冷而克制，短句为主。" },
-					{ id: "pol", channel: "system", enabled: true, content: '词汇黑名单 = { "闪过", "一丝" }' },
-				],
-				samplers: {},
-			}),
-		);
-		writeFileSync(
-			join(cwd, "liyuan.config.json"),
-			JSON.stringify({ card: "card.json", preset: "preset.json", userName: "沈舟" }),
-		);
-		mkdirSync(join(cwd, ".liyuan"), { recursive: true });
-
-		const m = loadStageMaterials(cwd);
-		assert.deepEqual(m.presetBefore, [], "不直接喂");
-		const t = translatedOf(m);
-		assert.equal(t.lines.filter((l) => l.action === "agents").length, 2, "两块都在——用户开着的块一个不扔");
 
 		const sp = buildStageSystemPrompt({
 			card: m.card,
 			config: m.config,
-			constantLore: [],
-			cardAgents: renderForModel(t.agentsSection),
+			constantLore: constantLoreOf(m),
+			userRules: m.userRules,
+			cardAgents: m.cardAgents,
 		});
-		assert.ok(sp.includes("文风：冷而克制"), "文风块在场");
-		assert.ok(sp.includes("词汇黑名单"), "纪律块也在场——判死改判归用户，梨园不代劳");
+		assert.ok(!sp.includes("文风基调：清冷"), "第 1 步已解除静态转译与直通拼接，预设文本不进 system");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
-test("无预设＝真的无预设（刀1）：config.preset 空 → 零兜底、零主权句、零字数行", () => {
+test("无预设＝真的无预设：config.preset 空 → presetDoc 为 null", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "liyuan-def-"));
 	try {
 		writeFileSync(join(cwd, "card.json"), JSON.stringify({ data: { name: "云澜", first_mes: "你来了。" } }));
 		writeFileSync(join(cwd, "liyuan.config.json"), JSON.stringify({ card: "card.json", userName: "沈舟" }));
 
 		const m = loadStageMaterials(cwd);
-		assert.equal(m.presetDoc, null, "默认预设已删除，无预设时 presetDoc 为 null");
-		assert.equal(m.presetActive, false, "presetActive 为假");
-		assert.deepEqual(m.presetBefore, [], "零装配段");
-		const resident = m.presetBefore.map((p) => p.text).join("\n");
-		assert.ok(!resident.includes("绝不替"), "主权硬边界句不在场（吃掉 39~47% 思考的来源，PLAN-AGENT-SLOTS §三）");
-		const rules = extractDraftRules(m.presetRuleTexts);
-		assert.equal(rules.wordRange, undefined, "没有预设就没有字数来源，不补兜底");
-
-		// 用户预设在场：文档照常装载（presets/ 删除不影响用户预设路径），正文经转译进条目
-		writeFileSync(
-			join(cwd, "preset.json"),
-			JSON.stringify({ name: "用户预设", samplers: {}, blocks: [{ id: "u1", channel: "system", enabled: true, content: "用户自己的文风。" }] }),
-		);
-		writeFileSync(
-			join(cwd, "liyuan.config.json"),
-			JSON.stringify({ card: "card.json", preset: "preset.json", userName: "沈舟" }),
-		);
-		const m2 = loadStageMaterials(cwd);
-		assert.equal(m2.presetDoc?.name, "preset", "预设名取文件名，不取文件里写的 name");
-		assert.deepEqual(m2.presetBefore, [], "装载态不直接喂");
-		assert.ok(translatedOf(m2).agentsSection.includes("用户自己的文风"), "用户预设正文经转译在场");
-	} finally {
-		rmSync(cwd, { recursive: true, force: true });
-	}
-});
-
-test("预设原文直通：句级过滤退场，验算行也照进条目", () => {
-	const cwd = mkdtempSync(join(tmpdir(), "liyuan-audit-"));
-	try {
-		writeFileSync(join(cwd, "card.json"), JSON.stringify({ data: { name: "云澜", description: "师姐" } }));
-		writeFileSync(
-			join(cwd, "preset.json"),
-			JSON.stringify({
-				name: "p",
-				samplers: {},
-				blocks: [
-					{
-						id: "style",
-						name: "文风",
-						channel: "system",
-						role: "system",
-						enabled: true,
-						// 文风块夹带验算指令：块级判定会整块留下（不是纪律块），句级要摘掉那一行
-						content: "<style>\n- 以直接对白为主。\n- 每段写完后自检是否出现禁用句式。\n</style>",
-					},
-					{
-						id: "wc",
-						name: "字数",
-						channel: "system",
-						role: "system",
-						enabled: true,
-						content: "正文字数 800-1200 字。",
-					},
-				],
-			}),
-		);
-		writeFileSync(join(cwd, "liyuan.config.json"), JSON.stringify({ card: "card.json", preset: "preset.json" }));
-
-		const m = loadStageMaterials(cwd);
-		const writing = translatedOf(m).agentsSection;
-		assert.ok(writing.includes("以直接对白为主"), "文风指令原文直通");
-		assert.ok(writing.includes("自检"), "句级过滤已退场——预设作者写的每一行都照进条目（铁律一）");
-		assert.ok(writing.includes("800-1200"), "字数规则原文照进条目");
+		assert.equal(m.presetDoc, null, "无预设时 presetDoc 为 null");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}

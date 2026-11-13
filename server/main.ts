@@ -137,7 +137,6 @@ import {
 	thinkingLevelOfEntry,
 	writeMaybeGzip,
 	type CurrentModelInfo,
-	type PresetSyncResult,
 	type RestHost,
 } from "./rest.ts";
 
@@ -1911,9 +1910,8 @@ const restHost: RestHost = {
 		resyncAll();
 	},
 	/** 身份/配置/世界书挂载等：走扩展 /rprefresh，不整会话 reload */
-	async softRefreshConfig(opts?: { reprocessPreset?: boolean }) {
-		// 预设装载态同步（装载/卸载/拨开关/保存/还原/重新装载都经这里）：先把（预设）条目写进卡文件，再刷新装配
-		await syncPresetNow(opts?.reprocessPreset === true);
+	async softRefreshConfig() {
+		syncCardFilesNow();
 		if (session.isStreaming) {
 			// 流式中改设定：排队到本轮结束，避免与 prompt 抢通道
 			void session
@@ -1938,10 +1936,7 @@ const restHost: RestHost = {
 	async switchToCard(opts?: { switchSession?: boolean }) {
 		await btw?.syncProject();
 		refreshNamesFromConfig(); // rest.ts 已写盘新 card，先让会话过滤对准新卡
-		// 换卡：装载中的预设要按新卡（宏按卡求值）重新落条目；声明全局留档（assets/presets/.liyuan/），
-		// 换卡不再重复问模型。后台跑，不挡切会话：链条自带串行（presetSyncChain）与跑完通知；
-		// 开场白来自卡本体，不吃预设条目，紧接着的第一拍万一赶在转译落盘前，下一拍现读即生效。
-		void syncPresetNow();
+		syncCardFilesNow();
 		// 清卡缓存：换卡后列表必须按新 cardPath 重读 rp-card
 		cardCache.clear();
 		const frame = await listSessions();
@@ -2334,54 +2329,17 @@ const restHost: RestHost = {
 };
 
 /**
- * 预设装载态同步（rest.ts syncPresetTranslation）：装载即转译、改开关即转译、卸载即剥净。
- * 失败只通知不抛出——配置刷新不能因为旁路模型断供而卡死；产物有变/首次声明才提示。
+ * 配置刷新时的卡文件对账：清理旧预设残留条目并同步世界书常驻镜像。
  */
-let presetSyncChain: Promise<PresetSyncResult | undefined> = Promise.resolve(undefined);
-const syncPresetNow = (reprocess = false): Promise<PresetSyncResult | undefined> => {
-	presetSyncChain = presetSyncChain.then(async () => {
-		try {
-			const cur = sideEntryOf()?.model ?? restHost.listModels().current;
-			const { preset: r, lore } = await syncCardFiles(
-				cwd,
-				{
-					runSideText: restHost.runSideText,
-					modelLabel: cur ? `${cur.provider}/${cur.id}` : undefined,
-				},
-				{ reprocess },
-			);
-			if (lore.state === "written") {
-				broadcast({ type: "notify", level: "info", text: t("卡档案已同步世界书常驻条目：{n} 条", { n: lore.entries }) });
-			}
-			if (r.declareError) {
-				broadcast({
-					type: "notify",
-					level: "error",
-					text: t("预设「{preset}」声明失败（{pending} 段先按保守方式全部保留）：{error}", { preset: r.preset, pending: r.pending, error: r.declareError }),
-				});
-			}
-			if (r.state === "written" && r.preset) {
-				broadcast({
-					type: "notify",
-					level: "info",
-					text: t("预设「{preset}」已转译：活动条目 {active} 条、停用 {disabled} 条{declared}", {
-						preset: r.preset,
-						active: r.active,
-						disabled: r.disabled,
-						declared: r.declared ? t("（本次声明 {n} 段）", { n: r.declared }) : "",
-					}),
-				});
-			}
-			if (r.state === "stripped") {
-				broadcast({ type: "notify", level: "info", text: t("预设已卸载：卡文件里的（预设）条目已移除") });
-			}
-			return r;
-		} catch (err) {
-			broadcast({ type: "notify", level: "error", text: t("预设同步失败：{msg}", { msg: err instanceof Error ? err.message : String(err) }) });
-			return undefined;
+const syncCardFilesNow = (): void => {
+	try {
+		const { lore } = syncCardFiles(cwd);
+		if (lore.state === "written") {
+			broadcast({ type: "notify", level: "info", text: t("卡档案已同步世界书常驻条目：{n} 条", { n: lore.entries }) });
 		}
-	});
-	return presetSyncChain;
+	} catch (err) {
+		broadcast({ type: "notify", level: "error", text: t("卡档案同步失败：{msg}", { msg: err instanceof Error ? err.message : String(err) }) });
+	}
 };
 
 // 启动时：liyuan.agent.json → models.json，重绑模型 + 应用思考档（配置 → 当前生效）

@@ -12,7 +12,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "n
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveCardSpace } from "../cardspace.ts";
 
-import { loadCardFile, applyMacros, readCardRawJson } from "../card.ts";
+import { loadCardFile, readCardRawJson } from "../card.ts";
 import { promptRules, extractRegexScripts, type DisplayRule } from "../cardfront.ts";
 import {
 	applyDisabledLore,
@@ -30,12 +30,6 @@ import { renderForModel } from "../prompt-entries.ts";
 import { CARD_AGENTS_FILE } from "../card-agents.ts";
 import { stripMvuRuleEntries } from "../mvu.ts";
 import { extractAuthorScripts } from "../authorScripts.ts";
-import {
-	type AssembledPiece,
-	type AssembleReportItem,
-	type DepthPiece,
-	type MarkerMaterials,
-} from "../preset-assemble.ts";
 import { loadPresetDoc, type PresetDoc } from "../preset-doc.ts";
 import { resolveConfigPath } from "../paths.ts";
 import { DEFAULT_CONFIG, type CharacterCard, type LorebookEntry, type RpConfig } from "../types.ts";
@@ -45,12 +39,6 @@ import { DEFAULT_CONFIG, type CharacterCard, type LorebookEntry, type RpConfig }
  * 这些是用户要看的产出（咪咪点评/选择框/变量面板），不是脚手架。
  */
 const FORMAT_STACK_TAGS = ["w2g", "catsay", "UpdateVariable", "JSONPatch", "Analysis", "draft_notes", "wfeeling"];
-
-/**
- * 预设装配产物的一片。marker 槽位填的是梨园材料（卡/世界书/人设的原文），
- * 预设块填的是宏求值后的原文——两者都不加 harness 引导语。
- */
-export type { AssembledPiece } from "../preset-assemble.ts";
 
 export interface StageMaterials {
 	config: RpConfig;
@@ -64,35 +52,13 @@ export interface StageMaterials {
 	cardAgentsRaw?: string;
 	/** 预设文档（原文 + 归一条目）；null＝未配置且无默认预设 */
 	presetDoc: PresetDoc | null;
-	/** 装配产物：chatHistory 槽位之前的片段（含已归位的 marker 材料），按预设作者原序 */
-	presetBefore: AssembledPiece[];
-	/** injection_position=1 的深度注入片段（数据层保真；消费待后续里程碑接入） */
-	presetDepth: DepthPiece[];
-	/**
-	 * **真交了料**的 marker 槽位 id——梨园的材料确实进了预设作者指定的位置。
-	 * 没进的槽位由梨园按兜底版式补，避免卡/人设内容丢失。
-	 *
-	 * 判据是「填了」不是「声明了」：预设声明槽位、梨园却没料可交（如人设正文为空）时，
-	 * 那个位置是空的，兜底必须照常补。一名两义正是「用户身份整段消失」那个 bug 的成因。
-	 */
-	filledMarkers: Set<string>;
 	/** skill 一等素材位（M-R2）：工作目录 skills/<name>/SKILL.md 扫描产物 */
 	skillFiles: SkillFile[];
-	/** 装配报告：每块去向（engine 落盘 .liyuan/preset-assembly.json） */
-	presetAssembly: AssembleReportItem[];
-	/** 历史前段全部求值后内容——机械规则提取（extractDraftRules）用 */
-	presetRuleTexts: string[];
-	/** marker 槽位材料（卡/世界书/人设）——引擎每拍重装历史后段时复用同一份 */
-	markerMaterials: MarkerMaterials;
-	/** 任一渠道有启用块——扮演规范让位给预设的判定依据 */
-	presetActive: boolean;
-	/** 宏求值遇到的清单外宏名（供引擎降级告警） */
-	macroWarnings: string[];
-	/** M-C2：被判死的外部插件协议条目（世界书通道 H 类退场，进装配报告） */
+	/** M-C2：被判死的外部插件协议条目（世界书通道 H 类退场） */
 	protocolDrops: ProtocolDrop[];
 	/** 用户规矩两级文件（刀2）：全局 <agentDir>/APPEND_SYSTEM.md + 卡级 cards/<卡>/APPEND_SYSTEM.md，每拍现读 */
 	userRules: UserRules;
-	/** 卡档案（刀3）：cards/<卡>/AGENTS.md 全文；不存在＝空串（装配走今天的投影） */
+	/** 卡档案（刀3）：cards/<卡>/AGENTS.md 全文；不存在＝空串（装配走投影） */
 	cardAgents: string;
 	/** 送模侧作者正则（promptOnly/破坏性，预设+卡）——rebuildHistory 应用，剥「作者不想让模型看」的块 */
 	promptRules: DisplayRule[];
@@ -370,55 +336,9 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 	// 在每次配置刷新时重写（挂上就有、卸下就没、书改了跟着改）——文件本身就是实时的，这里不另判。
 	const cardAgentsRaw = cardAgents;
 	cardAgents = renderForModel(cardAgents);
-	const agentsActive = cardAgentsRaw.trim().length > 0;
-
-	// marker 材料：梨园按酒馆的槽位交货，**位置由预设作者的 prompt_order 决定**。
-	// 填的是原文——包装（标题/小节名）归预设作者，梨园不替他们加话（铁律一）。
-	const macroCtx = { charName: card.name, userName: config.userName };
-	const markerMaterials: MarkerMaterials = {};
-	const putSlot = (slot: keyof MarkerMaterials, text: string | undefined): void => {
-		if (text && text.trim()) markerMaterials[slot] = applyMacros(text, macroCtx);
-	};
-	if (!agentsActive) putSlot("charDescription", card.description);
-	if (!agentsActive) putSlot("charPersonality", card.personality);
-	if (!agentsActive) putSlot("scenario", card.scenario);
-	if (!agentsActive) putSlot("dialogueExamples", card.mesExample);
-	putSlot("personaDescription", config.userPersona);
-	// 梨园的 LorebookEntry 没有 ST 的 before/after position，常驻条目整份交 worldInfoBefore
-	const constantLore = constantEntries(entries);
-	if (!agentsActive && constantLore.length > 0) {
-		putSlot(
-			"worldInfoBefore",
-			constantLore.map((e) => `- ${e.comment ? `【${e.comment}】` : ""}${e.content}`).join("\n"),
-		);
-	}
-
-	// 装载的预设**不再直接进提示词**（2026-09-12 用户定序：装载即转译）：它经引擎按开关编译、
-	// 声明分流后已落成卡文件里的（预设）条目（server/rest.ts syncPresetTranslation），模型看到的
-	// 就是 userRules / cardAgents 那两份。这里再装配一遍就是双份喂。预设文档仍装载着——
-	// samplers、作者正则、名字要从它取；marker 材料照旧准备（梨园自己的兜底槽位用得着）。
-	const presetBefore: AssembledPiece[] = [];
-	const presetDepth: DepthPiece[] = [];
-	const filledMarkers = new Set<string>();
-	const presetAssembly: AssembleReportItem[] = [];
-	const presetRuleTexts: string[] = [];
-	const presetActive = false;
-	const unsupported = new Set<string>();
 
 	// 显示层折叠标签：**猜名单已退役（8/19）**。
-	//
-	// 原本这里扫预设正文、猜「哪些标签是思维链脚手架」，猜中的登记成 fold ⇒ 显示层整块删。
-	// 实测它对狐神抚预设猜出 11 个：`draft fox_front fox_front_insert fox-front-view`
-	// **`content`** `ft_clock Fox正文前思考 think html head meta`——其中 `content` 正是
-	// 作者装**正文**的标签，于是每一拍的正文都被梨园自己整块删掉（用户实测「正文被删」的
-	// 真因，与作者正则无关）；`html/head/meta` 更说明这类猜测的污染面。
-	//
-	// 铁律三：识别「别人发明的名字」的名单只许冻结、收缩、删除。折不折叠归作者的
-	// regex_scripts（本预设自带：depth≤2 做成思维链卡、depth≥3 整块删），梨园不猜。
-	// 名称模式 FOLD_NAME_RE 仍在（thinking/draft/思考… 那批公有名，冻结不动）。
-	//
-	// 格式栈标签（catsay/w2g…）仍只注册到**历史剥**通道——它们是用户要看的产出，
-	// 混进 extraFold 会让显示层连内容一起删（8/05：模型写了咪咪点评，屏上没有）。
+	// 折不折叠归作者的 regex_scripts，格式栈标签仍只注册到历史剥通道。
 	resetDisplayTagExtras();
 	if (presetDoc) {
 		addHistoryStripTags(FORMAT_STACK_TAGS);
@@ -432,15 +352,7 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		allLoreEntries: mergeEntries(fileEntries, card.book ?? []),
 		cardAgentsRaw,
 		presetDoc,
-		presetBefore,
-		presetDepth,
-		filledMarkers,
 		skillFiles: modelVisibleSkillFiles(cwd),
-		presetAssembly,
-		presetRuleTexts,
-		markerMaterials,
-		presetActive,
-		macroWarnings: [...unsupported],
 		protocolDrops,
 		// 条目引擎只作用送模面：readUserRules 给原文（REST/编辑器往返要无损），
 		// 这里渲染成开启条目＋零注释的送模文本
@@ -460,14 +372,6 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		},
 	};
 	return materials;
-}
-
-/**
- * 历史后段：装载的预设已转译成卡文件条目（见 loadStageMaterials 里的说明），历史后段随之
- * 并入常驻——每拍不再重装。保留签名给 engine 的调用点；恒为 undefined。
- */
-export function assemblePresetAfter(_m: StageMaterials, _userText: string): AssembledPiece[] | undefined {
-	return undefined;
 }
 
 /** 常驻世界书条目（enabled+constant，按 order 排序）——system prompt 素材 */

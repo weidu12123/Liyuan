@@ -24,48 +24,53 @@
  * - 单份脚本实测可达 3.5MB，srcdoc 是个属性字符串，不该塞这个量级。
  */
 
-import { SCRIPT_FRAME_CSP } from "./frameDoc.ts";
+import { IMPORT_MAP_SNIPPET, MVU_BUNDLE_DATA_URI, MVU_ZOD_DATA_URI, SCRIPT_FRAME_CSP } from "./frameDoc.ts";
 import { IFRAME_TAVERN_BRIDGE_SNIPPET, IFRAME_TAVERN_GLOBALS_SNIPPET } from "./tavernShim.ts";
 
 /** 父页挂载点：宿主帧同源直读这个全局取脚本（挂 window 而非模块变量，跨帧才看得见） */
 export const AUTHOR_SCRIPTS_GLOBAL = "__liyuanAuthorScripts";
 
-/**
- * 加载器：同源读父页清单 → 逐条建 `<script>` 执行。
- *
- * - **逐条独立**：一条一个 `<script>` 元素，各是独立编译单元。某条语法错误只废它自己，
- *   后面的照跑（拼成一大段就是一错全废）。
- * - **module 还是 classic 按语法判**：作者脚本里有顶层 `import`/`export` 的必须走
- *   `type="module"`（classic 下 `import` 直接是语法错误）。实测一张卡的 5 个脚本里 2 个是模块
- *   （一个 `import` 整份 MVU 插件 bundle、一个 `export const Schema` 再注册）。
- *   判据只问语法不问名字；没有 import/export 的仍走 classic——那类脚本常靠 `var` 挂全局，
- *   module 作用域会把它们关起来。
- * - **顺序**：classic 同步 append 即按序执行；module 天生 defer，但同一文档里按 append 顺序执行，
- *   且一律晚于 classic——这与酒馆助手一致（那边模块也是后跑）。
- * - **报回父页**：跑完发一帧 `liyuanScriptHostBooted`，父页据此确认宿主活了（诊断用，
- *   不参与任何判据）。
- */
 const LOADER_SNIPPET = `<script>(function(){
 try{
   var g=window;
+  var MVU_URI=${JSON.stringify(MVU_BUNDLE_DATA_URI)};
+  var MVU_ZOD_URI=${JSON.stringify(MVU_ZOD_DATA_URI)};
   function parentWin(){try{return (g.parent&&g.parent!==g)?g.parent:null;}catch(e){return null;}}
   function readList(){
     try{ var p=parentWin(); return p?p["${AUTHOR_SCRIPTS_GLOBAL}"]:null; }catch(e){ return null; }
   }
-  // 顶层 import/export ⇒ ES 模块。只看行首（字符串里的 "import" 不算）。
-  function isModule(code){
-    return /^[ \\t]*(?:import|export)[\\s{'"*]/m.test(code);
+  function rewriteBuiltinModuleUrls(code){
+    return String(code||"")
+      .replace(/https?:\\/\\/(?:testingcf|cdn|fastly|gcore)\\.jsdelivr\\.net\\/gh\\/MagicalAstrogy\\/MagVarUpdate(?:@[^/'"]+)?\\/artifact\\/bundle\\.js/g,MVU_URI)
+      .replace(/\\x60https:\\/\\/\\$\\{[^}]+\\}\\/gh\\/MagicalAstrogy\\/MagVarUpdate(?:@[^/\\x60]+)?\\/artifact\\/bundle\\.js\\x60/g,JSON.stringify(MVU_URI))
+      .replace(/https?:\\/\\/(?:testingcf|cdn|fastly|gcore)\\.jsdelivr\\.net\\/gh\\/StageDog\\/tavern_resource(?:@[^/'"]+)?\\/dist\\/util\\/mvu_zod\\.js/g,MVU_ZOD_URI);
   }
   function run(list){
     var ok=0,bad=0,mods=0;
+    if(!g.__liyuanScriptRegistry)g.__liyuanScriptRegistry={};
     for(var i=0;i<list.length;i++){
       var item=list[i]||{};
-      var code=String(item.content||"");
+      var sid=String(item.id||("card-"+i));
+      var code=rewriteBuiltinModuleUrls(String(item.content||""));
+      g.__liyuanScriptRegistry[sid]={
+        id:sid,
+        name:String(item.name||""),
+        info:String(item.info||""),
+        source:String(item.source||"card"),
+        data:(item.data&&typeof item.data==="object")?JSON.parse(JSON.stringify(item.data)):{},
+        button:(item.button&&typeof item.button==="object")?JSON.parse(JSON.stringify(item.button)):{enabled:true,buttons:[]}
+      };
+      if(!g.__liyuanDefaultScriptId)g.__liyuanDefaultScriptId=sid;
+      g.__liyuanCurrentScriptId=sid;
+      if(item.data&&typeof item.data==="object"&&typeof g.__liyuanSeedScriptVars==="function"){
+        try{g.__liyuanSeedScriptVars(sid,item.data);}catch(e0){}
+      }
       try{
         var el=document.createElement("script");
-        el.setAttribute("data-liyuan-author-script",String(item.id||i));
-        if(isModule(code)){el.type="module";mods++;}
-        el.textContent=code;
+        el.setAttribute("data-liyuan-author-script",sid);
+        el.type="module";
+        mods++;
+        el.textContent="window.__liyuanCurrentScriptId="+JSON.stringify(sid)+";\\n"+code;
         document.body.appendChild(el);
         ok++;
       }catch(e){ bad++; console.error("[liyuan scriptHost] 脚本执行失败",item&&item.name,e); }
@@ -89,8 +94,8 @@ try{
 
 /**
  * 宿主帧文档。自身不渲染任何内容（透明、零尺寸），只提供一个跑脚本的同源沙箱。
- * 垫片顺序与消息帧一致：bridge → globals → 加载器，保证 `$`/`errorCatched`/
- * `getAllVariables`/`Mvu`/`toastr` 在作者第一行代码前就位。
+ * 垫片顺序与消息帧一致：importmap → bridge → globals → 加载器，保证 `$`/`errorCatched`/
+ * `getAllVariables`/`Mvu`/`toastr`/`z`/`_` 在作者第一行代码前就位。
  */
 export function buildScriptHostDoc(): string {
 	return (
@@ -98,9 +103,15 @@ export function buildScriptHostDoc(): string {
 		`<meta charset="utf-8">` +
 		`<meta http-equiv="Content-Security-Policy" content="${SCRIPT_FRAME_CSP}">` +
 		`<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}</style>` +
+		IMPORT_MAP_SNIPPET +
 		IFRAME_TAVERN_BRIDGE_SNIPPET +
 		IFRAME_TAVERN_GLOBALS_SNIPPET +
 		`</head><body>` +
+		`<div style="display:none">` +
+		`<select id="world_info_sort_order"><option value="13">13</option></select>` +
+		`<div id="extensions_settings"></div>` +
+		`<div id="extensions_settings2"></div>` +
+		`</div>` +
 		LOADER_SNIPPET +
 		`</body></html>`
 	);

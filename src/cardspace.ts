@@ -674,12 +674,15 @@ export interface ChatMarkdownAsset {
 	modified: number;
 }
 
+export const CHAT_SCRIPT_DATA_DIR = "脚本数据"; // i18n-ignore：子项目内部目录名
+
 const INTERNAL_CHAT_TOP_DIRS = new Set([
 	CHAT_SESSIONS_DIR,
 	CHAT_BTW_SESSIONS_DIR,
 	CHAT_HISTORY_DIR,
 	CHAT_MEMORY_DIR,
 	CHAT_STORY_DIR,
+	CHAT_SCRIPT_DATA_DIR,
 	"稿件", // i18n-ignore：内部草稿目录
 ]);
 

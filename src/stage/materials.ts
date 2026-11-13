@@ -58,6 +58,10 @@ export interface StageMaterials {
 	cardAuthorScripts: ReturnType<typeof extractAuthorScripts>;
 	/** 已挂载世界书 + 补充设定集 overlay，禁用项与外部插件协议条目已剔除 */
 	entries: LorebookEntry[];
+	/** 全量原始世界书条目池（含 enabled:false 及卡内嵌 character_book 条目，供提示词模板 getwi 按标题拉取） */
+	allLoreEntries?: LorebookEntry[];
+	/** 卡档案原始文本（供提示词模板按节解析 @@if 与 <% ... %>） */
+	cardAgentsRaw?: string;
 	/** 预设文档（原文 + 归一条目）；null＝未配置且无默认预设 */
 	presetDoc: PresetDoc | null;
 	/** 装配产物：chatHistory 槽位之前的片段（含已归位的 marker 材料），按预设作者原序 */
@@ -425,6 +429,8 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		card,
 		cardAuthorScripts,
 		entries,
+		allLoreEntries: mergeEntries(fileEntries, card.book ?? []),
+		cardAgentsRaw,
 		presetDoc,
 		presetBefore,
 		presetDepth,

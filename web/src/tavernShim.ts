@@ -1,26 +1,234 @@
 /**
- * 三档程序卡运行时垫片（对照酒馆助手 JS-Slash-Runner 公开调用面的最小子集）。
+ * 三档程序卡与作者脚本运行时宿主适配层（完整承接酒馆助手 JS-Slash-Runner 4.12.1 公开调用面 + SillyTavern 1.19.0 最小上下文投影）。
  *
- * 设计纪律（docs card-frontend §6/§8）：
- * - 读族/存在性：先给桩，保证卡初始化不炸
- * - 生成族 / 斜杠：可接到梨园聊天总线（App 注册 bridge）
- * - 写正文：不提供
- *
- * 卡实际调用面：
- * - parent.TavernHelper.generate / stopAllGeneration
- * - triggerSlash(`/send …|/trigger`)  ← 某卡 开场表单
- * - eventOn / eventEmit
- * - parent.TheaterAPI / handleTheaterAction
+ * 核心原则（06 / 07 / 08 文档）：
+ * 1. 以梨园 `ScriptApiService` (`/api/script`) 与 `window.Liyuan` 为唯一真实业务底座，不另建平行数据库，
+ *    不改任何送模文案、不新增送模注入点、不建作者措辞识别名单（严守梨园铁律一、二、三）。
+ * 2. 事件总线打通父页与所有正式卡运行时子帧，完整导出 `tavern_events`（68 项）与 `iframe_events`（9 项），
+ *    所有监听注册函数统一返回 `{ stop: () => void }`。
+ * 3. 变量系统打通 7 类作用域（`chat` / `message` / `script` / `character` / `preset` / `global` / `extension`），
+ *    支持同步深拷贝读取、同步/异步 `updateVariablesWith`、深合并 `insertOrAssignVariables`，并自动持久化到服务端 `<chatDir>/脚本数据` 与 `WorldState`。
+ * 4. `TavernHelper.generate` 默认走后台带上下文独立生成（`generation.contextual`），绝不将后台分析提示词误当作主聊天气泡发进对话流。
+ * 5. `getChatMessages` 完整支持数字、负索引与宏范围字符串（如 `"0-{{lastMessageId}}"`、`"-1"`）。
  */
 
-import { isCardRuntimeSource } from "./cardRuntimeFrames.ts";
+import {
+	emitCardRuntimeEvent,
+	isCardRuntimeSource,
+	type LiyuanRuntimeContextSnapshot,
+} from "./cardRuntimeFrames.ts";
+import { JQUERY_MIN } from "./vendor/jquery-min.ts";
+import { LODASH_MIN, VUE_MIN, ZOD_YAML_MIN } from "./vendor/tavern-libs-min.ts";
+
+export { emitCardRuntimeEvent };
+
+export const iframe_events = {
+	MESSAGE_IFRAME_RENDER_STARTED: "message_iframe_render_started",
+	MESSAGE_IFRAME_RENDER_ENDED: "message_iframe_render_ended",
+	GENERATION_REQUESTED: "js_generation_requested",
+	GENERATION_STARTED: "js_generation_started",
+	STREAM_TOKEN_RECEIVED_FULLY: "js_stream_token_received_fully",
+	STREAM_TOKEN_RECEIVED_INCREMENTALLY: "js_stream_token_received_incrementally",
+	REASONING_TOKEN_RECEIVED_FULLY: "js_reasoning_token_received_fully",
+	REASONING_TOKEN_RECEIVED_INCREMENTALLY: "js_reasoning_token_received_incrementally",
+	GENERATION_ENDED: "js_generation_ended",
+} as const;
+
+export const tavern_events = {
+	APP_READY: "app_ready",
+	EXTRAS_CONNECTED: "extras_connected",
+	MESSAGE_SWIPED: "message_swiped",
+	MESSAGE_SENT: "message_sent",
+	MESSAGE_RECEIVED: "message_received",
+	MESSAGE_EDITED: "message_edited",
+	MESSAGE_DELETED: "message_deleted",
+	MESSAGE_UPDATED: "message_updated",
+	MESSAGE_FILE_EMBEDDED: "message_file_embedded",
+	MESSAGE_REASONING_EDITED: "message_reasoning_edited",
+	MESSAGE_REASONING_DELETED: "message_reasoning_deleted",
+	MESSAGE_SWIPE_DELETED: "message_swipe_deleted",
+	MORE_MESSAGES_LOADED: "more_messages_loaded",
+	IMPERSONATE_READY: "impersonate_ready",
+	CHAT_CHANGED: "chat_id_changed",
+	GENERATION_AFTER_COMMANDS: "GENERATION_AFTER_COMMANDS",
+	GENERATION_STARTED: "generation_started",
+	GENERATION_STOPPED: "generation_stopped",
+	GENERATION_ENDED: "generation_ended",
+	SD_PROMPT_PROCESSING: "sd_prompt_processing",
+	EXTENSIONS_FIRST_LOAD: "extensions_first_load",
+	EXTENSION_SETTINGS_LOADED: "extension_settings_loaded",
+	SETTINGS_LOADED: "settings_loaded",
+	SETTINGS_UPDATED: "settings_updated",
+	MOVABLE_PANELS_RESET: "movable_panels_reset",
+	SETTINGS_LOADED_BEFORE: "settings_loaded_before",
+	SETTINGS_LOADED_AFTER: "settings_loaded_after",
+	CHATCOMPLETION_SOURCE_CHANGED: "chatcompletion_source_changed",
+	CHATCOMPLETION_MODEL_CHANGED: "chatcompletion_model_changed",
+	OAI_PRESET_CHANGED_BEFORE: "oai_preset_changed_before",
+	OAI_PRESET_CHANGED_AFTER: "oai_preset_changed_after",
+	OAI_PRESET_EXPORT_READY: "oai_preset_export_ready",
+	OAI_PRESET_IMPORT_READY: "oai_preset_import_ready",
+	WORLDINFO_SETTINGS_UPDATED: "worldinfo_settings_updated",
+	WORLDINFO_UPDATED: "worldinfo_updated",
+	CHARACTER_EDITOR_OPENED: "character_editor_opened",
+	CHARACTER_EDITED: "character_edited",
+	CHARACTER_PAGE_LOADED: "character_page_loaded",
+	USER_MESSAGE_RENDERED: "user_message_rendered",
+	CHARACTER_MESSAGE_RENDERED: "character_message_rendered",
+	FORCE_SET_BACKGROUND: "force_set_background",
+	CHAT_DELETED: "chat_deleted",
+	CHAT_CREATED: "chat_created",
+	GENERATE_BEFORE_COMBINE_PROMPTS: "generate_before_combine_prompts",
+	GENERATE_AFTER_COMBINE_PROMPTS: "generate_after_combine_prompts",
+	GENERATE_AFTER_DATA: "generate_after_data",
+	WORLD_INFO_ACTIVATED: "world_info_activated",
+	TEXT_COMPLETION_SETTINGS_READY: "text_completion_settings_ready",
+	CHAT_COMPLETION_SETTINGS_READY: "chat_completion_settings_ready",
+	CHAT_COMPLETION_PROMPT_READY: "chat_completion_prompt_ready",
+	CHARACTER_FIRST_MESSAGE_SELECTED: "character_first_message_selected",
+	CHARACTER_DELETED: "characterDeleted",
+	CHARACTER_DUPLICATED: "character_duplicated",
+	CHARACTER_RENAMED: "character_renamed",
+	CHARACTER_RENAMED_IN_PAST_CHAT: "character_renamed_in_past_chat",
+	SMOOTH_STREAM_TOKEN_RECEIVED: "stream_token_received",
+	STREAM_TOKEN_RECEIVED: "stream_token_received",
+	STREAM_REASONING_DONE: "stream_reasoning_done",
+	FILE_ATTACHMENT_DELETED: "file_attachment_deleted",
+	WORLDINFO_FORCE_ACTIVATE: "worldinfo_force_activate",
+	OPEN_CHARACTER_LIBRARY: "open_character_library",
+	ONLINE_STATUS_CHANGED: "online_status_changed",
+	IMAGE_SWIPED: "image_swiped",
+	CONNECTION_PROFILE_LOADED: "connection_profile_loaded",
+	CONNECTION_PROFILE_CREATED: "connection_profile_created",
+	CONNECTION_PROFILE_DELETED: "connection_profile_deleted",
+	CONNECTION_PROFILE_UPDATED: "connection_profile_updated",
+	TOOL_CALLS_PERFORMED: "tool_calls_performed",
+	TOOL_CALLS_RENDERED: "tool_calls_rendered",
+	CHARACTER_MANAGEMENT_DROPDOWN: "charManagementDropdown",
+	SECRET_WRITTEN: "secret_written",
+	SECRET_DELETED: "secret_deleted",
+	SECRET_ROTATED: "secret_rotated",
+	SECRET_EDITED: "secret_edited",
+	PRESET_CHANGED: "preset_changed",
+	PRESET_DELETED: "preset_deleted",
+	PRESET_RENAMED: "preset_renamed",
+	PRESET_RENAMED_BEFORE: "preset_renamed_before",
+	MAIN_API_CHANGED: "main_api_changed",
+	WORLDINFO_ENTRIES_LOADED: "worldinfo_entries_loaded",
+	WORLDINFO_SCAN_DONE: "worldinfo_scan_done",
+	MEDIA_ATTACHMENT_DELETED: "media_attachment_deleted",
+} as const;
 
 export type TavernGenerateParams = {
+	generation_id?: string;
 	user_input?: string;
+	prompt?: string;
+	systemPrompt?: string;
+	messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+	ordered_prompts?: Array<unknown>;
+	injects?: Array<unknown>;
+	overrides?: Record<string, unknown>;
+	max_chat_history?: "all" | number;
 	should_stream?: boolean;
+	should_silence?: boolean;
+	should_return_reasoning?: boolean;
+	use_preset?: boolean;
+	preset_name?: string;
 	disable_extras?: boolean;
+	mode?: "chat" | "contextual" | "explicit";
 	[k: string]: unknown;
 };
+
+export interface LiyuanScriptCallOptions {
+	target?: {
+		card?: string;
+		chatId?: string | null;
+		sessionId?: string;
+		leafId?: string | null;
+	};
+	scriptId?: string;
+	requestId?: string;
+}
+
+export interface LiyuanScriptEnvelope<T = unknown> {
+	ok: boolean;
+	action: string;
+	requestId: string;
+	status?: "accepted" | "completed" | "committed" | "refreshed";
+	target?: {
+		card: string;
+		cardName: string;
+		charName: string;
+		userName: string;
+		chatId: string | null;
+		sessionId: string;
+		leafId: string | null;
+		mode: "roleplay" | "agent";
+		streaming: boolean;
+	};
+	result?: T;
+	error?: {
+		code: string;
+		message: string;
+	};
+}
+
+type ScriptApiTransport = (
+	action: string,
+	params?: Record<string, unknown>,
+	opts?: LiyuanScriptCallOptions,
+) => Promise<LiyuanScriptEnvelope>;
+
+let customScriptTransport: ScriptApiTransport | null = null;
+
+/** 供测试或宿主显式注入脚本 API 传输函数；默认走同源 POST /api/script */
+export function registerLiyuanScriptTransport(fn: ScriptApiTransport | null): void {
+	customScriptTransport = fn;
+}
+
+export async function callLiyuanScriptApi<T = unknown>(
+	action: string,
+	params: Record<string, unknown> = {},
+	opts: LiyuanScriptCallOptions = {},
+): Promise<LiyuanScriptEnvelope<T>> {
+	if (customScriptTransport) {
+		return (await customScriptTransport(action, params, opts)) as LiyuanScriptEnvelope<T>;
+	}
+	if (typeof fetch !== "function") {
+		return {
+			ok: false,
+			action,
+			requestId: opts.requestId ?? "offline",
+			error: { code: "execution_failed", message: "当前环境不支持 fetch" },
+		};
+	}
+	try {
+		const res = await fetch("/api/script", {
+			method: "POST",
+			credentials: "same-origin",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				action,
+				params,
+				...(opts.target ? { target: opts.target } : {}),
+				...(opts.scriptId ? { scriptId: opts.scriptId } : {}),
+				...(opts.requestId ? { requestId: opts.requestId } : {}),
+			}),
+		});
+		const data = (await res.json()) as LiyuanScriptEnvelope<T>;
+		return data;
+	} catch (err) {
+		return {
+			ok: false,
+			action,
+			requestId: opts.requestId ?? "error",
+			error: {
+				code: "execution_failed",
+				message: err instanceof Error ? err.message : String(err),
+			},
+		};
+	}
+}
 
 /** App 注册：把卡侧 slash / generate 接到输入框与 WS prompt */
 export type TavernChatBridge = {
@@ -32,7 +240,8 @@ export type TavernChatBridge = {
 	runCommand?: (text: string) => void;
 };
 
-type BusMap = Map<string, Set<(...args: unknown[]) => void>>;
+type ListenerFn = (...args: unknown[]) => unknown;
+type BusMap = Map<string, Set<ListenerFn>>;
 
 let chatBridge: TavernChatBridge | null = null;
 
@@ -40,12 +249,6 @@ export function registerTavernChatBridge(bridge: TavernChatBridge | null): void 
 	chatBridge = bridge;
 }
 
-/**
- * 注册梨园自己的通知条给作者脚本的 `toastr` 用（子帧经 `parent.__liyuanToast` 调）。
- * 传 null 注销。挂 window 而不是模块变量：iframe 与 server 各持一份 src 实例，
- * 模块级状态跨边界不可见（jiti 模块二象性的老坑），跨帧共享的东西必须挂 globalThis。
- * 档位用梨园自己的三档（toastr 的 success 在垫片里已折成 info），父页不再做映射。
- */
 export type LiyuanToastLevel = "info" | "warning" | "error";
 
 export function registerLiyuanToast(fn: ((level: LiyuanToastLevel, text: string) => void) | null): void {
@@ -55,33 +258,178 @@ export function registerLiyuanToast(fn: ((level: LiyuanToastLevel, text: string)
 	else delete w.__liyuanToast;
 }
 
+const MESSAGE_ID_NORMALIZE_EVENTS = new Set<string>([
+	tavern_events.MESSAGE_SWIPED,
+	tavern_events.MESSAGE_SENT,
+	tavern_events.MESSAGE_RECEIVED,
+	tavern_events.MESSAGE_EDITED,
+	tavern_events.MESSAGE_UPDATED,
+	tavern_events.USER_MESSAGE_RENDERED,
+	tavern_events.CHARACTER_MESSAGE_RENDERED,
+]);
+
 function getBus(target: object): BusMap {
 	const w = target as { __liyuanEventBus?: BusMap };
 	if (!w.__liyuanEventBus) w.__liyuanEventBus = new Map();
 	return w.__liyuanEventBus;
 }
 
-/** 挂 eventOn / eventEmit（iframe 内与父页各一份即可） */
+export type EventOnReturn = {
+	stop: () => void;
+};
+
+/** 挂完整酒馆助手事件函数族与 tavern_events / iframe_events（每个函数均返回 { stop }） */
 export function installEventBus(target: object = typeof window !== "undefined" ? window : {}): void {
 	const t = target as {
-		eventOn?: (name: string, cb: (...args: unknown[]) => void) => void;
-		eventEmit?: (name: string, ...args: unknown[]) => void;
+		eventOn?: (name: string, cb: ListenerFn) => EventOnReturn;
+		eventOnce?: (name: string, cb: ListenerFn) => EventOnReturn;
+		eventMakeFirst?: (name: string, cb: ListenerFn) => EventOnReturn;
+		eventMakeLast?: (name: string, cb: ListenerFn) => EventOnReturn;
+		eventOnButton?: (name: string, cb: ListenerFn) => EventOnReturn;
+		eventEmit?: (name: string, ...args: unknown[]) => Promise<void>;
+		eventEmitAndWait?: (name: string, ...args: unknown[]) => void;
+		eventRemoveListener?: (name: string, cb: ListenerFn) => void;
+		eventClearEvent?: (name: string) => void;
+		eventClearListener?: (cb: ListenerFn) => void;
+		eventClearAll?: () => void;
+		tavern_events?: typeof tavern_events;
+		iframe_events?: typeof iframe_events;
+		__liyuanWrapperMap?: Map<string, Map<ListenerFn, ListenerFn>>;
+		__liyuanStickyEvents?: Record<string, unknown[]>;
 	};
-	if (typeof t.eventOn === "function" && typeof t.eventEmit === "function") return;
+	t.tavern_events = tavern_events;
+	t.iframe_events = iframe_events;
 
 	const bus = getBus(target);
-	t.eventOn = (name, cb) => {
-		if (!bus.has(name)) bus.set(name, new Set());
-		bus.get(name)!.add(cb);
+	if (!t.__liyuanWrapperMap) t.__liyuanWrapperMap = new Map();
+	const wrapperMap = t.__liyuanWrapperMap;
+
+	const removeListener = (name: string, cb: ListenerFn) => {
+		const set = bus.get(name);
+		const mapForEvent = wrapperMap.get(name);
+		const wrapped = mapForEvent?.get(cb) ?? cb;
+		mapForEvent?.delete(cb);
+		set?.delete(wrapped);
+		set?.delete(cb);
 	};
-	t.eventEmit = (name, ...args) => {
+
+	const wrapListener = (name: string, cb: ListenerFn, once = false): ListenerFn => {
+		let mapForEvent = wrapperMap.get(name);
+		if (!mapForEvent) {
+			mapForEvent = new Map();
+			wrapperMap.set(name, mapForEvent);
+		}
+		const existing = mapForEvent.get(cb);
+		if (existing) return existing;
+		const wrapped: ListenerFn = (...rawArgs: unknown[]) => {
+			const args = [...rawArgs];
+			if (MESSAGE_ID_NORMALIZE_EVENTS.has(name) && args.length > 0) {
+				const parsed = Number.parseInt(String(args[0]), 10);
+				if (Number.isNaN(parsed)) return undefined;
+				args[0] = parsed;
+			}
+			try {
+				return cb(...args);
+			} finally {
+				if (once) {
+					removeListener(name, cb);
+				}
+			}
+		};
+		mapForEvent.set(cb, wrapped);
+		return wrapped;
+	};
+
+	t.eventOn = (name, cb) => {
+		const wrapped = wrapListener(name, cb, false);
+		if (!bus.has(name)) bus.set(name, new Set());
+		bus.get(name)!.add(wrapped);
+		if ((name === tavern_events.APP_READY || name === "APP_READY") && t.__liyuanStickyEvents?.app_ready) {
+			const stickyArgs = t.__liyuanStickyEvents.app_ready;
+			Promise.resolve().then(() => {
+				try {
+					wrapped(...stickyArgs);
+				} catch (e) {
+					console.error("[liyuan APP_READY]", e);
+				}
+			});
+		}
+		return { stop: () => removeListener(name, cb) };
+	};
+
+	t.eventOnce = (name, cb) => {
+		const wrapped = wrapListener(name, cb, true);
+		if (!bus.has(name)) bus.set(name, new Set());
+		bus.get(name)!.add(wrapped);
+		return { stop: () => removeListener(name, cb) };
+	};
+
+	t.eventMakeFirst = (name, cb) => {
+		const wrapped = wrapListener(name, cb, false);
+		const cur = bus.get(name);
+		if (!cur || cur.size === 0) {
+			bus.set(name, new Set([wrapped]));
+		} else {
+			const next = new Set<ListenerFn>([wrapped]);
+			for (const item of cur) {
+				if (item !== wrapped) next.add(item);
+			}
+			bus.set(name, next);
+		}
+		return { stop: () => removeListener(name, cb) };
+	};
+
+	t.eventMakeLast = (name, cb) => {
+		const wrapped = wrapListener(name, cb, false);
+		if (!bus.has(name)) bus.set(name, new Set());
+		const set = bus.get(name)!;
+		set.delete(wrapped);
+		set.add(wrapped);
+		return { stop: () => removeListener(name, cb) };
+	};
+
+	t.eventOnButton = (btnName, cb) => {
+		return t.eventOn!(btnName, cb);
+	};
+
+	t.eventRemoveListener = removeListener;
+
+	t.eventClearEvent = (name) => {
+		bus.delete(name);
+		wrapperMap.delete(name);
+	};
+
+	t.eventClearListener = (cb) => {
+		for (const name of bus.keys()) {
+			removeListener(name, cb);
+		}
+	};
+
+	t.eventClearAll = () => {
+		bus.clear();
+		wrapperMap.clear();
+	};
+
+	t.eventEmit = async (name, ...args) => {
 		const set = bus.get(name);
 		if (!set) return;
-		for (const cb of set) {
+		for (const cb of [...set]) {
+			try {
+				await cb(...args);
+			} catch (e) {
+				console.error("[liyuan eventEmit]", name, e);
+			}
+		}
+	};
+
+	t.eventEmitAndWait = (name, ...args) => {
+		const set = bus.get(name);
+		if (!set) return;
+		for (const cb of [...set]) {
 			try {
 				cb(...args);
 			} catch (e) {
-				console.error("[liyuan eventEmit]", name, e);
+				console.error("[liyuan eventEmitAndWait]", name, e);
 			}
 		}
 	};
@@ -111,7 +459,7 @@ export type SlashExecResult = {
 
 /**
  * 执行 triggerSlash 命令串（纯逻辑，可测）。
- * 支持：/send、/trigger，以及二者管道组合。
+ * 支持：/send、/trigger、/setvar、/getvar，以及管道组合。
  */
 export function executeTriggerSlash(
 	raw: string,
@@ -129,6 +477,21 @@ export function executeTriggerSlash(
 
 	for (const part of parts) {
 		const cmd = part.startsWith("/") ? part : `/${part}`;
+		const mName = /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/.exec(cmd);
+		if (mName && typeof window !== "undefined") {
+			const cname = mName[1];
+			const cargs = (mName[2] ?? "").trim();
+			const st = (window as unknown as { SillyTavern?: { SlashCommandParser?: { commands?: Record<string, { callback?: (named: Record<string, unknown>, unnamed: string) => unknown }> } } }).SillyTavern;
+			const regCmd = st?.SlashCommandParser?.commands?.[cname];
+			if (regCmd && typeof regCmd.callback === "function") {
+				try {
+					const out = regCmd.callback({}, cargs);
+					return { ok: true, text: typeof out === "string" ? out : "" };
+				} catch (e) {
+					return { ok: false, error: e instanceof Error ? e.message : String(e) };
+				}
+			}
+		}
 		const mSend = cmd.match(/^\/send(?:as)?(?:\s+name=[^\s]+)?\s*([\s\S]*)$/i);
 		if (mSend) {
 			pendingSend = (mSend[1] ?? "").trim();
@@ -151,7 +514,6 @@ export function executeTriggerSlash(
 	}
 
 	if (wantTrigger) {
-		// /send X|/trigger → 直接发 X 并生成；仅 /trigger → 发当前输入框
 		const text = pendingSend;
 		try {
 			bridge.sendPrompt(text);
@@ -184,90 +546,485 @@ export async function triggerSlash(raw: string): Promise<string> {
 	return r.text || "";
 }
 
-/** 父页安装：卡脚本通过 window.parent.TavernHelper / triggerSlash 访问 */
+/** 父页安装：卡脚本通过 window.parent.Liyuan / TavernHelper / SillyTavern / TheaterAPI / triggerSlash 访问 */
 export function installParentTavernShim(): void {
 	if (typeof window === "undefined") return;
-	const w = window as Window & {
+	const w = window as unknown as Window & {
 		__liyuanTavernShimInstalled?: boolean;
-		TavernHelper?: {
-			generate: (params?: TavernGenerateParams) => Promise<string>;
-			stopAllGeneration: () => void;
-		};
+		__liyuanRuntimeContext?: LiyuanRuntimeContextSnapshot;
+		Liyuan?: Record<string, unknown>;
+		TavernHelper?: Record<string, unknown>;
+		SillyTavern?: Record<string, unknown>;
 		TheaterAPI?: { call: (method: string, ...args: unknown[]) => Promise<unknown> };
 		handleTheaterAction?: (msg: unknown) => void;
 		triggerSlash?: (cmd: string) => Promise<string> | string;
+		triggerSlashWithResult?: (cmd: string) => Promise<string> | string;
 	};
 	if (w.__liyuanTavernShimInstalled) return;
 	w.__liyuanTavernShimInstalled = true;
 
+	try {
+		const wg = w as unknown as Record<string, unknown>;
+		if (typeof wg._ !== "function") {
+			new Function(LODASH_MIN).call(w);
+		}
+		if (!wg.z || !wg.YAML) {
+			new Function(ZOD_YAML_MIN).call(w);
+		}
+		if (!wg.Vue) {
+			new Function(`${VUE_MIN};if(typeof Vue!=="undefined")this.Vue=Vue;`).call(w);
+		}
+	} catch (err) {
+		console.error("[liyuan tavern-libs init]", err);
+	}
+
 	installEventBus(w);
 
-	w.triggerSlash = (cmd: string) => triggerSlash(cmd);
+	const canCallServer = (): boolean => {
+		if (customScriptTransport) return true;
+		const loc = (w as unknown as { location?: { origin?: string; protocol?: string } }).location;
+		return !!loc && typeof loc.origin === "string" && /^https?:/i.test(loc.origin);
+	};
 
-	// iframe 无 same-origin 时走 postMessage（测试桩可能没有 addEventListener）
+	const invoke = (
+		action: string,
+		params: Record<string, unknown> = {},
+		opts: LiyuanScriptCallOptions = {},
+	) => callLiyuanScriptApi(action, params, opts);
+
+	w.Liyuan = {
+		version: "1.0.0",
+		call: invoke,
+		getSnapshot: () => w.__liyuanRuntimeContext ?? null,
+		context: {
+			read: (opts?: LiyuanScriptCallOptions) => invoke("context.read", {}, opts),
+			capabilities: (opts?: LiyuanScriptCallOptions) => invoke("capabilities.read", {}, opts),
+		},
+		messages: {
+			list: (params?: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("messages.list", params ?? {}, opts),
+			get: (params?: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("messages.get", params ?? {}, opts),
+			updateReply: (text: string, opts?: LiyuanScriptCallOptions) => invoke("messages.updateReply", { text }, opts),
+			dropLast: (opts?: LiyuanScriptCallOptions) => invoke("messages.dropLast", {}, opts),
+		},
+		state: {
+			read: (opts?: LiyuanScriptCallOptions) => invoke("state.read", {}, opts),
+			commit: (patch: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("state.commit", { patch }, opts),
+		},
+		data: {
+			read: (params?: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("data.read", params ?? {}, opts),
+			write: (params: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("data.write", params, opts),
+			remove: (params?: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("data.remove", params ?? {}, opts),
+		},
+		chat: {
+			submit: (params: { text: string; directorNote?: string; wait?: boolean } | string, opts?: LiyuanScriptCallOptions) =>
+				invoke("chat.submit", typeof params === "string" ? { text: params } : params, opts),
+			regenerate: (params?: { text?: string; directorNote?: string; wait?: boolean }, opts?: LiyuanScriptCallOptions) =>
+				invoke("chat.regenerate", params ?? {}, opts),
+			abort: (opts?: LiyuanScriptCallOptions) => invoke("requests.cancel", { includeMainChat: true }, opts),
+		},
+		generation: {
+			explicit: (params: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("generation.explicit", params, opts),
+			contextual: (params: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("generation.contextual", params, opts),
+		},
+		requests: {
+			cancel: (targetRequestId?: string, opts?: LiyuanScriptCallOptions) =>
+				invoke("requests.cancel", targetRequestId ? { targetRequestId } : {}, opts),
+			observe: (targetRequestId?: string, opts?: LiyuanScriptCallOptions) =>
+				invoke("requests.observe", targetRequestId ? { targetRequestId } : {}, opts),
+		},
+		lorebooks: {
+			list: (opts?: LiyuanScriptCallOptions) => invoke("lorebooks.list", {}, opts),
+			read: (params?: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("lorebooks.read", params ?? {}, opts),
+			createEntry: (params: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("lorebooks.createEntry", params, opts),
+			updateEntry: (params: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("lorebooks.updateEntry", params, opts),
+			removeEntry: (fingerprint: string, opts?: LiyuanScriptCallOptions) => invoke("lorebooks.removeEntry", { fingerprint }, opts),
+			mount: (path: string, mounted = true, opts?: LiyuanScriptCallOptions) => invoke("lorebooks.mount", { path, mounted }, opts),
+		},
+		project: {
+			files: {
+				list: (opts?: LiyuanScriptCallOptions) => invoke("project.files.list", {}, opts),
+				read: (path: string, opts?: LiyuanScriptCallOptions) => invoke("project.files.read", { path }, opts),
+				write: (path: string, content: string, opts?: LiyuanScriptCallOptions) => invoke("project.files.write", { path, content }, opts),
+				remove: (path: string, opts?: LiyuanScriptCallOptions) => invoke("project.files.remove", { path }, opts),
+			},
+		},
+		panels: {
+			list: (opts?: LiyuanScriptCallOptions) => invoke("panels.list", {}, opts),
+			write: (params: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("panels.write", params, opts),
+			close: (name: string, opts?: LiyuanScriptCallOptions) => invoke("panels.close", { name }, opts),
+		},
+		story: {
+			list: (opts?: LiyuanScriptCallOptions) => invoke("story.list", {}, opts),
+			read: (name?: string, opts?: LiyuanScriptCallOptions) => invoke("story.read", name ? { name } : {}, opts),
+			write: (name: string, text: string | null, opts?: LiyuanScriptCallOptions) => invoke("story.write", { name, text }, opts),
+		},
+		worldline: {
+			list: (opts?: LiyuanScriptCallOptions) => invoke("worldline.list", {}, opts),
+		},
+		models: {
+			list: (opts?: LiyuanScriptCallOptions) => invoke("models.list", {}, opts),
+		},
+		text: {
+			macros: (text: string, vars?: Record<string, unknown>, opts?: LiyuanScriptCallOptions) =>
+				invoke("text.macros", { text, ...(vars ? { vars } : {}) }, opts),
+			transform: (text: string, mode: "display" | "prompt" = "display", rules?: unknown[], opts?: LiyuanScriptCallOptions) =>
+				invoke("text.transform", { text, mode, ...(rules ? { rules } : {}) }, opts),
+			ejs: (code: string, context?: Record<string, unknown>, opts?: LiyuanScriptCallOptions) =>
+				invoke("text.ejs", { code, ...(context ? { context } : {}) }, opts),
+		},
+		ui: {
+			notify: (level: LiyuanToastLevel, text: string, opts?: LiyuanScriptCallOptions) =>
+				invoke("ui.notify", { level, text }, opts),
+		},
+	};
+
+	w.triggerSlash = (cmd: string) => triggerSlash(cmd);
+	w.triggerSlashWithResult = w.triggerSlash;
+
 	if (typeof window.addEventListener === "function") {
 		window.addEventListener("message", (ev: MessageEvent) => {
-			const d = ev.data as { liyuanTriggerSlash?: unknown } | null;
-			if (!d || typeof d.liyuanTriggerSlash !== "string" || !isCardRuntimeSource(ev.source)) return;
-			void triggerSlash(d.liyuanTriggerSlash);
+			const d = ev.data as {
+				liyuanTriggerSlash?: unknown;
+				liyuanScriptRpc?: {
+					id?: unknown;
+					action?: unknown;
+					params?: unknown;
+					opts?: unknown;
+				};
+				liyuanGlobalInit?: {
+					name?: unknown;
+				};
+			} | null;
+			if (!d || typeof d !== "object" || !isCardRuntimeSource(ev.source)) return;
+			if (typeof d.liyuanTriggerSlash === "string") {
+				void triggerSlash(d.liyuanTriggerSlash);
+				return;
+			}
+			if (d.liyuanGlobalInit && typeof d.liyuanGlobalInit.name === "string") {
+				emitCardRuntimeEvent(`global_${d.liyuanGlobalInit.name}_initialized`);
+				return;
+			}
+			if (d.liyuanScriptRpc && typeof d.liyuanScriptRpc === "object") {
+				const rpc = d.liyuanScriptRpc;
+				const id = String(rpc.id ?? "");
+				const action = String(rpc.action ?? "");
+				const params = rpc.params && typeof rpc.params === "object" ? (rpc.params as Record<string, unknown>) : {};
+				const opts = rpc.opts && typeof rpc.opts === "object" ? (rpc.opts as LiyuanScriptCallOptions) : {};
+				void invoke(action, params, opts).then((envelope) => {
+					try {
+						(ev.source as Window).postMessage({ liyuanScriptRpcResult: { id, envelope } }, "*");
+					} catch {
+						/* ignore */
+					}
+				});
+			}
 		});
 	}
 
-	w.TavernHelper = {
-		/**
-		 * 对照卡内：await generate({ user_input, should_stream }) → string
-		 * 已注册 bridge 时：把 user_input 当用户发言并触发生成。
-		 */
-		async generate(params) {
-			const input = String(params?.user_input ?? "").trim();
-			if (chatBridge && input) {
-				try {
-					chatBridge.sendPrompt(input);
-					return input;
-				} catch (e) {
-					console.warn("[liyuan TavernHelper.generate]", e);
+	let genSeq = 0;
+
+	const runHelperGenerate = async (params: TavernGenerateParams | undefined, forceRaw: boolean): Promise<string> => {
+		const cfg = (params ?? {}) as TavernGenerateParams;
+		const genId = typeof cfg.generation_id === "string" && cfg.generation_id.trim()
+			? cfg.generation_id.trim()
+			: `thgen_${Date.now()}_${++genSeq}`;
+		const input = String(cfg.user_input ?? cfg.prompt ?? "").trim();
+
+		if (canCallServer()) {
+			emitCardRuntimeEvent(iframe_events.GENERATION_REQUESTED, genId, forceRaw ? "generateRaw" : "generate", cfg);
+			emitCardRuntimeEvent(iframe_events.GENERATION_STARTED, genId);
+			// 酒馆助手的 generate 是带上下文的后台独立生成（不追加主聊天气泡）；
+			// 仅当调用方显式指定 mode === "chat" 时才走 chat.submit。
+			const action =
+				cfg.mode === "chat"
+					? "chat.submit"
+					: forceRaw || cfg.mode === "explicit" || cfg.use_preset === false || Array.isArray(cfg.messages) || Array.isArray(cfg.ordered_prompts)
+						? "generation.explicit"
+						: "generation.contextual";
+			const env = await invoke(
+				action,
+				{
+					...cfg,
+					prompt: cfg.prompt ?? cfg.user_input ?? "",
+				},
+				{ requestId: genId },
+			);
+			if (env.ok && env.result && typeof (env.result as { text?: unknown }).text === "string") {
+				const outText = (env.result as { text: string; thinking?: string }).text;
+				const outThinking = (env.result as { thinking?: string }).thinking ?? "";
+				if (cfg.should_stream) {
+					if (outThinking) {
+						emitCardRuntimeEvent(iframe_events.REASONING_TOKEN_RECEIVED_INCREMENTALLY, outThinking, genId);
+						emitCardRuntimeEvent(iframe_events.REASONING_TOKEN_RECEIVED_FULLY, outThinking, genId);
+					}
+					emitCardRuntimeEvent(iframe_events.STREAM_TOKEN_RECEIVED_INCREMENTALLY, outText, genId);
+					emitCardRuntimeEvent(iframe_events.STREAM_TOKEN_RECEIVED_FULLY, outText, genId);
 				}
+				emitCardRuntimeEvent(iframe_events.GENERATION_ENDED, outText, genId, outThinking || undefined);
+				return outText;
 			}
-			console.warn("[liyuan TavernHelper.generate] 无 bridge 或空输入", {
-				len: input.length,
-				stream: params?.should_stream,
-			});
-			return `（梨园：界面内 AI 生成未接入聊天桥。输入：${input.slice(0, 80) || "（空）"}）`;
+			if (!env.ok && env.error) {
+				throw new Error(env.error.message);
+			}
+		}
+
+		if (!forceRaw && chatBridge && input) {
+			try {
+				chatBridge.sendPrompt(input);
+				return input;
+			} catch (e) {
+				console.warn("[liyuan TavernHelper.generate]", e);
+			}
+		}
+		console.warn("[liyuan TavernHelper.generate] 无服务端或空输入", {
+			len: input.length,
+			stream: cfg.should_stream,
+		});
+		return `（梨园：界面内 AI 生成未接入聊天桥。输入：${input.slice(0, 80) || "（空）"}）`;
+	};
+
+	w.TavernHelper = {
+		tavern_events,
+		iframe_events,
+		generate: (params?: TavernGenerateParams) => runHelperGenerate(params, false),
+		generateRaw: (params?: TavernGenerateParams) => runHelperGenerate(params, true),
+		stopGenerationById: (generationId: string) => {
+			if (canCallServer() && generationId) {
+				void invoke("requests.cancel", { targetRequestId: generationId });
+				emitCardRuntimeEvent(tavern_events.GENERATION_STOPPED, generationId);
+			}
 		},
 		stopAllGeneration() {
+			if (canCallServer()) {
+				void invoke("requests.cancel", { includeMainChat: true });
+				emitCardRuntimeEvent(tavern_events.GENERATION_STOPPED);
+				return;
+			}
 			console.warn("[liyuan TavernHelper.stopAllGeneration] no-op");
 		},
+		triggerSlash: (cmd: string) => triggerSlash(cmd),
+		triggerSlashWithResult: (cmd: string) => triggerSlash(cmd),
+		getTavernHelperVersion: () => "4.12.1",
+		getFrontendVersion: () => "4.12.1",
+		getTavernVersion: () => "1.19.0",
 	};
 
 	w.TheaterAPI = {
 		async call(method, ...args) {
+			const first = args[0];
+			const params =
+				first && typeof first === "object" && !Array.isArray(first)
+					? (first as Record<string, unknown>)
+					: args.length > 0
+						? { value: first, args }
+						: {};
+			const opts = args[1] && typeof args[1] === "object" ? (args[1] as LiyuanScriptCallOptions) : {};
+			if (canCallServer()) {
+				return await invoke(method, params, opts);
+			}
 			console.warn("[liyuan TheaterAPI.call]", method, args?.length ?? 0);
 			return null;
 		},
 	};
 
 	w.handleTheaterAction = (msg) => {
+		if (msg && typeof msg === "object" && typeof (msg as { action?: unknown }).action === "string" && canCallServer()) {
+			const m = msg as { action: string; params?: Record<string, unknown>; opts?: LiyuanScriptCallOptions };
+			void invoke(m.action, m.params ?? {}, m.opts ?? {});
+			return;
+		}
 		console.warn("[liyuan handleTheaterAction]", msg);
 	};
+
+	try {
+		const rawGlobals = IFRAME_TAVERN_GLOBALS_SNIPPET.replace(/^<script>|<\/script>$/g, "");
+		new Function(rawGlobals).call(w);
+	} catch (err) {
+		console.error("[liyuan parent globals init]", err);
+	}
 }
 
 /**
- * 注入到脚本帧 head 最前：同源下挂 TavernHelper + triggerSlash；
- * 并尽量镜像 parent（双保险）；跨域则 postMessage。
+ * 注入到脚本帧 head 最前：同源下挂 Liyuan + TavernHelper + TheaterAPI + triggerSlash + 事件总线；
+ * 并尽量镜像 parent（双保险）；跨域则 postMessage RPC。
  */
 export const IFRAME_TAVERN_BRIDGE_SNIPPET = `<script>(function(){
 try{
   var g=typeof window!=="undefined"?window:null;if(!g)return;
+  var TAVERN_EVENTS=${JSON.stringify(tavern_events)};
+  var IFRAME_EVENTS=${JSON.stringify(iframe_events)};
+  g.tavern_events=TAVERN_EVENTS;
+  g.iframe_events=IFRAME_EVENTS;
+  var MSG_ID_EVENTS={"message_swiped":1,"message_sent":1,"message_received":1,"message_edited":1,"message_updated":1,"user_message_rendered":1,"character_message_rendered":1};
   function bus(){if(!g.__liyuanEventBus)g.__liyuanEventBus=new Map();return g.__liyuanEventBus;}
-  if(typeof g.eventOn!=="function"){
-    g.eventOn=function(name,cb){var b=bus();if(!b.has(name))b.set(name,new Set());b.get(name).add(cb);};
+  function wmap(){if(!g.__liyuanWrapperMap)g.__liyuanWrapperMap=new Map();return g.__liyuanWrapperMap;}
+  function rmListener(name,cb){
+    var b=bus(),m=wmap().get(name),w=m?m.get(cb):null;
+    if(m)m.delete(cb);
+    var s=b.get(name);
+    if(s){if(w)s.delete(w);s.delete(cb);}
   }
-  if(typeof g.eventEmit!=="function"){
-    g.eventEmit=function(name){var args=[].slice.call(arguments,1),b=bus(),s=b.get(name);if(!s)return;
-      s.forEach(function(cb){try{cb.apply(null,args);}catch(e){console.error(e);}});};
+  function wrapFn(name,cb,once){
+    var m=wmap();
+    if(!m.has(name))m.set(name,new Map());
+    var em=m.get(name);
+    if(em.has(cb))return em.get(cb);
+    var ownerSid=g.__liyuanCurrentScriptId;
+    var w=function(){
+      var args=[].slice.call(arguments);
+      if(MSG_ID_EVENTS[name]&&args.length>0){
+        var n=parseInt(args[0],10);
+        if(isNaN(n))return;
+        args[0]=n;
+      }
+      var prevSid=g.__liyuanCurrentScriptId;
+      if(ownerSid)g.__liyuanCurrentScriptId=ownerSid;
+      try{return cb.apply(g,args);}finally{if(ownerSid)g.__liyuanCurrentScriptId=prevSid;if(once)rmListener(name,cb);}
+    };
+    em.set(cb,w);
+    return w;
   }
+  g.eventOn=function(name,cb){
+    var w=wrapFn(name,cb,false),b=bus();
+    if(!b.has(name))b.set(name,new Set());
+    b.get(name).add(w);
+    if(name===TAVERN_EVENTS.APP_READY||name==="APP_READY"){
+      setTimeout(function(){try{w();}catch(e){console.error(e);}},0);
+    }
+    return {stop:function(){rmListener(name,cb);}};
+  };
+  g.eventOnce=function(name,cb){
+    var w=wrapFn(name,cb,true),b=bus();
+    if(!b.has(name))b.set(name,new Set());
+    b.get(name).add(w);
+    return {stop:function(){rmListener(name,cb);}};
+  };
+  g.eventMakeFirst=function(name,cb){
+    var w=wrapFn(name,cb,false),b=bus(),cur=b.get(name);
+    if(!cur||cur.size===0){b.set(name,new Set([w]));}
+    else{var nxt=new Set([w]);cur.forEach(function(x){if(x!==w)nxt.add(x);});b.set(name,nxt);}
+    return {stop:function(){rmListener(name,cb);}};
+  };
+  g.eventMakeLast=function(name,cb){
+    var w=wrapFn(name,cb,false),b=bus();
+    if(!b.has(name))b.set(name,new Set());
+    var s=b.get(name);s.delete(w);s.add(w);
+    return {stop:function(){rmListener(name,cb);}};
+  };
+  g.eventOnButton=function(name,cb){return g.eventOn(name,cb);};
+  g.eventRemoveListener=rmListener;
+  g.eventClearEvent=function(name){bus().delete(name);wmap().delete(name);};
+  g.eventClearListener=function(cb){bus().forEach(function(_s,k){rmListener(k,cb);});};
+  g.eventClearAll=function(){bus().clear();wmap().clear();};
+  g.eventEmit=function(name){
+    var args=[].slice.call(arguments,1),b=bus(),s=b.get(name);
+    if(!s)return Promise.resolve();
+    var list=Array.from(s);
+    return list.reduce(function(p,cb){
+      return p.then(function(){try{return cb.apply(g,args);}catch(e){console.error(e);}});
+    },Promise.resolve());
+  };
+  g.eventEmitAndWait=function(name){
+    var args=[].slice.call(arguments,1),b=bus(),s=b.get(name);
+    if(!s)return;
+    Array.from(s).forEach(function(cb){try{cb.apply(g,args);}catch(e){console.error(e);}});
+  };
   function parentWin(){try{return g.parent&&g.parent!==g?g.parent:null;}catch(e){return null;}}
   function parentTH(){var p=parentWin();return p&&p.TavernHelper?p.TavernHelper:null;}
+  var rpcSeq=0,rpcPending=new Map();
+  if(typeof g.addEventListener==="function"){
+    g.addEventListener("message",function(ev){
+      var d=ev&&ev.data;
+      if(!d||typeof d!=="object")return;
+      if(d.liyuanScriptRpcResult&&typeof d.liyuanScriptRpcResult==="object"){
+        var r=d.liyuanScriptRpcResult,cb=rpcPending.get(String(r.id||""));
+        if(cb){rpcPending.delete(String(r.id||""));cb(r.envelope);}
+      }
+      if(d.liyuanTavernEvent&&typeof d.liyuanTavernEvent==="object"){
+        var tev=d.liyuanTavernEvent;
+        if(typeof tev.type==="string"){
+          var eargs=Array.isArray(tev.args)?tev.args:[];
+          g.eventEmit.apply(g,[tev.type].concat(eargs));
+        }
+      }
+    });
+  }
+  function rpcCall(action,params,opts){
+    var p=parentWin();
+    try{
+      if(p&&p.Liyuan&&typeof p.Liyuan.call==="function"){
+        return p.Liyuan.call(action,params||{},opts||{});
+      }
+    }catch(e){}
+    if(p&&typeof p.postMessage==="function"){
+      return new Promise(function(resolve){
+        var id="irpc_"+(++rpcSeq)+"_"+Date.now();
+        rpcPending.set(id,resolve);
+        try{p.postMessage({liyuanScriptRpc:{id:id,action:action,params:params||{},opts:opts||{}}},"*");}
+        catch(e2){rpcPending.delete(id);resolve({ok:false,action:action,requestId:id,error:{code:"execution_failed",message:String(e2)}});}
+      });
+    }
+    return Promise.resolve({ok:false,action:action,requestId:"offline",error:{code:"execution_failed",message:"未连接父窗口"}});
+  }
+  if(!g.Liyuan){
+    try{
+      var pw=parentWin();
+      if(pw&&pw.Liyuan)g.Liyuan=pw.Liyuan;
+    }catch(e){}
+    if(!g.Liyuan){
+      g.Liyuan={
+        version:"1.0.0",
+        call:rpcCall,
+        context:{read:function(o){return rpcCall("context.read",{},o);},capabilities:function(o){return rpcCall("capabilities.read",{},o);}},
+        messages:{
+          list:function(p,o){return rpcCall("messages.list",p||{},o);},
+          get:function(p,o){return rpcCall("messages.get",p||{},o);},
+          updateReply:function(t,o){return rpcCall("messages.updateReply",{text:t},o);},
+          dropLast:function(o){return rpcCall("messages.dropLast",{},o);}
+        },
+        state:{read:function(o){return rpcCall("state.read",{},o);},commit:function(patch,o){return rpcCall("state.commit",{patch:patch},o);}},
+        data:{
+          read:function(p,o){return rpcCall("data.read",p||{},o);},
+          write:function(p,o){return rpcCall("data.write",p||{},o);},
+          remove:function(p,o){return rpcCall("data.remove",p||{},o);}
+        },
+        chat:{
+          submit:function(p,o){return rpcCall("chat.submit",typeof p==="string"?{text:p}:(p||{}),o);},
+          regenerate:function(p,o){return rpcCall("chat.regenerate",p||{},o);},
+          abort:function(o){return rpcCall("requests.cancel",{includeMainChat:true},o);}
+        },
+        generation:{
+          explicit:function(p,o){return rpcCall("generation.explicit",p||{},o);},
+          contextual:function(p,o){return rpcCall("generation.contextual",p||{},o);}
+        },
+        requests:{
+          cancel:function(id,o){return rpcCall("requests.cancel",id?{targetRequestId:id}:{},o);},
+          observe:function(id,o){return rpcCall("requests.observe",id?{targetRequestId:id}:{},o);}
+        },
+        lorebooks:{
+          list:function(o){return rpcCall("lorebooks.list",{},o);},
+          read:function(p,o){return rpcCall("lorebooks.read",p||{},o);},
+          createEntry:function(p,o){return rpcCall("lorebooks.createEntry",p||{},o);},
+          updateEntry:function(p,o){return rpcCall("lorebooks.updateEntry",p||{},o);},
+          removeEntry:function(fp,o){return rpcCall("lorebooks.removeEntry",{fingerprint:fp},o);},
+          mount:function(path,m,o){return rpcCall("lorebooks.mount",{path:path,mounted:m!==false},o);}
+        },
+        project:{
+          files:{
+            list:function(o){return rpcCall("project.files.list",{},o);},
+            read:function(path,o){return rpcCall("project.files.read",{path:path},o);},
+            write:function(path,c,o){return rpcCall("project.files.write",{path:path,content:c},o);},
+            remove:function(path,o){return rpcCall("project.files.remove",{path:path},o);}
+          }
+        },
+        panels:{
+          list:function(o){return rpcCall("panels.list",{},o);},
+          write:function(p,o){return rpcCall("panels.write",p||{},o);},
+          close:function(n,o){return rpcCall("panels.close",{name:n},o);}
+        }
+      };
+    }
+  }
   if(typeof g.triggerSlash!=="function"){
     g.triggerSlash=function(cmd){
       var p=parentWin();
@@ -280,25 +1037,46 @@ try{
       try{if(p)p.postMessage({liyuanTriggerSlash:String(cmd||"")},"*");}catch(e2){}
       return Promise.resolve("");
     };
+    g.triggerSlashWithResult=g.triggerSlash;
   }
   if(!g.TavernHelper){
     g.TavernHelper={
+      tavern_events:TAVERN_EVENTS,
+      iframe_events:IFRAME_EVENTS,
       generate:function(params){
         var p=parentTH();
         if(p&&typeof p.generate==="function")return p.generate(params);
-        console.warn("[liyuan iframe] TavernHelper.generate stub");
-        var u=(params&&params.user_input)||"";
-        return Promise.resolve("（梨园：界面内 AI 生成尚未接入）"+String(u).slice(0,80));
+        var cfg=Object.assign({},params||{});
+        if(!cfg.prompt&&cfg.user_input)cfg.prompt=cfg.user_input;
+        var act=(cfg.mode==="chat")?"chat.submit":(cfg.mode==="explicit"||cfg.use_preset===false||Array.isArray(cfg.messages)||Array.isArray(cfg.ordered_prompts))?"generation.explicit":"generation.contextual";
+        return rpcCall(act,cfg).then(function(env){
+          if(env&&env.ok&&env.result&&typeof env.result.text==="string")return env.result.text;
+          var u=cfg.user_input||cfg.prompt||"";
+          return "（梨园：界面内 AI 生成尚未接入）"+String(u).slice(0,80);
+        });
+      },
+      generateRaw:function(params){
+        var p=parentTH();
+        if(p&&typeof p.generateRaw==="function")return p.generateRaw(params);
+        return rpcCall("generation.explicit",params||{}).then(function(env){
+          return (env&&env.ok&&env.result&&typeof env.result.text==="string")?env.result.text:"";
+        });
+      },
+      stopGenerationById:function(id){
+        var p=parentTH();
+        if(p&&typeof p.stopGenerationById==="function")return p.stopGenerationById(id);
+        return rpcCall("requests.cancel",{targetRequestId:id});
       },
       stopAllGeneration:function(){
         var p=parentTH();
         if(p&&typeof p.stopAllGeneration==="function")return p.stopAllGeneration();
+        return rpcCall("requests.cancel",{includeMainChat:true});
       }
     };
   }
   try{
     if(g.parent&&g.parent.TheaterAPI)g.TheaterAPI=g.parent.TheaterAPI;
-    else if(!g.TheaterAPI)g.TheaterAPI={call:function(){return Promise.resolve(null);}};
+    else if(!g.TheaterAPI)g.TheaterAPI={call:function(m,p,o){return rpcCall(m,p||{},o||{});}};
   }catch(e){}
   try{
     if(g.parent&&typeof g.parent.handleTheaterAction==="function"){
@@ -308,221 +1086,2018 @@ try{
 }catch(e){console.error("[liyuan bridge]",e);}
 })();</script>`;
 
-import { JQUERY_MIN } from "./vendor/jquery-min.ts";
-
 /**
- * 酒馆全局垫片（脚本帧专用，注入在 bridge 之后、卡脚本之前）。
- *
- * 酒馆页面内置 jQuery/lodash/变量系统/MVU 插件对象，卡界面脚本直接裸用这些全局
- * （实测一张卡的状态栏 UI 就裸用了 30 处 `$`、`_.get`、`getAllVariables()`、`Mvu`/`eventOn`）——
- * 梨园 srcdoc 沙箱里没有这些，脚本第一行就 ReferenceError，按钮事件永远绑不上
- * （8/05 实弹：状态栏出来了但页签全点不动）。
- *
- * 垫片面（对照酒馆公开调用面）：
- * - `$`/`jQuery`：完整 jQuery 3.7.1（离线内置，MIT）
- * - `_`：lodash 常用子集（get/set/has/each/isArray/isObject/escape 等，按需扩充）
- * - `getAllVariables()` / `getVariables()`：酒馆变量系统 → 梨园侧变量 JSON（默认空壳 `{stat_data:{}}`，
- *   父页可 postMessage {liyuanVariables} 注入——后续接梨园账本）
- * - `errorCatched(fn)`：包装函数、报错走 console、功能照跑（返回可调用体）
- * - `substitudeMacros`/`getLastMessageId`/`getChatMessages`：util/读族安全降级
- * - `Mvu`：MVU 插件对象壳（事件常量 + 空事件总线，数据刷新联动后置）
- * - `waitGlobalInitialized(name)`：酒馆等待全局就绪 → 目标已存在立即 resolve
- *
- * 覆盖的是酒馆助手**已发布的调用面**（公开 `.d.ts`）中卡会裸用的读/util 子集，非枚举卡作者措辞
- * （Wine 式兼容面，spec §3 原则 4）。
- *
- * **写族的边界**（8/26 补页面级脚本宿主时划定）：变量写入按**作用域**分家，不是一刀切禁。
- * `global`/`script` 作用域是作者脚本自己的界面自留地（实测页面级 UI 脚本的全部写入就是存
- * 悬浮球坐标，chat/message 作用域 0 次），落 localStorage；`chat`/`message`（＝梨园账本）
- * 写入一律拒绝并 warn。正文红线未松动：界面递条子、不拧旋钮，剧情状态只由 agent/场记推动。
+ * 酒馆助手 4.12.1 + SillyTavern 1.19.0 全局适配面（脚本帧与消息帧专用，注入在 bridge 之后、卡脚本之前）。
  */
 export const IFRAME_TAVERN_GLOBALS_SNIPPET = `<script>(function(){
 var g=typeof window!=="undefined"?window:null;if(!g)return;
 try{
-  if(typeof g.jQuery!=="function"){
-    ${JQUERY_MIN}
+  if(typeof g.jQuery!=="function"&&g.document){
+    try{${JQUERY_MIN}}catch(jqErr){}
   }
-  if(!g._||typeof g._!=="object"){
-    function lp(obj,path){if(path==null)return obj;if(!Array.isArray(path))path=String(path).split(".");var o=obj;for(var i=0;i<path.length;i++){if(o==null)return undefined;o=o[path[i]];}return o;}
-    g._={
-      get:function(obj,path,def){var v=lp(obj,path);return v===undefined?def:v;},
-      set:function(obj,path,val){if(path==null)return obj;if(!Array.isArray(path))path=String(path).split(".");var o=obj;for(var i=0;i<path.length-1;i++){if(o[path[i]]==null||typeof o[path[i]]!=="object")o[path[i]]={};o=o[path[i]];}o[path[path.length-1]]=val;return obj;},
-      has:function(obj,path){return lp(obj,path)!==undefined;},
-      each:function(coll,fn){if(Array.isArray(coll)){for(var i=0;i<coll.length;i++){if(fn(coll[i],i)===false)break;}}else{for(var k in coll){if(Object.prototype.hasOwnProperty.call(coll,k)){if(fn(coll[k],k)===false)break;}}}return coll;},
-      forEach:function(coll,fn){return g._.each(coll,fn);},
-      isArray:function(v){return Array.isArray(v);},
-      isObject:function(v){return v!=null&&typeof v==="object"&&!Array.isArray(v);},
-      isString:function(v){return typeof v==="string";},
-      isNumber:function(v){return typeof v==="number"&&isFinite(v);},
-      isBoolean:function(v){return typeof v==="boolean";},
-      isFunction:function(v){return typeof v==="function";},
-      isEmpty:function(v){if(v==null)return true;if(Array.isArray(v)||typeof v==="string")return v.length===0;if(typeof v==="object")return Object.keys(v).length===0;return false;},
-      escape:function(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});},
-      unescape:function(s){return String(s==null?"":s).replace(/&(?:amp|lt|gt|quot|#39);/g,function(m){return {"&amp;":"&","&lt;":"<","&gt;":">","&quot;":'"',"&#39;":"'"}[m];});},
-      clone:function(v){if(v==null||typeof v!=="object")return v;return JSON.parse(JSON.stringify(v));},
-      debounce:function(fn,wait){var t=null;return function(){var a=arguments,c=this;clearTimeout(t);t=setTimeout(function(){fn.apply(c,a);},wait||100);};},
-      now:function(){return Date.now();}
+  function parentWin(){try{return (g.parent&&g.parent!==g)?g.parent:null;}catch(e){return null;}}
+  var pw0=parentWin();
+  if(pw0){
+    try{
+      if(typeof g.jQuery==="function"&&typeof pw0.jQuery!=="function"){pw0.jQuery=g.jQuery;pw0.$=g.jQuery;}
+      if(typeof g._!=="function"&&typeof pw0._==="function")g._=pw0._;
+      if(!g.z&&pw0.z)g.z=pw0.z;
+      if(!g.YAML&&pw0.YAML)g.YAML=pw0.YAML;
+      if(!g.Vue&&pw0.Vue)g.Vue=pw0.Vue;
+    }catch(e0){}
+  }
+  if(typeof g._!=="function"){
+    try{new Function(${JSON.stringify(LODASH_MIN)}).call(g);}catch(ldErr){console.error("[liyuan lodash init]",ldErr);}
+  }
+  if(!g.z||!g.YAML){
+    try{new Function(${JSON.stringify(ZOD_YAML_MIN)}).call(g);}catch(zyErr){console.error("[liyuan zod/yaml init]",zyErr);}
+  }
+  if(!g.Vue){
+    try{new Function(${JSON.stringify(`${VUE_MIN};if(typeof Vue!=="undefined")this.Vue=Vue;`)}).call(g);}catch(vueErr){console.error("[liyuan vue init]",vueErr);}
+  }
+  if(pw0){
+    try{
+      if(typeof pw0._!=="function"&&typeof g._==="function")pw0._=g._;
+      if(!pw0.z&&g.z)pw0.z=g.z;
+      if(!pw0.YAML&&g.YAML)pw0.YAML=g.YAML;
+      if(!pw0.Vue&&g.Vue)pw0.Vue=g.Vue;
+    }catch(e1){}
+  }
+  g.__VUE_PROD_DEVTOOLS__=true;
+  g.__VUE_OPTIONS_API__=true;
+  g.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__=false;
+  function toPath(p){
+    if(g._&&typeof g._.toPath==="function")return g._.toPath(p);
+    if(Array.isArray(p))return p.map(String);
+    if(p==null||p==="")return [];
+    return String(p).replace(/\\[(\\d+)\\]/g,".$1").split(".").filter(Boolean);
+  }
+  function lp(obj,path){
+    if(path==null||path==="")return obj;
+    var parts=toPath(path),o=obj;
+    for(var i=0;i<parts.length;i++){if(o==null)return undefined;o=o[parts[i]];}
+    return o;
+  }
+  function deepClone(v){
+    if(v==null||typeof v!=="object")return v;
+    if(Array.isArray(v))return v.map(deepClone);
+    var out={};
+    for(var k in v){if(Object.prototype.hasOwnProperty.call(v,k))out[k]=deepClone(v[k]);}
+    return out;
+  }
+  function isPlainObj(v){
+    if(!v||typeof v!=="object"||Array.isArray(v))return false;
+    return Object.prototype.toString.call(v)==="[object Object]";
+  }
+  function baseMerge(target,source,customizer){
+    if(!target||typeof target!=="object")target={};
+    if(!source||typeof source!=="object")return target;
+    for(var k in source){
+      if(!Object.prototype.hasOwnProperty.call(source,k))continue;
+      var srcVal=source[k],objVal=target[k];
+      var custom=typeof customizer==="function"?customizer(objVal,srcVal,k,target,source):undefined;
+      if(custom!==undefined){target[k]=custom;continue;}
+      if(Array.isArray(srcVal)){target[k]=deepClone(srcVal);}
+      else if(isPlainObj(srcVal)){target[k]=baseMerge(isPlainObj(objVal)?objVal:{},srcVal,customizer);}
+      else if(srcVal!==undefined){target[k]=srcVal;}
+    }
+    return target;
+  }
+  g.klona=deepClone;
+  if(!g.showdown){
+    var SdConverter=function(){};
+    SdConverter.prototype.makeHtml=function(md){return String(md==null?"":md);};
+    SdConverter.prototype.setOption=function(){};
+    SdConverter.prototype.setFlavor=function(){};
+    g.showdown={Converter:SdConverter,setOption:function(){},setFlavor:function(){}};
+  }
+  if(!g.EjsTemplate||!g.EjsTemplate.__liyuanFullEjs){
+    var ejsDefaultFeatures={
+      enabled:true,
+      generate_enabled:true,
+      generate_loader_enabled:true,
+      inject_loader_enabled:true,
+      render_enabled:true,
+      render_loader_enabled:true,
+      code_blocks_enabled:false,
+      raw_message_evaluation_enabled:false,
+      filter_message_enabled:false,
+      depth_limit:-1,
+      autosave_enabled:false,
+      preload_worldinfo_enabled:true,
+      with_context_disabled:false,
+      debug_enabled:false,
+      invert_enabled:false,
+      compile_workers:false,
+      sandbox:false,
+      cache_enabled:0,
+      cache_size:100,
+      cache_hasher:"h32ToString"
     };
+    var ejsFeatures=Object.assign({},ejsDefaultFeatures);
+    var ejsDefines=(pw0&&pw0.__liyuanEjsDefines)?pw0.__liyuanEjsDefines:{};
+    if(pw0&&!pw0.__liyuanEjsDefines)pw0.__liyuanEjsDefines=ejsDefines;
+    var ejsInitialVars=(pw0&&pw0.__liyuanEjsInitialVars)?pw0.__liyuanEjsInitialVars:{};
+    if(pw0&&!pw0.__liyuanEjsInitialVars)pw0.__liyuanEjsInitialVars=ejsInitialVars;
+    var AsyncFnCtor=Object.getPrototypeOf(async function(){}).constructor;
+
+    function ejsCompileSource(tplText,opts){
+      var o=(opts&&opts.openDelimiter)||"<";
+      var c=(opts&&opts.closeDelimiter)||">";
+      var d=(opts&&opts.delimiter)||"%";
+      var localsName=(opts&&opts.localsName)||"locals";
+      var outFnName=(opts&&opts.outputFunctionName)||"print";
+      var useWith=!opts||opts._with!==false;
+      var text=String(tplText==null?"":tplText);
+      if(text.indexOf("<#escape-ejs>")>=0){
+        text=text.replace(/<#escape-ejs>([\\s\\S]*?)<#\\/escape-ejs>/g,function(_m,inner){
+          return String(inner).replace(/<%/g,"<%%").replace(/%>/g,"%%>");
+        });
+      }
+      text=text.replace(/[ \\t]*<%_/gm,"<%_").replace(/_%>[ \\t]*/gm,"_%>");
+      var escRe=function(s){return g._&&g._.escapeRegExp?g._.escapeRegExp(String(s)):String(s);};
+      var regStr="("+escRe(o)+escRe(d)+escRe(d)+"|"+escRe(d)+escRe(d)+escRe(c)+"|"+escRe(o)+escRe(d)+"=|"+escRe(o)+escRe(d)+"-|"+escRe(o)+escRe(d)+"_|"+escRe(o)+escRe(d)+"#|"+escRe(o)+escRe(d)+"|"+escRe(d)+escRe(c)+"|-"+escRe(d)+escRe(c)+"|_"+escRe(d)+escRe(c)+")";
+      var pat=new RegExp(regStr);
+      var str=text;
+      var rawTokens=[];
+      var m=pat.exec(str);
+      while(m){
+        if(m.index!==0){rawTokens.push(str.substring(0,m.index));str=str.slice(m.index);}
+        rawTokens.push(m[0]);
+        str=str.slice(m[0].length);
+        m=pat.exec(str);
+      }
+      if(str)rawTokens.push(str);
+      var tokens=[];
+      var openPref=o+d,litOpen=o+d+d,closeSuf=d+c,litClose=d+d+c;
+      for(var ti=0;ti<rawTokens.length;ti++){
+        var tk=rawTokens[ti];
+        if(tk.indexOf(openPref)===0&&tk!==litOpen){
+          var nest=1,buf=[],tj=ti+1;
+          while(tj<rawTokens.length){
+            var inner=rawTokens[tj];
+            if(inner.indexOf(openPref)===0&&inner!==litOpen)nest++;
+            else if(inner.slice(-closeSuf.length)===closeSuf&&inner!==litClose){
+              nest--;
+              if(nest===0){tokens.push(tk,buf.join(""),inner);ti=tj;break;}
+            }
+            buf.push(inner);
+            tj++;
+          }
+          if(nest!==0)throw new SyntaxError('Could not find matching close tag for "'+tk+'".');
+        }else{
+          tokens.push(tk);
+        }
+      }
+      var mode=null,truncate=false,src="";
+      function addOut(line){
+        var s=line;
+        if(truncate){s=s.replace(/^(?:\\r\\n|\\r|\\n)/,"");truncate=false;}
+        if(!s)return;
+        var esc=s.replace(/\\\\/g,"\\\\\\\\").replace(/\\n/g,"\\\\n").replace(/\\r/g,"\\\\r").replace(/"/g,'\\\\"');
+        src+='    ; __append("'+esc+'")\\n';
+      }
+      for(var k=0;k<tokens.length;k++){
+        var seg=tokens[k];
+        if(seg===o+d||seg===o+d+"_")mode="eval";
+        else if(seg===o+d+"=")mode="escaped";
+        else if(seg===o+d+"-")mode="raw";
+        else if(seg===o+d+"#")mode="comment";
+        else if(seg===litOpen){mode="literal";src+='    ; __append("'+o+d+'")\\n';}
+        else if(seg===litClose){mode="literal";src+='    ; __append("'+d+c+'")\\n';}
+        else if(seg===closeSuf||seg==="-"+closeSuf||seg==="_"+closeSuf){
+          if(mode==="literal")addOut(seg);
+          mode=null;
+          if(seg.charAt(0)==="-"||seg.charAt(0)==="_")truncate=true;
+        }else if(mode){
+          if(mode==="eval")src+="    ; "+seg+"\\n";
+          else if(mode==="escaped")src+="    ; __append(escapeFn("+seg.replace(/;\\s*$/,"")+"))\\n";
+          else if(mode==="raw")src+="    ; __append("+seg.replace(/;\\s*$/,"")+")\\n";
+          else if(mode==="literal")addOut(seg);
+        }else{
+          addOut(seg);
+        }
+      }
+      var body='  var __output = "";\\n  function __append(...args){args.filter(function(x){return x!==undefined&&x!==null;}).forEach(function(s){__output+=s;});}\\n';
+      if(outFnName)body+="  const "+outFnName+" = __append;\\n";
+      if(useWith)body+="  with ("+localsName+" || {}) {\\n"+src+"  }\\n";
+      else body+="  {\\n"+src+"  }\\n";
+      body+="  return __output;\\n";
+      return body;
+    }
+
+    function ejsParseJSON(txt){
+      var raw=String(txt==null?"":txt).trim();
+      if(!raw)return null;
+      try{return JSON.parse(raw);}catch(e){
+        var s=raw.replace(/^\\x60\\x60\\x60(?:json)?\\s*/i,"").replace(/\\s*\\x60\\x60\\x60$/i,"").replace(/,\\s*([}\\]])/g,"\\$1");
+        return JSON.parse(s);
+      }
+    }
+
+    function ejsJsonPatch(doc,patches){
+      if(!doc||typeof doc!=="object")return doc;
+      var next=deepClone(doc);
+      if(!Array.isArray(patches)||!g._)return next;
+      for(var i=0;i<patches.length;i++){
+        var p=patches[i];
+        if(!p||typeof p.path!=="string")continue;
+        var segs=p.path===""?[]:p.path.replace(/^\\//,"").split("/").map(function(s){return s.replace(/~1/g,"/").replace(/~0/g,"~");});
+        var fromSegs=p.from?p.from.replace(/^\\//,"").split("/").map(function(s){return s.replace(/~1/g,"/").replace(/~0/g,"~");}):[];
+        if(p.op==="add"||p.op==="replace"||p.op==="set"||p.op==="assign"){
+          if(segs[segs.length-1]==="-"){
+            var arr=g._.get(next,segs.slice(0,-1));
+            if(Array.isArray(arr))arr.push(deepClone(p.value));
+          }else{
+            g._.set(next,segs,deepClone(p.value));
+          }
+        }else if(p.op==="remove"){
+          g._.unset(next,segs);
+        }else if(p.op==="move"){
+          var mv=g._.get(next,fromSegs);
+          if(mv!==undefined){g._.unset(next,fromSegs);g._.set(next,segs,deepClone(mv));}
+        }else if(p.op==="copy"){
+          var cp=g._.get(next,fromSegs);
+          if(cp!==undefined)g._.set(next,segs,deepClone(cp));
+        }
+      }
+      return next;
+    }
+
+    function ejsAllVariables(_end){
+      var all=typeof g.getAllVariables==="function"?g.getAllVariables():{};
+      return Object.assign({},ejsInitialVars,all);
+    }
+
+    function ejsPrepareContext(additionalCtx,_lastMsgId){
+      var vars=ejsAllVariables(_lastMsgId);
+      var rctx=readRuntimeCtx()||{};
+      var msgs=Array.isArray(rctx.messages)?rctx.messages:[];
+      var lastUserIdx=-1,lastCharIdx=-1;
+      for(var i=msgs.length-1;i>=0;i--){
+        if(lastUserIdx<0&&msgs[i]&&msgs[i].role==="user")lastUserIdx=i;
+        if(lastCharIdx<0&&msgs[i]&&msgs[i].role==="assistant")lastCharIdx=i;
+      }
+      var getvarFn=function(key,opts){
+        var defVal=(opts&&typeof opts==="object")?opts.defaults:undefined;
+        if(key==null||key==="")return vars;
+        return g._?g._.get(vars,key,defVal):defVal;
+      };
+      var setvarFn=function(key,val,opts){
+        var o=(opts&&typeof opts==="object")?opts:(typeof opts==="string"?{flags:opts}:{});
+        if(o.flags==="nx"&&g._&&g._.has(vars,key))return undefined;
+        if(o.flags==="xx"&&g._&&!g._.has(vars,key))return undefined;
+        var oldVal=g._?g._.get(vars,key):undefined;
+        if(g._){
+          if(val===undefined)g._.unset(vars,key);
+          else g._.set(vars,key,val);
+        }
+        try{
+          if(typeof g.__liyuanAuthorVarsWrite==="function"){
+            var scope=o.scope==="global"?"global":"chat";
+            g.__liyuanAuthorVarsWrite(scope,vars,"assign");
+          }
+        }catch(e){}
+        if(o.results==="old")return oldVal;
+        if(o.results==="fullcache")return vars;
+        return val;
+      };
+      var incvarFn=function(key,val,opts){
+        var delta=val===undefined?1:Number(val);
+        var o=(opts&&typeof opts==="object")?opts:{};
+        var cur=Number(getvarFn(key,{defaults:o.defaults||0}))||0;
+        var next=cur+delta;
+        if(o.min!=null)next=Math.max(next,o.min);
+        if(o.max!=null)next=Math.min(next,o.max);
+        return setvarFn(key,next,opts);
+      };
+      var decvarFn=function(key,val,opts){
+        return incvarFn(key,-(val===undefined?1:Number(val)),opts);
+      };
+      var delvarFn=function(key,idx,opts){
+        if(idx==null)return setvarFn(key,undefined,opts);
+        var cur=getvarFn(key,opts);
+        if(Array.isArray(cur)){
+          var pos=cur.indexOf(idx);
+          if(pos>=0){cur.splice(pos,1);return setvarFn(key,cur,opts);}
+        }else if(cur&&typeof cur==="object"){
+          delete cur[String(idx)];
+          return setvarFn(key,cur,opts);
+        }
+        return undefined;
+      };
+      var insvarFn=function(key,val,idx,opts){
+        var cur=getvarFn(key,opts);
+        if(Array.isArray(cur)){
+          if(idx==null)cur.push(val);
+          else cur.splice(Number(idx)<0?Math.max(0,cur.length+Number(idx)):Number(idx),0,val);
+          return setvarFn(key,cur,opts);
+        }else if(cur&&typeof cur==="object"&&idx!=null){
+          cur[String(idx)]=val;
+          return setvarFn(key,cur,opts);
+        }
+        return undefined;
+      };
+      var getwiFn=async function(bookOrTitle,entryOrData,data){
+        var targetTitle=(entryOrData===undefined||(entryOrData&&typeof entryOrData==="object"&&!(entryOrData instanceof RegExp)))?bookOrTitle:entryOrData;
+        var extra=(entryOrData&&typeof entryOrData==="object"&&!(entryOrData instanceof RegExp))?entryOrData:(data||{});
+        try{
+          var entries=typeof g.getWorldbook==="function"?await g.getWorldbook(typeof bookOrTitle==="string"?bookOrTitle:""):[];
+          var hit=null;
+          for(var j=0;j<entries.length;j++){
+            var e=entries[j];
+            if(!e)continue;
+            if(e.name===targetTitle||e.comment===targetTitle||e.uid===targetTitle||(targetTitle instanceof RegExp&&targetTitle.test(e.name||e.comment||""))){
+              hit=e;break;
+            }
+          }
+          if(!hit)return "";
+          var subCtx=Object.assign({},ctxObj,extra,{world_info:hit});
+          return await ejsEvalTemplate(hit.content||"",subCtx);
+        }catch(e){return "";}
+      };
+      var defineFn=function(name,val,merge){
+        if(merge&&g._&&g._.isPlainObject(ejsDefines[name])&&g._.isPlainObject(val)){
+          ejsDefines[name]=g._.merge({},ejsDefines[name],val);
+        }else{
+          ejsDefines[name]=val;
+        }
+        ctxObj[name]=typeof ejsDefines[name]==="function"?ejsDefines[name].bind(ctxObj):ejsDefines[name];
+        return ejsDefines[name];
+      };
+      var ctxObj=Object.assign({
+        _:g._,
+        $:g.$,
+        z:g.z,
+        YAML:g.YAML,
+        toastr:g.toastr,
+        console:console,
+        variables:vars,
+        get SillyTavern(){return g.SillyTavern&&typeof g.SillyTavern.getContext==="function"?g.SillyTavern.getContext():g.SillyTavern;},
+        userName:rctx.userName||"User",
+        charName:rctx.charName||"Assistant",
+        assistantName:rctx.charName||"Assistant",
+        chatId:rctx.chatId||rctx.sessionId||"",
+        characterId:0,
+        groupId:null,
+        groups:[],
+        runType:"generate",
+        generateType:"",
+        lastMessageId:msgs.length>0?msgs.length-1:-1,
+        lastUserMessageId:lastUserIdx>=0?lastUserIdx:0,
+        lastCharMessageId:lastCharIdx>=0?lastCharIdx:0,
+        lastUserMessage:lastUserIdx>=0?(msgs[lastUserIdx].message||msgs[lastUserIdx].text||""):"",
+        lastCharMessage:lastCharIdx>=0?(msgs[lastCharIdx].message||msgs[lastCharIdx].text||""):"",
+        getvar:getvarFn,
+        getLocalVar:getvarFn,
+        getGlobalVar:function(k,o){return getvarFn(k,Object.assign({},o,{scope:"global"}));},
+        getMessageVar:getvarFn,
+        setvar:setvarFn,
+        setLocalVar:setvarFn,
+        setGlobalVar:function(k,v,o){return setvarFn(k,v,Object.assign({},o,{scope:"global"}));},
+        setMessageVar:setvarFn,
+        incvar:incvarFn,
+        incLocalVar:incvarFn,
+        incGlobalVar:incvarFn,
+        incMessageVar:incvarFn,
+        decvar:decvarFn,
+        decLocalVar:decvarFn,
+        decGlobalVar:decvarFn,
+        decMessageVar:decvarFn,
+        delvar:delvarFn,
+        delLocalVar:delvarFn,
+        delGlobalVar:delvarFn,
+        delMessageVar:delvarFn,
+        insvar:insvarFn,
+        insertLocalVar:insvarFn,
+        insertGlobalVar:insvarFn,
+        insertMessageVar:insvarFn,
+        patchVariables:function(key,change,o){
+          var doc=getvarFn(key,o);
+          var ops=typeof change==="string"?ejsParseJSON(change):change;
+          return setvarFn(key,ejsJsonPatch(doc,ops),o);
+        },
+        parseJSON:ejsParseJSON,
+        jsonPatch:ejsJsonPatch,
+        getwi:getwiFn,
+        getWorldInfo:getwiFn,
+        activewi:getwiFn,
+        activateWorldInfo:getwiFn,
+        define:defineFn,
+        evalTemplate:function(c,d,o){return ejsEvalTemplate(c,Object.assign({},ctxObj,d||{}),o);},
+        getChatMessage:function(idx){
+          var arr=typeof g.getChatMessages==="function"?g.getChatMessages(idx):[];
+          return (arr&&arr[0]&&arr[0].message)||"";
+        },
+        getChatMessages:function(cnt){
+          var arr=typeof g.getChatMessages==="function"?g.getChatMessages(cnt):[];
+          return Array.isArray(arr)?arr.map(function(m){return m.message||"";}):[];
+        }
+      },ejsDefines,additionalCtx||{});
+      return Promise.resolve(ctxObj);
+    }
+
+    async function ejsCompileTemplate(code,options,thisData){
+      var opts=(options&&options.options)?options.options:(options||{});
+      var esc=(options&&typeof options.escaper==="function")?options.escaper:((opts&&typeof opts.escape==="function")?opts.escape:function(m){return m==null?"":String(m);});
+      var src=ejsCompileSource(code,opts);
+      var fn=new AsyncFnCtor((opts&&opts.localsName)||"locals","escapeFn",src);
+      return async function(data){
+        var ctx=data||thisData||{};
+        return await fn.call(thisData||ctx,ctx,esc);
+      };
+    }
+
+    async function ejsEvalTemplate(code,context,options){
+      var str=String(code==null?"":code);
+      var opts=(options&&options.options)?options.options:(options||{});
+      var o=(opts&&opts.openDelimiter)||"<";
+      var d=(opts&&opts.delimiter)||"%";
+      if(str.indexOf(o+d)<0&&str.indexOf("<#escape-ejs>")<0)return str;
+      var env=context||await ejsPrepareContext();
+      var compiled=await ejsCompileTemplate(str,options,env);
+      return await compiled(env);
+    }
+
+    function ejsGetSyntaxErrorInfo(code){
+      try{
+        var src=ejsCompileSource(String(code==null?"":code),{});
+        new AsyncFnCtor("locals","escapeFn",src);
+        return Promise.resolve("");
+      }catch(err){
+        return Promise.resolve(String(err&&err.message?err.message:err));
+      }
+    }
+
+    g.EjsTemplate={
+      __liyuanFullEjs:true,
+      evalTemplate:ejsEvalTemplate,
+      evaltemplate:ejsEvalTemplate,
+      prepareContext:ejsPrepareContext,
+      compileTemplate:ejsCompileTemplate,
+      getSyntaxErrorInfo:ejsGetSyntaxErrorInfo,
+      allVariables:ejsAllVariables,
+      saveVariables:function(){return Promise.resolve();},
+      refreshWorldInfo:function(){return Promise.resolve();},
+      getFeatures:function(){return Object.assign({},ejsFeatures);},
+      setFeatures:function(f){if(f&&typeof f==="object")Object.assign(ejsFeatures,f);},
+      resetFeatures:function(){ejsFeatures=Object.assign({},ejsDefaultFeatures);},
+      get defines(){return ejsDefines;},
+      get initialVariables(){return ejsInitialVars;},
+      parseJSON:ejsParseJSON,
+      jsonPatch:ejsJsonPatch,
+      render:function(tpl,ctx){return ejsEvalTemplate(tpl,ctx);}
+    };
+  }
+  function readRuntimeCtx(){
+    var c=g.__liyuanRuntimeContext||null;
+    if(!c){
+      var p=parentWin();
+      if(p&&p.__liyuanRuntimeContext&&typeof p.__liyuanRuntimeContext==="object"){
+        c=p.__liyuanRuntimeContext;
+        g.__liyuanRuntimeContext=c;
+      }
+    }
+    return c;
+  }
+  // 帧与脚本身份协议（刀2：getIframeName / getScriptId / getMessageId / getCurrentMessageId）
+  g.getIframeName=function(){
+    try{
+      if(g.frameElement&&g.frameElement.id)return String(g.frameElement.id);
+    }catch(e){}
+    if(g.__TH_IFRAME_ID)return String(g.__TH_IFRAME_ID);
+    if(g.name)return String(g.name);
+    var sid=g.__liyuanCurrentScriptId||g.__liyuanDefaultScriptId||"default";
+    return "TH-script--card--"+sid;
+  };
+  g.getScriptId=function(){
+    if(g.__liyuanCurrentScriptId)return String(g.__liyuanCurrentScriptId);
+    var n=g.getIframeName();
+    var m=/^TH-script--[^-]+--(.+)$/.exec(n);
+    if(m&&m[1])return m[1];
+    if(g.__liyuanDefaultScriptId)return String(g.__liyuanDefaultScriptId);
+    return "default";
+  };
+  g.getMessageId=function(iframeName){
+    var target=String(iframeName||g.getIframeName());
+    var m=/^TH-message--(\\d+)--/.exec(target);
+    if(m&&m[1]!=null)return parseInt(m[1],10);
+    try{
+      if(g.frameElement&&g.frameElement.getAttribute){
+        var attr=g.frameElement.getAttribute("data-liyuan-message-id");
+        if(attr!=null&&attr!=="")return parseInt(attr,10);
+      }
+    }catch(e){}
+    return g.getLastMessageId();
+  };
+  g.getLastMessageId=function(){
+    var c=readRuntimeCtx();
+    var list=c&&Array.isArray(c.messages)?c.messages:null;
+    return (list&&list.length>0)?(list.length-1):0;
+  };
+  g.getCurrentMessageId=function(){
+    var n=g.getIframeName();
+    if(/^TH-message--\\d+--/.test(n))return g.getMessageId(n);
+    try{
+      if(g.frameElement&&g.frameElement.getAttribute){
+        var attr=g.frameElement.getAttribute("data-liyuan-message-id");
+        if(attr!=null&&attr!=="")return parseInt(attr,10);
+      }
+    }catch(e){}
+    return g.getLastMessageId();
+  };
+  g.reloadIframe=function(){try{g.location.reload();}catch(e){}};
+
+  // 变量系统全作用域（刀3：chat / message / script / character / preset / global / extension）
+  if(!g.__liyuanScopedVars)g.__liyuanScopedVars={chat:{},message:{},script:{},character:{},preset:{},global:{},extension:{}};
+  g.__liyuanSeedScriptVars=function(sid,initData){
+    if(!sid||!initData||typeof initData!=="object")return;
+    var cur=g.__liyuanAuthorVarsRead("script",sid);
+    var merged=baseMerge(deepClone(initData),cur);
+    g.__liyuanScopedVars.script[sid]=merged;
+  };
+  function rawMvuTree(){
+    var v=g.__liyuanVariables||null;
+    if(!v){
+      var p=parentWin();
+      if(p&&p.__liyuanVariables&&typeof p.__liyuanVariables==="object"){
+        v=p.__liyuanVariables;
+        g.__liyuanVariables=v;
+      }
+    }
+    return v&&typeof v==="object"?v:{stat_data:{}};
   }
   if(typeof g.getAllVariables!=="function"){
     g.getAllVariables=function(){
-      var v=g.__liyuanVariables||null;
-      if(!v){
-        try{
-          var p=(g.parent&&g.parent!==g)?g.parent:null;
-          if(p&&p.__liyuanVariables&&typeof p.__liyuanVariables==="object"){
-            v=p.__liyuanVariables;
-            g.__liyuanVariables=v;
-          }
-        }catch(e){}
-      }
-      return v&&typeof v==="object"?v:{stat_data:{}};
+      var mvu=deepClone(rawMvuTree());
+      var globalVars=g.__liyuanAuthorVarsRead("global");
+      var charVars=g.__liyuanAuthorVarsRead("character");
+      var scriptVars=g.__liyuanAuthorVarsRead("script",g.getScriptId());
+      var chatVars=g.__liyuanAuthorVarsRead("chat");
+      var merged=baseMerge({},globalVars);
+      baseMerge(merged,charVars);
+      if(!/^TH-message--/.test(g.getIframeName()))baseMerge(merged,scriptVars);
+      baseMerge(merged,mvu);
+      baseMerge(merged,chatVars);
+      if(!merged.stat_data||typeof merged.stat_data!=="object")merged.stat_data=deepClone(mvu.stat_data||{});
+      return merged;
     };
   }
-  // 父页把梨园账本的 MVU 树 postMessage 进来 → 写 window.__liyuanVariables（getAllVariables 的数据源）。
-  // 卡脚本多用 setInterval 轮询 getAllVariables 自行重画（实测有卡是 1.5s 一轮），故收到即生效、无需重载；
-  // 另发一次 Mvu 的 VARIABLE_UPDATE_ENDED 事件，兼顾监听事件而非轮询的卡。父→子单向通道，非模型注入。
+  if(typeof g.__liyuanAuthorVarsRead!=="function"){
+    var AV_KEY=function(t,subId){
+      var scope=String(t||"chat").toLowerCase();
+      if(scope==="script")return "liyuan.authorVars.script."+(subId||g.getScriptId()||"default");
+      if(scope==="extension")return "liyuan.authorVars.ext."+(subId||"default");
+      return "liyuan.authorVars."+(scope==="script"?"script":scope==="global"?"global":scope);
+    };
+    g.__liyuanAuthorVarsRead=function(t,subId){
+      var scope=String(t||"chat").toLowerCase();
+      var ctx=readRuntimeCtx();
+      try{
+        if(scope==="chat"){
+          var base=deepClone(rawMvuTree());
+          if(ctx&&ctx.scriptVars&&ctx.scriptVars.chat)baseMerge(base,ctx.scriptVars.chat);
+          if(g.__liyuanScopedVars.chat)baseMerge(base,g.__liyuanScopedVars.chat);
+          var rawChat=g.localStorage&&g.localStorage.getItem(AV_KEY("chat"));
+          if(rawChat)baseMerge(base,JSON.parse(rawChat));
+          return base;
+        }
+        if(scope==="message"){
+          var mid=subId===undefined||subId==="latest"?g.getLastMessageId():(Number(subId)<0?Math.max(0,g.getLastMessageId()+1+Number(subId)):Number(subId));
+          var msgBase=deepClone(rawMvuTree());
+          if(ctx&&ctx.scriptVars&&ctx.scriptVars.messages&&ctx.scriptVars.messages[String(mid)]){
+            baseMerge(msgBase,ctx.scriptVars.messages[String(mid)]);
+          }
+          if(g.__liyuanScopedVars.message&&g.__liyuanScopedVars.message[String(mid)]){
+            baseMerge(msgBase,g.__liyuanScopedVars.message[String(mid)]);
+          }
+          return msgBase;
+        }
+        if(scope==="script"){
+          var sid=subId||g.getScriptId()||"default";
+          var regInit=(g.__liyuanScriptRegistry&&g.__liyuanScriptRegistry[sid]&&g.__liyuanScriptRegistry[sid].data)?g.__liyuanScriptRegistry[sid].data:{};
+          var sBase=deepClone(regInit);
+          var rawS=g.localStorage&&g.localStorage.getItem(AV_KEY("script",sid));
+          if(!rawS)rawS=g.localStorage&&g.localStorage.getItem("liyuan.authorVars.script");
+          if(rawS)baseMerge(sBase,JSON.parse(rawS));
+          if(g.__liyuanScopedVars.script&&g.__liyuanScopedVars.script[sid])baseMerge(sBase,g.__liyuanScopedVars.script[sid]);
+          return sBase;
+        }
+        var raw=g.localStorage&&g.localStorage.getItem(AV_KEY(scope,subId));
+        var v=raw?JSON.parse(raw):null;
+        return v&&typeof v==="object"?deepClone(v):{};
+      }catch(e){return {};}
+    };
+    g.__liyuanAuthorVarsWrite=function(t,patch,mode,subId){
+      var scope=String(t||"chat").toLowerCase();
+      try{
+        var cur=mode==="replace"?{}:g.__liyuanAuthorVarsRead(scope,subId);
+        var next=mode==="replace"?deepClone(patch||{}):baseMerge(cur,patch||{},function(_l,r){return Array.isArray(r)?deepClone(r):undefined;});
+        if(scope==="chat"){
+          g.__liyuanScopedVars.chat=deepClone(next);
+          if(next.stat_data&&typeof next.stat_data==="object"){
+            g.__liyuanVariables={stat_data:deepClone(next.stat_data)};
+            var pw=parentWin();
+            if(pw)pw.__liyuanVariables=g.__liyuanVariables;
+          }
+        }else if(scope==="message"){
+          var mid=subId===undefined||subId==="latest"?g.getLastMessageId():(Number(subId)<0?Math.max(0,g.getLastMessageId()+1+Number(subId)):Number(subId));
+          g.__liyuanScopedVars.message[String(mid)]=deepClone(next);
+          if(next.stat_data&&typeof next.stat_data==="object"){
+            g.__liyuanVariables={stat_data:deepClone(next.stat_data)};
+            var pw2=parentWin();
+            if(pw2)pw2.__liyuanVariables=g.__liyuanVariables;
+          }
+        }else if(scope==="script"){
+          var sid=subId||g.getScriptId()||"default";
+          g.__liyuanScopedVars.script[sid]=deepClone(next);
+          if(g.localStorage)g.localStorage.setItem("liyuan.authorVars.script",JSON.stringify(next));
+        }
+        if(g.localStorage)g.localStorage.setItem(AV_KEY(scope,subId),JSON.stringify(next));
+        if(g.Liyuan&&typeof g.Liyuan.call==="function"){
+          try{
+            var writeParams={scope:scope,mode:mode==="replace"?"replace":"merge",data:next};
+            if(scope==="extension"&&subId)writeParams.extension_id=String(subId);
+            if(scope==="message"&&subId!==undefined)writeParams={scope:"message",mode:"merge",key:String(subId),value:next};
+            g.Liyuan.call("data.write",writeParams,{scriptId:scope==="script"?String(subId||g.getScriptId()):undefined});
+            if((scope==="chat"||scope==="message")&&next.stat_data&&typeof next.stat_data==="object"){
+              g.Liyuan.call("state.commit",{patch:next.stat_data});
+            }
+          }catch(e2){}
+        }
+        return deepClone(next);
+      }catch(e){return {};}
+    };
+    function resolveSubId(opts){
+      if(!opts||typeof opts!=="object")return undefined;
+      if(opts.type==="script")return opts.script_id||g.getScriptId();
+      if(opts.type==="message")return opts.message_id!==undefined?opts.message_id:"latest";
+      if(opts.type==="extension")return opts.extension_id||"default";
+      return undefined;
+    }
+    g.getVariables=function(opts){
+      var t=(opts&&opts.type)||"chat";
+      if(t!=="chat")return g.__liyuanAuthorVarsRead(t,resolveSubId(opts));
+      var r=g.__liyuanAuthorVarsRead("chat");
+      return Object.keys(r).length?r:g.getAllVariables();
+    };
+    g.replaceVariables=function(variables,opts){
+      var t=(opts&&opts.type)||"chat";
+      var subId=resolveSubId(opts);
+      return g.__liyuanAuthorVarsWrite(t,variables||{},"replace",subId);
+    };
+    g.updateVariablesWith=function(updater,opts){
+      var t=(opts&&opts.type)||"chat";
+      var subId=resolveSubId(opts);
+      var current=g.getVariables(opts||{type:t});
+      if(typeof updater!=="function"){
+        if(updater&&typeof updater==="object")return g.__liyuanAuthorVarsWrite(t,updater,"assign",subId);
+        return current;
+      }
+      var res=updater(deepClone(current));
+      if(res&&typeof res.then==="function"){
+        return res.then(function(resolved){
+          return g.__liyuanAuthorVarsWrite(t,resolved||{},"replace",subId);
+        });
+      }
+      return g.__liyuanAuthorVarsWrite(t,res||{},"replace",subId);
+    };
+    g.insertOrAssignVariables=function(variables,opts){
+      var t=(opts&&opts.type)||"chat";
+      var subId=resolveSubId(opts);
+      if(typeof variables==="function")return g.updateVariablesWith(variables,opts);
+      return g.__liyuanAuthorVarsWrite(t,variables||{},"assign",subId);
+    };
+    g.insertVariables=function(variables,opts){
+      return g.updateVariablesWith(function(oldVars){
+        return baseMerge(deepClone(variables||{}),oldVars,function(_l,r){return Array.isArray(r)?deepClone(r):undefined;});
+      },opts||{type:"chat"});
+    };
+    g.deleteVariable=function(variable_path,opts){
+      var t=(opts&&opts.type)||"chat";
+      var current=g.getVariables(opts||{type:t});
+      var occurred=g._.unset(current,variable_path);
+      var saved=g.replaceVariables(current,opts||{type:t});
+      return {variables:saved,delete_occurred:Boolean(occurred)};
+    };
+    g.registerVariableSchema=function(schema,opts){
+      if(!g.__liyuanVariableSchemas)g.__liyuanVariableSchemas={};
+      var t=(opts&&opts.type)||"chat";
+      g.__liyuanVariableSchemas[t]=schema;
+    };
+  }
   if(typeof g.addEventListener==="function"){
     g.addEventListener("message",function(ev){
       var d=ev&&ev.data;
-      if(!d||typeof d!=="object"||!("liyuanVariables" in d))return;
+      if(!d||typeof d!=="object")return;
+      if("liyuanRuntimeContext" in d){
+        var c=d.liyuanRuntimeContext;
+        if(c&&typeof c==="object")g.__liyuanRuntimeContext=c;
+      }
+      if(!("liyuanVariables" in d))return;
+      var oldV=deepClone(g.__liyuanVariables||{stat_data:{}});
       var v=d.liyuanVariables;
       g.__liyuanVariables=(v&&typeof v==="object")?v:{stat_data:{}};
+      if(typeof g.__liyuanApplyMvuSchemas==="function"){
+        try{g.__liyuanApplyMvuSchemas(g.__liyuanVariables);}catch(e0){}
+      }
       if(g.Mvu&&g.Mvu.events&&typeof g.eventEmit==="function"){
-        try{g.eventEmit(g.Mvu.events.VARIABLE_UPDATE_ENDED,g.__liyuanVariables);}catch(e){}
+        try{
+          g.eventEmit(g.Mvu.events.VARIABLE_UPDATE_ENDED,g.__liyuanVariables,oldV);
+          if(g.Mvu.events.VARIABLE_UPDATE_ENDED!=="VARIABLE_UPDATE_ENDED"){
+            g.eventEmit("VARIABLE_UPDATE_ENDED",g.__liyuanVariables,oldV);
+          }
+        }catch(e){}
       }
     });
-    // boot 后主动要一次当前变量（本帧可能是刚滚进视口才建、错过了父页上一次广播）
-    try{var pv=(g.parent&&g.parent!==g)?g.parent:null;if(pv)pv.postMessage({liyuanVariablesReady:g.name||1},"*");}catch(e){}
+    try{
+      var pv=parentWin();
+      if(pv){
+        pv.postMessage({liyuanVariablesReady:g.name||1},"*");
+        pv.postMessage({liyuanContextReady:g.name||1},"*");
+      }
+    }catch(e){}
   }
-  // 酒馆助手 util/读族裸全局（对照公开类型声明 @types/function、@types/iframe/variables）。
-  // 卡把它们当裸全局直接调用；module 脚本下缺一个就是 ReferenceError → 整份界面初始化中断
-  // （8/25 实测：唯一缺的 errorCatched 让 $(errorCatched(init)) 抛错，5 个页签全点不动）。
-  // 全部安全降级：读族回空、util 按语义。写族/生成族不在此列（正文红线：界面不得拧旋钮）。
   if(typeof g.errorCatched!=="function"){
-    // 公开语义：包装函数，报错时提示、功能照跑。返回值必须可调用（$(errorCatched(init)) 依赖它）。
     g.errorCatched=function(fn){
       if(typeof fn!=="function")return fn;
-      return function(){try{return fn.apply(this,arguments);}catch(e){console.error("[liyuan card]",e);}};
-    };
-  }
-  if(typeof g.getVariables!=="function"){
-    g.getVariables=function(opts){
-      var t=opts&&opts.type;
-      if(t==="global"||t==="script")return g.__liyuanAuthorVarsRead(t);
-      return g.getAllVariables();
-    };
-  }
-  // 作者脚本的「界面自留地」——与梨园账本严格分家。
-  //
-  // 实测三个页面级 UI 脚本的全部写入合起来只有一件事：把自己的坐标存下来
-  // （insertOrAssignVariables({xxx_pos:"{x,y}"},{type:'global'})），
-  // chat/message 作用域出现 0 次。所以「让球记住位置」和「让界面拧账本」是两件事，
-  // 不必为了前者放开后者：
-  // - global/script 作用域 = 纯前端 UI 状态 → 落 localStorage（本机、本浏览器）
-  // - 其余（含缺省、chat、message）= 梨园账本 → **读可以，写一律拒绝**
-  // 账本只由 agent 与场记推动，界面递条子不拧旋钮（本文件头的红线，未松动）。
-  if(typeof g.__liyuanAuthorVarsRead!=="function"){
-    var AV_KEY=function(t){return "liyuan.authorVars."+(t==="script"?"script":"global");};
-    g.__liyuanAuthorVarsRead=function(t){
-      try{
-        var raw=g.localStorage&&g.localStorage.getItem(AV_KEY(t));
-        var v=raw?JSON.parse(raw):null;
-        return v&&typeof v==="object"?v:{};
-      }catch(e){return {};}
-    };
-    g.__liyuanAuthorVarsWrite=function(t,patch,mode){
-      try{
-        var cur=mode==="replace"?{}:g.__liyuanAuthorVarsRead(t);
-        for(var k in patch){if(Object.prototype.hasOwnProperty.call(patch,k))cur[k]=patch[k];}
-        if(g.localStorage)g.localStorage.setItem(AV_KEY(t),JSON.stringify(cur));
-        return cur;
-      }catch(e){return {};}
-    };
-    // 三个写族入口同一套语义（酒馆助手公开面：insertOrAssign 合并 / replace 整替 / updateWith 函数式）
-    var authorWrite=function(name,mode){
-      return function(arg,opts){
-        var t=opts&&opts.type;
-        if(t!=="global"&&t!=="script"){
-          console.warn("[liyuan "+name+"] 梨园账本只读：界面不拧旋钮，剧情状态由 agent/场记推动。作用域="+String(t||"(缺省)"));
-          return Promise.resolve({});
-        }
-        var patch=arg;
-        if(typeof arg==="function"){
-          try{patch=arg(g.__liyuanAuthorVarsRead(t))||{};}catch(e){patch={};}
-        }
-        if(!patch||typeof patch!=="object")return Promise.resolve({});
-        return Promise.resolve(g.__liyuanAuthorVarsWrite(t,patch,mode));
+      return function(){
+        try{
+          var r=fn.apply(this,arguments);
+          if(r&&typeof r.then==="function"){
+            return r.then(undefined,function(err){console.error("[liyuan card async]",err);});
+          }
+          return r;
+        }catch(e){console.error("[liyuan card]",e);}
       };
     };
-    if(typeof g.insertOrAssignVariables!=="function")g.insertOrAssignVariables=authorWrite("insertOrAssignVariables","assign");
-    if(typeof g.replaceVariables!=="function")g.replaceVariables=authorWrite("replaceVariables","replace");
-    if(typeof g.updateVariablesWith!=="function")g.updateVariablesWith=authorWrite("updateVariablesWith","assign");
   }
-  // toastr：作者脚本拿它当唯一反馈渠道（一个脚本里 58 处）。接梨园自己的通知条，
-  // 接不上就退回 console——缺这个全局同样是 ReferenceError（同 errorCatched 那个坑）。
   if(!g.toastr){
     var toast=function(level){
       return function(msg,title){
         var text=String(title?title+"：":"")+String(msg==null?"":msg);
         try{
-          var p=(g.parent&&g.parent!==g)?g.parent:null;
+          var p=parentWin();
           if(p&&typeof p.__liyuanToast==="function"){p.__liyuanToast(level,text);return;}
         }catch(e){}
         console.log("[liyuan toastr:"+level+"]",text);
       };
     };
-    g.toastr={success:toast("info"),info:toast("info"),warning:toast("warning"),error:toast("error")};
+    g.toastr={success:toast("info"),info:toast("info"),warning:toast("warning"),error:toast("error"),clear:function(){},remove:function(){}};
   }
-  if(typeof g.substitudeMacros!=="function"){
-    g.substitudeMacros=function(text){return text==null?"":String(text);};
+  // 宏与自定义宏（刀5：substitudeMacros / registerMacroLike / unregisterMacroLike）
+  if(!g.__liyuanCustomMacros)g.__liyuanCustomMacros=new Map();
+  g.registerMacroLike=function(regex,replace){
+    if(regex instanceof RegExp&&typeof replace==="function"){
+      g.__liyuanCustomMacros.set(String(regex),{regex:regex,replace:replace});
+    }
+    return {stop:function(){if(regex)g.__liyuanCustomMacros.delete(String(regex));}};
+  };
+  g.unregisterMacroLike=function(regex){
+    if(regex)g.__liyuanCustomMacros.delete(String(regex));
+  };
+  g.substitudeMacros=function(text){
+    var s=text==null?"":String(text);
+    var c=readRuntimeCtx();
+    var list=(c&&Array.isArray(c.messages))?c.messages:[];
+    var lastIdx=list.length>0?(list.length-1):0;
+    var lastMsg=list.length>0?String(list[list.length-1].message||list[list.length-1].text||""):"";
+    var charName=c?String(c.charName||""):"";
+    var userName=c?String(c.userName||""):"";
+    s=s.replace(/\\{\\{\\s*char\\s*\\}\\}/gi,charName)
+       .replace(/\\{\\{\\s*user\\s*\\}\\}/gi,userName)
+       .replace(/\\{\\{\\s*lastMessageId\\s*\\}\\}/gi,String(lastIdx))
+       .replace(/\\{\\{\\s*lastMessage\\s*\\}\\}/gi,lastMsg)
+       .replace(/\\{\\{\\s*getvar::([^}]+)\\}\\}/gi,function(_m,k){
+         var v=g._.get(g.getVariables({type:"chat"}),String(k).trim());
+         return v==null?"":String(v);
+       })
+       .replace(/\\{\\{\\s*getglobalvar::([^}]+)\\}\\}/gi,function(_m,k){
+         var v=g._.get(g.getVariables({type:"global"}),String(k).trim());
+         return v==null?"":String(v);
+       })
+       .replace(/\\{\\{\\s*setvar::([^:}]+)::([^}]*)\\}\\}/gi,function(_m,k,val){
+         var patch={};g._.set(patch,String(k).trim(),val);
+         g.insertOrAssignVariables(patch,{type:"chat"});
+         return "";
+       });
+    if(g.__liyuanCustomMacros&&g.__liyuanCustomMacros.size>0){
+      g.__liyuanCustomMacros.forEach(function(item){
+        try{s=s.replace(item.regex,function(){var a=[].slice.call(arguments);return item.replace.apply(g,[{role:"assistant",message_id:lastIdx}].concat(a));});}catch(e){}
+      });
+    }
+    return s;
+  };
+
+  // 聊天消息读写族（刀5：getChatMessages 支持数字、负索引与 "0-{{lastMessageId}}" 范围字符串）
+  function parseMessageRange(input,min,max){
+    if(max<min)return null;
+    var clamp=function(v){var n=Number(v);var adj=n<0?(max+n+1):n;return Math.min(Math.max(adj,min),max);};
+    var str=String(input==null?"0-"+max:input).trim();
+    var m1=/^(-?\\d+)$/.exec(str);
+    if(m1){var idx=clamp(Number(m1[1]));return isNaN(idx)?null:{start:idx,end:idx};}
+    var m2=/^(-?\\d+)\\s*-\\s*(-?\\d+)$/.exec(str);
+    if(m2){
+      var a=clamp(Number(m2[1])),b=clamp(Number(m2[2]));
+      if(isNaN(a)||isNaN(b))return null;
+      return {start:Math.min(a,b),end:Math.max(a,b)};
+    }
+    return null;
   }
-  if(typeof g.getLastMessageId!=="function"){
-    g.getLastMessageId=function(){return 0;};
-  }
-  if(typeof g.getCurrentMessageId!=="function"){
-    g.getCurrentMessageId=function(){return 0;};
-  }
-  if(typeof g.getChatMessages!=="function"){
-    g.getChatMessages=function(){
-      var d=g.getAllVariables();
-      return [{message_id:0,message:"",mes:"",data:d,variables:d}];
+  g.getChatMessages=function(range,opts){
+    var d=g.getAllVariables();
+    var c=readRuntimeCtx();
+    var list=c&&Array.isArray(c.messages)?c.messages:null;
+    if(!list||!list.length){
+      return [{message_id:0,name:"",role:"assistant",is_hidden:false,message:"",mes:"",data:d,extra:{},variables:d,swipe_id:0,swipes:[""],swipes_data:[d],swipes_info:[{}]}];
+    }
+    var mapped=list.map(function(m,idx){
+      var txt=String((m&&(m.message!=null?m.message:m.text))||"");
+      var msgVars=(g.__liyuanScopedVars&&g.__liyuanScopedVars.message&&g.__liyuanScopedVars.message[String(idx)])||m.data||d;
+      var role=m.role||"assistant";
+      var hidden=Boolean(m.is_hidden);
+      var item={
+        message_id:typeof m.message_id==="number"?m.message_id:idx,
+        name:m.name||"",
+        role:role,
+        is_hidden:hidden,
+        message:txt,
+        mes:txt,
+        data:msgVars,
+        extra:m.extra||{},
+        variables:msgVars,
+        swipe_id:m.swipe_id||0,
+        swipes:Array.isArray(m.swipes)?m.swipes:[txt],
+        swipes_data:[msgVars],
+        swipes_info:[m.extra||{}]
+      };
+      return item;
+    });
+    var roleFilter=(opts&&opts.role)||"all";
+    var hideFilter=(opts&&opts.hide_state)||"all";
+    var selected=mapped;
+    if(range!==undefined&&range!==null&&range!==""){
+      var demacro=g.substitudeMacros(String(range));
+      var r=parseMessageRange(demacro,0,mapped.length-1);
+      if(!r)return [];
+      selected=mapped.slice(r.start,r.end+1);
+    }
+    return selected.filter(function(item){
+      if(roleFilter!=="all"&&item.role!==roleFilter)return false;
+      if(hideFilter!=="all"&&(hideFilter==="hidden")!==Boolean(item.is_hidden))return false;
+      return true;
+    });
+  };
+  g.setChatMessages=function(chat_messages,_opts){
+    if(!Array.isArray(chat_messages))return Promise.resolve();
+    var c=readRuntimeCtx();
+    var list=c&&Array.isArray(c.messages)?c.messages:[];
+    chat_messages.forEach(function(patch){
+      if(!patch||typeof patch!=="object")return;
+      var rawId=Number(patch.message_id);
+      var idx=rawId<0?(list.length+rawId):rawId;
+      if(patch.data&&typeof patch.data==="object"){
+        g.__liyuanAuthorVarsWrite("message",patch.data,"replace",idx);
+      }
+      var newText=typeof patch.message==="string"?patch.message:(Array.isArray(patch.swipes)&&typeof patch.swipes[patch.swipe_id||0]==="string"?patch.swipes[patch.swipe_id||0]:undefined);
+      var nextSwipeId=typeof patch.swipe_id==="number"?patch.swipe_id:undefined;
+      if(typeof newText==="string"||nextSwipeId!==undefined){
+        if(list[idx]){
+          if(typeof newText==="string"){list[idx].message=newText;list[idx].mes=newText;list[idx].text=newText;}
+          if(nextSwipeId!==undefined)list[idx].swipe_id=nextSwipeId;
+        }
+        if((idx===0||idx===list.length-1)&&g.Liyuan&&typeof g.Liyuan.call==="function"){
+          try{g.Liyuan.call("messages.updateReply",{message_id:idx,swipe_id:nextSwipeId,text:typeof newText==="string"?newText:""});}catch(e){}
+        }
+      }
+    });
+    return Promise.resolve();
+  };
+  g.setChatMessage=function(field_values,message_id,opts){
+    var text=typeof field_values==="string"?field_values:(field_values&&typeof field_values.message==="string"?field_values.message:undefined);
+    var data=(field_values&&typeof field_values==="object"&&field_values.data)?field_values.data:undefined;
+    var swipeId=(opts&&typeof opts.swipe_id==="number")?opts.swipe_id:(field_values&&typeof field_values==="object"&&typeof field_values.swipe_id==="number"?field_values.swipe_id:undefined);
+    return g.setChatMessages([{message_id:message_id===undefined?g.getLastMessageId():message_id,message:text,data:data,swipe_id:swipeId}],opts);
+  };
+  g.createChatMessages=function(msgs){
+    if(!Array.isArray(msgs)||!msgs.length)return Promise.resolve();
+    var last=msgs[msgs.length-1];
+    if(last&&last.role==="user"&&typeof last.message==="string"&&g.Liyuan&&typeof g.Liyuan.call==="function"){
+      return g.Liyuan.call("chat.submit",{text:last.message,wait:false});
+    }
+    return Promise.resolve();
+  };
+  g.deleteChatMessages=function(ids){
+    var c=readRuntimeCtx();
+    var list=c&&Array.isArray(c.messages)?c.messages:[];
+    var lastIdx=list.length-1;
+    if(Array.isArray(ids)&&(ids.indexOf(lastIdx)>=0||ids.indexOf(-1)>=0)&&g.Liyuan&&typeof g.Liyuan.call==="function"){
+      return g.Liyuan.call("messages.dropLast",{});
+    }
+    return Promise.resolve();
+  };
+  g.rotateChatMessages=function(){return Promise.resolve();};
+  g.refreshOneMessage=function(){return Promise.resolve();};
+  g.formatAsDisplayedMessage=function(text){
+    return g.formatAsTavernRegexedString(String(text==null?"":text),"ai_output","display");
+  };
+  g.retrieveDisplayedMessage=function(message_id){
+    var c=readRuntimeCtx();
+    var list=c&&Array.isArray(c.messages)?c.messages:[];
+    var rawId=message_id===undefined||message_id==="last"?g.getLastMessageId():Number(message_id);
+    var idx=rawId<0?Math.max(0,list.length+rawId):rawId;
+    var pw=parentWin();
+    var pdoc=(pw&&pw.document)||g.document;
+    var jq=g.jQuery||g.$||(pw&&(pw.jQuery||pw.$));
+    if(jq&&pdoc){
+      try{
+        var $mes=jq('.mes[mesid="'+idx+'"], .msg[data-mesid="'+idx+'"], .msg[data-message-id="'+idx+'"]',pdoc);
+        if($mes.length>0){
+          var $txt=$mes.find("div.mes_text");
+          if($txt.length>0)return $txt;
+          return $mes;
+        }
+        var $iframes=jq('iframe[data-liyuan-message-id="'+idx+'"], iframe[id^="TH-message--'+idx+'--"], iframe[name^="TH-message--'+idx+'--"]',pdoc);
+        if($iframes.length>0){
+          return $iframes.parent();
+        }
+        var m=g.getChatMessages(idx)[0];
+        var html=g.formatAsDisplayedMessage(m?m.message:"");
+        return jq('<div class="mes_text"></div>').html(html);
+      }catch(e){}
+    }
+    var m2=g.getChatMessages(idx)[0];
+    var fallbackHtml=g.formatAsDisplayedMessage(m2?m2.message:"");
+    return {
+      length:1,
+      html:function(){return fallbackHtml;},
+      text:function(){return fallbackHtml;},
+      find:function(){return {length:0,toArray:function(){return [];}};}
+    };
+  };
+
+  // 正则格式化（刀5：formatAsTavernRegexedString / getTavernRegexes）
+  g.formatAsTavernRegexedString=function(text,_source,destination){
+    var s=g.substitudeMacros(String(text==null?"":text));
+    var c=readRuntimeCtx();
+    var rules=destination==="prompt"?(c&&c.promptRules):(c&&c.displayRules);
+    if(Array.isArray(rules)){
+      for(var i=0;i<rules.length;i++){
+        var r=rules[i];
+        if(!r||r.enabled===false||!r.pattern)continue;
+        try{
+          var re=new RegExp(r.pattern,r.flags||"g");
+          s=s.replace(re,String(r.replace||""));
+        }catch(e){}
+      }
+    }
+    return s;
+  };
+  g.isCharacterTavernRegexesEnabled=function(){return true;};
+  g.getTavernRegexes=function(){
+    var c=readRuntimeCtx();
+    return (c&&Array.isArray(c.displayRules))?deepClone(c.displayRules):[];
+  };
+  g.replaceTavernRegexes=function(){return Promise.resolve();};
+  g.updateTavernRegexesWith=function(updater){
+    var cur=g.getTavernRegexes();
+    return Promise.resolve(typeof updater==="function"?updater(cur):cur);
+  };
+
+  // 世界书函数族（刀5：worldbook 与 lorebook 双命名族）
+  function toWorldbookEntry(e,idx){
+    var keys=Array.isArray(e.keys)?e.keys:[];
+    return {
+      uid:typeof e.uid==="number"?e.uid:(typeof e.id==="number"?e.id:idx),
+      name:String(e.comment||e.title||e.name||("条目-"+idx)),
+      comment:String(e.comment||e.title||e.name||""),
+      enabled:e.enabled!==false&&e.disable!==true,
+      disable:e.enabled===false||e.disable===true,
+      constant:Boolean(e.constant),
+      keys:keys,
+      key:keys,
+      content:String(e.content||""),
+      strategy:{
+        type:e.constant?"constant":"selective",
+        keys:keys,
+        keys_secondary:{logic:"and_any",keys:[]},
+        scan_depth:"same_as_global"
+      },
+      position:{
+        type:e.position||"before_character_definition",
+        role:"system",
+        depth:typeof e.depth==="number"?e.depth:4,
+        order:typeof e.insertion_order==="number"?e.insertion_order:100
+      },
+      probability:100,
+      recursion:{prevent_incoming:false,prevent_outgoing:false,delay_until:null},
+      effect:{sticky:null,cooldown:null,delay:null},
+      extra:{fingerprint:e.fingerprint}
     };
   }
-  if(!g.Mvu){
-    g.Mvu={
-      isMvuEnabled:true,
-      events:{
-        VARIABLE_UPDATE_STARTED:"VARIABLE_UPDATE_STARTED",
-        VARIABLE_UPDATE_ENDED:"VARIABLE_UPDATE_ENDED",
-        VARIABLE_UPDATE_FAILED:"VARIABLE_UPDATE_FAILED"
+  g.getWorldbookNames=function(){
+    var c=readRuntimeCtx();
+    if(c&&Array.isArray(c.worldbooks)&&c.worldbooks.length>0)return c.worldbooks.slice();
+    var cn=c&&c.charName?String(c.charName).trim():"";
+    return cn?[cn+"·世界书",cn,"default"]:["default"];
+  };
+  g.getLorebooks=g.getWorldbookNames;
+  g.getLorebookNames=g.getWorldbookNames;
+  g.getGlobalWorldbookNames=g.getWorldbookNames;
+  g.rebindGlobalWorldbooks=function(names){
+    if(Array.isArray(names)&&g.Liyuan&&typeof g.Liyuan.call==="function"){
+      names.forEach(function(n){try{g.Liyuan.call("lorebooks.mount",{path:n,mounted:true});}catch(e){}});
+    }
+    return Promise.resolve();
+  };
+  g.getCharWorldbookNames=function(){
+    var names=g.getWorldbookNames();
+    return {primary:names[0]||null,additional:names.slice(1)};
+  };
+  g.getCharLorebooks=g.getCharWorldbookNames;
+  g.getCurrentCharPrimaryLorebook=function(){return g.getCharWorldbookNames().primary;};
+  g.rebindCharWorldbooks=function(){return Promise.resolve();};
+  g.setCurrentCharLorebooks=g.rebindCharWorldbooks;
+  g.getChatWorldbookName=function(){return g.getCurrentCharPrimaryLorebook();};
+  g.getChatLorebook=g.getChatWorldbookName;
+  g.rebindChatWorldbook=function(chatName,bookName){
+    var target=bookName||chatName;
+    if(typeof target==="string"&&g.Liyuan&&typeof g.Liyuan.call==="function"){
+      return g.Liyuan.call("lorebooks.mount",{path:target,mounted:true}).then(function(){});
+    }
+    return Promise.resolve();
+  };
+  g.setChatLorebook=g.rebindChatWorldbook;
+  g.getOrCreateChatWorldbook=function(_chatName,bookName){
+    var name=bookName||g.getCurrentCharPrimaryLorebook()||"chat-lorebook";
+    return Promise.resolve(name);
+  };
+  g.getOrCreateChatLorebook=g.getOrCreateChatWorldbook;
+  g.createWorldbook=function(name,entries){
+    if(Array.isArray(entries)&&entries.length&&g.Liyuan&&typeof g.Liyuan.call==="function"){
+      return g.createWorldbookEntries(name,entries).then(function(){return true;});
+    }
+    return Promise.resolve(true);
+  };
+  g.createLorebook=g.createWorldbook;
+  g.createOrReplaceWorldbook=g.createWorldbook;
+  g.deleteWorldbook=function(){return Promise.resolve(true);};
+  g.deleteLorebook=g.deleteWorldbook;
+  g.getWorldbook=function(_name){
+    if(!g.Liyuan||typeof g.Liyuan.call!=="function")return Promise.resolve([]);
+    return g.Liyuan.call("lorebooks.read",{}).then(function(env){
+      var raw=(env&&env.ok&&env.result&&Array.isArray(env.result.entries))?env.result.entries:[];
+      return raw.map(toWorldbookEntry);
+    });
+  };
+  g.getLorebookEntries=g.getWorldbook;
+  g.createWorldbookEntries=function(bookName,newEntries){
+    var list=Array.isArray(newEntries)?newEntries:(newEntries?[newEntries]:[]);
+    if(!g.Liyuan||typeof g.Liyuan.call!=="function")return Promise.resolve({worldbook:[],new_entries:[]});
+    var tasks=list.map(function(item){
+      var title=String(item.name||item.comment||item.title||"新条目");
+      var keys=Array.isArray(item.keys)?item.keys:(item.strategy&&Array.isArray(item.strategy.keys)?item.strategy.keys:(Array.isArray(item.key)?item.key:[title]));
+      var constant=Boolean(item.constant||(item.strategy&&item.strategy.type==="constant"));
+      var content=String(item.content||"");
+      return g.Liyuan.call("lorebooks.createEntry",{title:title,keys:keys,content:content,constant:constant,book:bookName});
+    });
+    return Promise.all(tasks).then(function(){
+      return g.getWorldbook(bookName).then(function(wb){return {worldbook:wb,new_entries:wb.slice(-list.length)};});
+    });
+  };
+  g.createLorebookEntries=g.createWorldbookEntries;
+  g.createLorebookEntry=function(bookName,entry){
+    return g.createWorldbookEntries(bookName,[entry]).then(function(r){return r.new_entries[0]||null;});
+  };
+  g.replaceWorldbook=function(bookName,entries){
+    if(!Array.isArray(entries)||!g.Liyuan||typeof g.Liyuan.call!=="function")return Promise.resolve();
+    return g.Liyuan.call("lorebooks.read",{}).then(function(env){
+      var existing=(env&&env.ok&&env.result&&Array.isArray(env.result.entries))?env.result.entries:[];
+      var tasks=entries.map(function(item,idx){
+        var fp=(item.extra&&item.extra.fingerprint)||(existing[idx]&&existing[idx].fingerprint);
+        var title=String(item.name||item.comment||item.title||("条目-"+idx));
+        var keys=Array.isArray(item.keys)?item.keys:(item.strategy&&Array.isArray(item.strategy.keys)?item.strategy.keys:[]);
+        var constant=Boolean(item.constant||(item.strategy&&item.strategy.type==="constant"));
+        var content=String(item.content||"");
+        if(fp)return g.Liyuan.call("lorebooks.updateEntry",{fingerprint:fp,title:title,keys:keys,content:content,constant:constant});
+        if(content.trim())return g.Liyuan.call("lorebooks.createEntry",{title:title,keys:keys,content:content,constant:constant,book:bookName});
+        return Promise.resolve();
+      });
+      return Promise.all(tasks).then(function(){});
+    });
+  };
+  g.replaceLorebookEntries=g.replaceWorldbook;
+  g.setLorebookEntries=g.replaceWorldbook;
+  g.updateWorldbookWith=function(bookName,updater){
+    return g.getWorldbook(bookName).then(function(entries){
+      var res=typeof updater==="function"?updater(deepClone(entries)):entries;
+      return Promise.resolve(res).then(function(nextEntries){
+        return g.replaceWorldbook(bookName,nextEntries).then(function(){return nextEntries;});
+      });
+    });
+  };
+  g.updateLorebookEntriesWith=g.updateWorldbookWith;
+  g.deleteWorldbookEntries=function(bookName,predicate){
+    return g.Liyuan.call("lorebooks.read",{}).then(function(env){
+      var existing=(env&&env.ok&&env.result&&Array.isArray(env.result.entries))?env.result.entries:[];
+      var mapped=existing.map(toWorldbookEntry);
+      var toDelete=[];
+      mapped.forEach(function(entry,idx){
+        var match=typeof predicate==="function"?predicate(entry):(Array.isArray(predicate)?predicate.indexOf(entry.uid)>=0:predicate===entry.uid);
+        if(match&&existing[idx]&&existing[idx].fingerprint)toDelete.push(existing[idx].fingerprint);
+      });
+      return Promise.all(toDelete.map(function(fp){return g.Liyuan.call("lorebooks.removeEntry",{fingerprint:fp});})).then(function(){
+        return g.getWorldbook(bookName).then(function(wb){return {worldbook:wb,deleted_entries:[]};});
+      });
+    });
+  };
+  g.deleteLorebookEntries=g.deleteWorldbookEntries;
+  g.deleteLorebookEntry=function(bookName,uid){return g.deleteWorldbookEntries(bookName,[uid]);};
+  g.getLorebookSettings=function(){return {scan_depth:4,context_percentage:25,budget_cap:0,min_activations:0,max_depth:0,max_recursion_steps:2};};
+  g.setLorebookSettings=function(){};
+
+  // 角色、用户、预设、音频、文件、扩展、内建、脚本管理与提示词注入全集（对齐 JS-Slash-Runner 4.12.1 src/function/index.ts）
+  g.getCurrentCharacterName=function(){var c=readRuntimeCtx();return c?String(c.charName||""):"";};
+  g.getCurrentCharacterId=function(){var c=readRuntimeCtx();return (c&&c.card)||"0.png";};
+  g.getCharacterNames=function(){var n=g.getCurrentCharacterName();return n?[n]:[];};
+  g.getCharacterIds=function(){return [g.getCurrentCharacterId()];};
+  function buildCharRecord(){
+    var n=g.getCurrentCharacterName()||"Character";
+    var avatar=g.getCurrentCharacterId()||(n+".png");
+    return {
+      name:n,
+      avatar:avatar,
+      version:"",
+      creator:"",
+      creator_notes:"",
+      worldbook:g.getCurrentCharPrimaryLorebook(),
+      description:"",
+      personality:"",
+      scenario:"",
+      first_mes:"",
+      first_messages:[""],
+      data:{
+        name:n,
+        description:"",
+        personality:"",
+        scenario:"",
+        first_mes:"",
+        alternate_greetings:[],
+        character_version:"",
+        creator:"",
+        creator_notes:"",
+        extensions:{
+          regex_scripts:g.getTavernRegexes(),
+          tavern_helper:{scripts:[],variables:g.getVariables({type:"character"})}
+        }
       },
-      state:{},
-      getMvuData:function(){return g.getAllVariables();},
-      setMvuVariable:function(mvuData,path,val){
-        try{if(mvuData&&mvuData.stat_data&&g._)g._.set(mvuData.stat_data,path,val);}catch(e){}
-        return Promise.resolve(true);
-      },
-      replaceMvuData:function(data){
-        if(data&&typeof data==="object")g.__liyuanVariables=data;
-        return Promise.resolve(data);
-      },
-      parseMessage:function(_cmd,oldData){
-        return Promise.resolve(oldData||g.getAllVariables());
+      extensions:{
+        regex_scripts:g.getTavernRegexes(),
+        tavern_helper:{scripts:[],variables:g.getVariables({type:"character"})}
       }
     };
   }
-  if(typeof g.waitGlobalInitialized!=="function"){
-    g.waitGlobalInitialized=function(name,timeoutMs){
-      return new Promise(function(res){
-        var t0=Date.now(),lim=timeoutMs||5000;
-        (function poll(){
-          try{if(g[name])return res(true);}catch(e){return res(false);}
-          if(Date.now()-t0>lim)return res(false);
-          setTimeout(poll,50);
-        })();
-      });
+  g.getCharacter=function(){return Promise.resolve(deepClone(buildCharRecord()));};
+  g.createCharacter=function(){return Promise.resolve(true);};
+  g.createOrReplaceCharacter=function(){return Promise.resolve(true);};
+  g.deleteCharacter=function(){return Promise.resolve(true);};
+  g.replaceCharacter=function(){return Promise.resolve();};
+  g.updateCharacterWith=function(_name,updater){
+    return g.getCharacter(_name).then(function(ch){
+      return Promise.resolve(typeof updater==="function"?updater(ch):ch);
+    });
+  };
+  var RawCharClass=function(charData){this.character_data=charData||buildCharRecord();};
+  RawCharClass.find=function(){return buildCharRecord();};
+  RawCharClass.findIndex=function(){return 0;};
+  RawCharClass.getChatsFromFiles=function(){return Promise.resolve({});};
+  RawCharClass.prototype.getCardData=function(){return this.character_data;};
+  RawCharClass.prototype.getAvatarId=function(){return this.character_data.avatar||"0.png";};
+  RawCharClass.prototype.getRegexScripts=function(){return g.getTavernRegexes();};
+  RawCharClass.prototype.getCharacterBook=function(){return null;};
+  RawCharClass.prototype.getWorldName=function(){return g.getCurrentCharPrimaryLorebook()||"";};
+  g.RawCharacter=RawCharClass;
+  g.getCharData=function(){return buildCharRecord();};
+  g.getCharAvatarPath=function(){var c=readRuntimeCtx();return "/api/cards/image?path="+encodeURIComponent((c&&c.card)||"");};
+  g.getChatHistoryBrief=function(){return Promise.resolve([]);};
+  g.getChatHistoryDetail=function(){return Promise.resolve({});};
+
+  g.getCurrentPersonaName=function(){var c=readRuntimeCtx();return c?String(c.userName||""):"";};
+  g.getCurrentPersonaId=function(){return "default.png";};
+  g.getPersonaNames=function(){var n=g.getCurrentPersonaName();return n?[n]:[];};
+  g.getPersonaIds=function(){return [g.getCurrentPersonaId()];};
+  g.getPersonaAvatarPath=function(){return "./User Avatars/default.png";};
+  g.getPersona=function(){
+    var n=g.getCurrentPersonaName()||"User";
+    return {avatar_id:"default.png",avatar:"default.png",name:n,title:"",description:"",position:0,depth:2,role:0,lorebook:"",connections:[],is_default:true};
+  };
+  g.createPersona=function(){return Promise.resolve(true);};
+  g.createOrReplacePersona=function(){return Promise.resolve(true);};
+  g.deletePersona=function(){return Promise.resolve(true);};
+  g.replacePersona=function(){return Promise.resolve();};
+  g.updatePersonaWith=function(_id,updater){
+    var p=g.getPersona(_id);
+    return Promise.resolve(typeof updater==="function"?updater(p):p);
+  };
+
+  g.default_preset={
+    settings:{
+      max_context:2000000,max_completion_tokens:4096,reply_count:1,should_stream:true,
+      temperature:1,frequency_penalty:0,presence_penalty:0,repetition_penalty:1,
+      top_p:1,min_p:0,top_k:0,top_a:0,seed:-1,squash_system_messages:false,
+      reasoning_effort:"auto",request_thoughts:false,request_images:false,
+      enable_function_calling:false,enable_web_search:false,
+      allow_sending_images:"disabled",allow_sending_videos:false,
+      character_name_prefix:"none",wrap_user_messages_in_quotes:false
+    },
+    prompts:[
+      {id:"worldInfoBefore",name:"World Info (before)",enabled:true,position:{type:"relative"},role:"system"},
+      {id:"personaDescription",name:"Persona Description",enabled:true,position:{type:"relative"},role:"system"},
+      {id:"charDescription",name:"Char Description",enabled:true,position:{type:"relative"},role:"system"},
+      {id:"charPersonality",name:"Char Personality",enabled:true,position:{type:"relative"},role:"system"},
+      {id:"scenario",name:"Scenario",enabled:true,position:{type:"relative"},role:"system"},
+      {id:"worldInfoAfter",name:"World Info (after)",enabled:true,position:{type:"relative"},role:"system"},
+      {id:"dialogueExamples",name:"Chat Examples",enabled:true,position:{type:"relative"},role:"system"},
+      {id:"chatHistory",name:"Chat History",enabled:true,position:{type:"relative"},role:"system"}
+    ],
+    prompts_unused:[],
+    extensions:{tavern_helper:{scripts:[],variables:{}}}
+  };
+  g.isPresetSystemPrompt=function(p){return Boolean(p&&["main","nsfw","jailbreak","enhanceDefinitions"].indexOf(p.id)>=0);};
+  g.isPresetPlaceholderPrompt=function(p){return Boolean(p&&["worldInfoBefore","personaDescription","charDescription","charPersonality","scenario","worldInfoAfter","dialogueExamples","chatHistory"].indexOf(p.id)>=0);};
+  g.isPresetNormalPrompt=function(p){return !g.isPresetSystemPrompt(p)&&!g.isPresetPlaceholderPrompt(p);};
+  g.getLoadedPresetName=function(){var c=readRuntimeCtx();return (c&&c.presetName)||"in_use";};
+  g.getPresetNames=function(){var cur=g.getLoadedPresetName();return cur==="in_use"?["in_use","default"]:["in_use",cur];};
+  g.loadPreset=function(){return true;};
+  g.getPreset=function(name){
+    var p=deepClone(g.default_preset);
+    p.name=name||g.getLoadedPresetName();
+    p.prompt_order=[];
+    return p;
+  };
+  g.createPreset=function(){return Promise.resolve(true);};
+  g.createOrReplacePreset=function(){return Promise.resolve(true);};
+  g.deletePreset=function(){return Promise.resolve(true);};
+  g.renamePreset=function(){return Promise.resolve(true);};
+  g.replacePreset=function(){return Promise.resolve();};
+  g.updatePresetWith=function(name,updater){
+    var cur=g.getPreset(name);
+    return Promise.resolve(typeof updater==="function"?updater(cur):cur);
+  };
+  g.setPreset=function(name,patch){
+    var cur=g.getPreset(name);
+    return Promise.resolve(baseMerge(cur,patch||{}));
+  };
+
+  // Audio 模块
+  if(!g.__liyuanAudioStores){
+    g.__liyuanAudioStores={
+      bgm:{playlist:[],src:"",playing:false,progress:0,enabled:true,mode:"repeat",muted:false,volume:80},
+      ambient:{playlist:[],src:"",playing:false,progress:0,enabled:true,mode:"repeat",muted:false,volume:80}
     };
+  }
+  function getAudioStore(type){return g.__liyuanAudioStores[type==="ambient"?"ambient":"bgm"];}
+  function urlToTitle(url){var s=String(url||"");var last=s.split("/").pop()||s;return last.split(".")[0]||s;}
+  g.playAudio=function(type,audio){
+    if(!audio||typeof audio!=="object")return;
+    var st=getAudioStore(type),title=audio.title||urlToTitle(audio.url);
+    var ex=st.playlist.find(function(x){return x.title===title||x.url===audio.url;});
+    if(!ex)st.playlist.push({title:title,url:String(audio.url||"")});
+    else{ex.title=title;ex.url=String(audio.url||"");}
+    st.src=String(audio.url||"");st.progress=0;st.playing=true;
+  };
+  g.pauseAudio=function(type){getAudioStore(type).playing=false;};
+  g.getAudioList=function(type){return deepClone(getAudioStore(type).playlist);};
+  g.replaceAudioList=function(type,list){
+    if(!Array.isArray(list))return;
+    getAudioStore(type).playlist=list.map(function(x){return {title:x.title||urlToTitle(x.url),url:String(x.url||"")};});
+  };
+  g.appendAudioList=function(type,list){
+    if(!Array.isArray(list))return;
+    var st=getAudioStore(type);
+    list.forEach(function(x){st.playlist.push({title:x.title||urlToTitle(x.url),url:String(x.url||"")});});
+  };
+  g.getAudioSettings=function(type){
+    var st=getAudioStore(type);
+    return {enabled:st.enabled,mode:st.mode,muted:st.muted,volume:st.volume};
+  };
+  g.setAudioSettings=function(type,settings){
+    if(!settings||typeof settings!=="object")return;
+    var st=getAudioStore(type);
+    if(settings.enabled!==undefined)st.enabled=Boolean(settings.enabled);
+    if(settings.mode!==undefined)st.mode=String(settings.mode);
+    if(settings.muted!==undefined)st.muted=Boolean(settings.muted);
+    if(settings.volume!==undefined)st.volume=Math.min(100,Math.max(0,Number(settings.volume)||0));
+  };
+  g.getCurrentAudio=function(type){
+    var st=getAudioStore(type);
+    var cur=st.playlist.find(function(x){return x.url===st.src;});
+    return {src:st.src,title:(cur&&cur.title)||"",playing:st.playing,progress:st.progress};
+  };
+  g.audioEnable=function(_args,state){g.setAudioSettings("bgm",{enabled:String(state)!=="false"});return "";};
+  g.audioImport=function(_args,url){if(url)g.appendAudioList("bgm",[{url:String(url)}]);return "";};
+  g.audioMode=function(_args,mode){if(mode)g.setAudioSettings("bgm",{mode:String(mode)});return "";};
+  g.audioPlay=function(_args,url){if(url)g.playAudio("bgm",{url:String(url)});else getAudioStore("bgm").playing=true;return "";};
+  g.audioSelect=function(_args,url){if(url)getAudioStore("bgm").src=String(url);return "";};
+
+  // Extension / File / ImportRaw / Version / Builtin 模块
+  g.isAdmin=function(){return false;};
+  g.getTavernHelperExtensionId=function(){return "JS-Slash-Runner";};
+  g.getExtensionType=function(id){return (id==="JS-Slash-Runner"||id==="TavernHelper")?"system":null;};
+  g.getExtensionInstallationInfo=function(){
+    return Promise.resolve({current_branch_name:"master",current_commit_hash:"b156676",is_up_to_date:true,remote_url:""});
+  };
+  g.getExtensionStatus=g.getExtensionInstallationInfo;
+  g.isInstalledExtension=function(id){return g.getExtensionType(id)!==null;};
+  g.installExtension=function(){return Promise.resolve(new Response(JSON.stringify({ok:false,message:"unsupported"}),{status:403}));};
+  g.uninstallExtension=g.installExtension;
+  g.reinstallExtension=g.installExtension;
+  g.updateExtension=g.installExtension;
+
+  g.getTavernFile=function(path){
+    if(g.Liyuan&&g.Liyuan.project&&g.Liyuan.project.files){
+      return g.Liyuan.project.files.read(String(path||"")).then(function(env){
+        var txt=(env&&env.ok&&env.result&&typeof env.result.content==="string")?env.result.content:"";
+        return new Response(txt,{status:(env&&env.ok)?200:404});
+      });
+    }
+    return Promise.resolve(new Response("",{status:404}));
+  };
+  g.uploadTavernFile=function(filename,base64){
+    if(g.Liyuan&&g.Liyuan.project&&g.Liyuan.project.files){
+      var decoded=String(base64||"");
+      try{if(typeof atob==="function")decoded=atob(decoded);}catch(e){}
+      return g.Liyuan.project.files.write(String(filename||"file.txt"),decoded).then(function(){return String(filename||"file.txt");});
+    }
+    return Promise.resolve(String(filename||""));
+  };
+  g.deleteTavernFile=function(filename){
+    if(g.Liyuan&&g.Liyuan.project&&g.Liyuan.project.files){
+      return g.Liyuan.project.files.remove(String(filename||"")).then(function(env){return Boolean(env&&env.ok);});
+    }
+    return Promise.resolve(false);
+  };
+
+  g.importRawCharacter=function(){return Promise.resolve(new Response("{}",{status:200}));};
+  g.importRawChat=function(){return Promise.resolve(new Response("{}",{status:200}));};
+  g.importRawPreset=function(){return Promise.resolve(true);};
+  g.importRawWorldbook=function(){return Promise.resolve(true);};
+  g.importRawTavernRegex=function(){return true;};
+
+  g.getTavernHelperVersion=function(){return "4.12.1";};
+  g.getFrontendVersion=g.getTavernHelperVersion;
+  g.updateTavernHelper=function(){return Promise.resolve(true);};
+  g.updateFrontendVersion=g.updateTavernHelper;
+  g.getTavernVersion=function(){return "1.19.0";};
+
+  function makeUuid(){
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(c){
+      var r=(Math.random()*16)|0,v=c==="x"?r:(r&0x3)|0x8;
+      return v.toString(16);
+    });
+  }
+  var promptMgrStub={render:function(){},renderDebounced:function(){},getPromptOrderEntry:function(){return null;}};
+  g.builtin={
+    addOneMessage:function(){},
+    copyText:function(txt){
+      try{if(g.navigator&&g.navigator.clipboard)return g.navigator.clipboard.writeText(String(txt||""));}catch(e){}
+      return Promise.resolve();
+    },
+    duringGenerating:function(){var c=readRuntimeCtx();return Boolean(c&&c.streaming);},
+    getImageTokenCost:function(){return Promise.resolve(85);},
+    getVideoTokenCost:function(){return Promise.resolve(256);},
+    parseRegexFromString:function(str){
+      var m=new RegExp("^/(.*)/([a-z]*)$","i").exec(String(str||""));
+      try{return m?new RegExp(m[1],m[2]):new RegExp(String(str||""));}catch(e){return null;}
+    },
+    promptManager:promptMgrStub,
+    reloadAndRenderChatWithoutEvents:function(){return Promise.resolve();},
+    reloadChatWithoutEvents:function(){return Promise.resolve();},
+    reloadEditor:function(){},
+    reloadEditorDebounced:function(){},
+    renderMarkdown:function(txt){return String(txt==null?"":txt);},
+    renderPromptManager:promptMgrStub.render,
+    renderPromptManagerDebounced:promptMgrStub.renderDebounced,
+    saveSettings:function(){return Promise.resolve();},
+    uuidv4:makeUuid
+  };
+  g.placeholder_prompt_default_order=["world_info_before","persona_description","char_description","char_personality","scenario","world_info_after","dialogue_examples","chat_history"];
+  g.builtin_prompt_default_order=g.placeholder_prompt_default_order;
+
+  // 脚本按钮与元信息（刀5）
+  function curScriptEntry(){
+    var sid=g.getScriptId();
+    if(!g.__liyuanScriptRegistry)g.__liyuanScriptRegistry={};
+    if(!g.__liyuanScriptRegistry[sid]){
+      g.__liyuanScriptRegistry[sid]={id:sid,name:sid,info:"",source:"card",data:{},button:{enabled:true,buttons:[]}};
+    }
+    return g.__liyuanScriptRegistry[sid];
+  }
+  function notifyParentButtons(){
+    var pw=parentWin();
+    if(!pw||!g.__liyuanScriptRegistry)return;
+    var flat=[];
+    var seen={};
+    for(var sid in g.__liyuanScriptRegistry){
+      var e=g.__liyuanScriptRegistry[sid];
+      if(e&&e.button&&e.button.enabled!==false&&Array.isArray(e.button.buttons)){
+        e.button.buttons.forEach(function(b){
+          if(b&&b.name&&b.visible!==false&&!seen[b.name]){
+            seen[b.name]=1;
+            flat.push({scriptId:sid,name:String(b.name),eventId:"th_btn_"+sid+"_"+String(b.name)});
+          }
+        });
+      }
+    }
+    try{pw.postMessage({liyuanScriptButtons:flat},"*");}catch(err){}
+  }
+  g.getButtonEvent=function(btnName){
+    var name=String(btnName||"");
+    var entry=curScriptEntry();
+    if(name&&entry&&entry.button&&Array.isArray(entry.button.buttons)){
+      if(!entry.button.buttons.some(function(x){return x&&x.name===name;})){
+        entry.button.buttons.push({name:name,visible:true});
+        notifyParentButtons();
+      }
+    }
+    return "th_btn_"+g.getScriptId()+"_"+name;
+  };
+  g.getScriptButtons=function(){return deepClone(curScriptEntry().button.buttons||[]);};
+  g.replaceScriptButtons=function(a,b){
+    var btns=Array.isArray(a)?a:(Array.isArray(b)?b:[]);
+    curScriptEntry().button.buttons=deepClone(btns);
+    notifyParentButtons();
+  };
+  g.updateScriptButtonsWith=function(updater){
+    var cur=g.getScriptButtons();
+    var res=typeof updater==="function"?updater(cur):cur;
+    if(res&&typeof res.then==="function"){
+      return res.then(function(r){g.replaceScriptButtons(r);return r;});
+    }
+    g.replaceScriptButtons(res);
+    return res;
+  };
+  g.appendInexistentScriptButtons=function(a,b){
+    var nextBtns=Array.isArray(a)?a:(Array.isArray(b)?b:[]);
+    return g.updateScriptButtonsWith(function(cur){
+      var out=cur.slice();
+      nextBtns.forEach(function(btn){
+        if(btn&&btn.name&&!out.some(function(x){return x.name===btn.name;}))out.push(btn);
+      });
+      return out;
+    });
+  };
+  g.getAllEnabledScriptButtons=function(){
+    var out={};
+    if(g.__liyuanScriptRegistry){
+      for(var sid in g.__liyuanScriptRegistry){
+        var e=g.__liyuanScriptRegistry[sid];
+        if(e&&e.button&&e.button.enabled&&Array.isArray(e.button.buttons)){
+          out[sid]=e.button.buttons.filter(function(b){return b.visible!==false;}).map(function(b){
+            return {button_id:"th_btn_"+sid+"_"+b.name,button_name:b.name};
+          });
+        }
+      }
+    }
+    return out;
+  };
+  g.getScriptName=function(){return curScriptEntry().name||"";};
+  g.getScriptInfo=function(){return curScriptEntry().info||"";};
+  g.replaceScriptInfo=function(info){curScriptEntry().info=String(info||"");};
+  g.getScriptTrees=function(){return [];};
+  g.replaceScriptTrees=function(){};
+  g.updateScriptTreesWith=function(u){return typeof u==="function"?u([]):[];};
+  g.injectPrompts=function(prompts,opts){
+    if(!g.__liyuanInjectedPrompts)g.__liyuanInjectedPrompts=new Map();
+    var ids=[];
+    if(Array.isArray(prompts)){
+      prompts.forEach(function(p,i){
+        if(p&&typeof p==="object"){
+          var pid=String(p.id||("inj_"+i+"_"+Date.now()));
+          ids.push(pid);
+          g.__liyuanInjectedPrompts.set(pid,p);
+        }
+      });
+    }
+    var deleted=false;
+    var uninject=function(){
+      if(deleted)return;
+      deleted=true;
+      g.uninjectPrompts(ids);
+    };
+    if(opts&&opts.once&&typeof g.eventOnce==="function"){
+      g.eventOnce(g.iframe_events.GENERATION_ENDED,uninject);
+      g.eventOnce(g.tavern_events.GENERATION_ENDED,uninject);
+      g.eventOnce(g.tavern_events.GENERATION_STOPPED,uninject);
+    }
+    return {uninject:uninject};
+  };
+  g.uninjectPrompts=function(ids){
+    if(!g.__liyuanInjectedPrompts||!Array.isArray(ids))return;
+    ids.forEach(function(id){g.__liyuanInjectedPrompts.delete(String(id));});
+  };
+  g.getModelList=function(){
+    if(g.Liyuan&&g.Liyuan.models)return g.Liyuan.models.list().then(function(e){return (e&&e.ok&&e.result&&Array.isArray(e.result.models))?e.result.models.map(function(m){return m.id;}):[];});
+    return Promise.resolve([]);
+  };
+  g.getProxyPresetNames=function(){return Promise.resolve(["default"]);};
+
+  // 原版 MagVarUpdate (Mvu) + tavern_resource (registerMvuSchema) 完整实现（对齐 MagVarUpdate bundle.js & mvu_zod.js）
+  if(!g.__liyuanMvuSchemas)g.__liyuanMvuSchemas=[];
+  g.__liyuanApplyMvuSchemas=function(targetTree){
+    var tree=targetTree||g.__liyuanVariables;
+    if(!tree||typeof tree!=="object")return tree;
+    if(!tree.stat_data||typeof tree.stat_data!=="object")tree.stat_data={};
+    if(Array.isArray(g.__liyuanMvuSchemas)&&g.__liyuanMvuSchemas.length>0){
+      for(var i=0;i<g.__liyuanMvuSchemas.length;i++){
+        var resolveSchema=g.__liyuanMvuSchemas[i];
+        try{
+          var sObj=typeof resolveSchema==="function"?resolveSchema():resolveSchema;
+          if(sObj&&typeof sObj.safeParse==="function"){
+            var parsed=sObj.safeParse(tree.stat_data,{reportInput:true});
+            if(parsed&&parsed.success&&parsed.data&&typeof parsed.data==="object"){
+              tree.stat_data=baseMerge(deepClone(tree.stat_data),parsed.data);
+            }
+          }
+        }catch(e){}
+      }
+    }
+    return tree;
+  };
+  g.registerMvuSchema=function(schemaOrFn){
+    var getActiveSchema=function(){
+      var raw=typeof schemaOrFn==="function"?schemaOrFn():schemaOrFn;
+      var zRef=g.z&&g.z.z?g.z.z:g.z;
+      var effective=(zRef&&zRef.ZodObject&&raw instanceof zRef.ZodObject&&typeof zRef.looseObject==="function")?zRef.looseObject(raw.shape):raw;
+      if(typeof g.registerVariableSchema==="function"&&zRef&&typeof zRef.object==="function"&&effective){
+        try{g.registerVariableSchema(zRef.object({stat_data:effective}),{type:"message"});}catch(e){}
+      }
+      return effective;
+    };
+    g.__liyuanMvuSchemas.push(getActiveSchema);
+    try{
+      var curTree=rawMvuTree();
+      g.__liyuanApplyMvuSchemas(curTree);
+      if(curTree&&curTree.stat_data){
+        g.__liyuanVariables=curTree;
+        g.__liyuanAuthorVarsWrite("message",{stat_data:curTree.stat_data},"assign","latest");
+      }
+    }catch(e){}
+    g.eventOn("mag_variable_initialized",function(mvuObj){
+      var s=getActiveSchema();
+      if(!s||typeof s.safeParse!=="function"||!mvuObj)return;
+      try{
+        var r=s.safeParse(g._.get(mvuObj,"stat_data",{}),{reportInput:true});
+        if(r&&r.success){
+          mvuObj.stat_data=baseMerge(deepClone(mvuObj.stat_data||{}),r.data);
+        }
+      }catch(e){}
+    });
+    g.eventOn("mag_variable_update_ended_for_zod",function(mvuObj){
+      if(!mvuObj||typeof mvuObj!=="object")return;
+      g._.set(mvuObj,"schema","没有用别管这个");
+      g._.unset(mvuObj,"display_data");
+      g._.unset(mvuObj,"delta_data");
+    });
+  };
+  if(!g.Mvu){
+    var mvuEvents={
+      VARIABLE_INITIALIZED:"mag_variable_initialized",
+      VARIABLE_UPDATE_STARTED:"mag_variable_update_started",
+      COMMAND_PARSED:"mag_command_parsed",
+      VARIABLE_UPDATE_ENDED:"mag_variable_update_ended",
+      BEFORE_MESSAGE_UPDATE:"mag_before_message_update",
+      SINGLE_VARIABLE_UPDATED:"mag_variable_updated",
+      VARIABLE_UPDATE_FAILED:"VARIABLE_UPDATE_FAILED"
+    };
+    g.Mvu={
+      isMvuEnabled:true,
+      events:mvuEvents,
+      state:{},
+      isDuringExtraAnalysis:function(){return false;},
+      getMvuData:function(opts){return g.getVariables(opts||{type:"message",message_id:"latest"});},
+      replaceMvuData:function(data,opts){
+        var targetOpts=opts||{type:"message",message_id:"latest"};
+        if(data&&typeof data==="object"){
+          g.__liyuanVariables=data;
+          var saved=g.replaceVariables(data,targetOpts);
+          if(targetOpts.type!=="chat")g.__liyuanAuthorVarsWrite("chat",data,"assign");
+          return Promise.resolve(saved);
+        }
+        return Promise.resolve(data);
+      },
+      getCurrentMvuData:function(){
+        return g.getVariables({type:"message",message_id:g.getCurrentMessageId()});
+      },
+      replaceCurrentMvuData:function(data){
+        return g.Mvu.replaceMvuData(data,{type:"message",message_id:g.getCurrentMessageId()});
+      },
+      setMvuVariable:function(mvuData,path,val,_opts){
+        try{
+          if(mvuData&&mvuData.stat_data&&g._)g._.set(mvuData.stat_data,path,val);
+          var patch={stat_data:(mvuData&&mvuData.stat_data)?mvuData.stat_data:{}};
+          g.__liyuanAuthorVarsWrite("chat",patch,"assign");
+        }catch(e){}
+        return Promise.resolve(true);
+      },
+      getMvuVariable:function(mvuData,path,opts){
+        var cat=(opts&&opts.category)||"stat";
+        var defVal=opts?opts.default_value:undefined;
+        var root=cat==="display"?(mvuData&&mvuData.display_data):(cat==="delta"?(mvuData&&mvuData.delta_data):(mvuData&&mvuData.stat_data));
+        var v=g._?g._.get(root,path,defVal):defVal;
+        return (Array.isArray(v)&&v.length===2&&typeof v[1]==="string")?v[0]:v;
+      },
+      getRecordFromMvuData:function(mvuData,category){
+        if(!mvuData)return undefined;
+        if(category==="display")return mvuData.display_data;
+        if(category==="delta")return mvuData.delta_data;
+        return mvuData.stat_data;
+      },
+      reloadInitVar:function(mvuData){
+        var target=mvuData||g.Mvu.getMvuData();
+        g.__liyuanApplyMvuSchemas(target);
+        return Promise.resolve(true);
+      },
+      parseMessage:function(rawCmd,oldData){
+        var base=oldData?deepClone(oldData):g.getAllVariables();
+        if(!base||typeof base!=="object")base={stat_data:{}};
+        if(!base.stat_data||typeof base.stat_data!=="object")base.stat_data={};
+        var txt=String(rawCmd==null?"":rawCmd);
+        var blockMatch=/<(?:UpdateVariable|JSONPatch)>([\\s\\S]*?)<\\/(?:UpdateVariable|JSONPatch)>/i.exec(txt);
+        var body=blockMatch?blockMatch[1].trim():txt.trim();
+        if(body&&g._){
+          try{
+            var jsonStart=body.indexOf("[");
+            var jsonEnd=body.lastIndexOf("]");
+            if(jsonStart>=0&&jsonEnd>jsonStart){
+              try{
+                var patches=JSON.parse(body.slice(jsonStart,jsonEnd+1));
+                if(Array.isArray(patches)){
+                  for(var pi=0;pi<patches.length;pi++){
+                    var opItem=patches[pi];
+                    if(!opItem||typeof opItem.path!=="string")continue;
+                    var dotPath=opItem.path.replace(/^\\//,"").split("/").map(function(s){return s.replace(/~1/g,"/").replace(/~0/g,"~");}).filter(Boolean).join(".");
+                    if(!dotPath)continue;
+                    if(opItem.op==="replace"||opItem.op==="add"){
+                      g._.set(base.stat_data,dotPath,opItem.value);
+                    }else if(opItem.op==="delta"){
+                      var curNum=Number(g._.get(base.stat_data,dotPath,0))||0;
+                      g._.set(base.stat_data,dotPath,curNum+(Number(opItem.value)||0));
+                    }else if(opItem.op==="remove"){
+                      g._.unset(base.stat_data,dotPath);
+                    }
+                  }
+                }
+              }catch(eJson){}
+            }
+            var cmdRe=/_\\.(set|add|insert|remove|unset|assign)\\s*\\(([\\s\\S]*?)\\)\\s*;?/g;
+            var cm;
+            while((cm=cmdRe.exec(body))!==null){
+              var fnName=cm[1];
+              var argsRaw="["+cm[2]+"]";
+              var parsedArgs=null;
+              try{parsedArgs=(new Function("return "+argsRaw))();}catch(eArg){}
+              if(!Array.isArray(parsedArgs)||parsedArgs.length<1)continue;
+              var p=String(parsedArgs[0]||"").replace(/^stat_data\\./,"");
+              if(!p)continue;
+              if(fnName==="set"){
+                var newVal=parsedArgs.length>=3?parsedArgs[2]:parsedArgs[1];
+                var existing=g._.get(base.stat_data,p);
+                if(Array.isArray(existing)&&existing.length===2&&typeof existing[1]==="string"&&!Array.isArray(newVal)&&(newVal===null||typeof newVal!=="object")){
+                  g._.set(base.stat_data,p,[newVal,existing[1]]);
+                }else{
+                  g._.set(base.stat_data,p,newVal);
+                }
+              }else if(fnName==="add"){
+                var delta=Number(parsedArgs[1])||0;
+                var cur=g._.get(base.stat_data,p);
+                if(Array.isArray(cur)&&cur.length===2&&typeof cur[0]==="number"){
+                  g._.set(base.stat_data,p,[cur[0]+delta,cur[1]]);
+                }else{
+                  g._.set(base.stat_data,p,(Number(cur)||0)+delta);
+                }
+              }else if(fnName==="unset"){
+                g._.unset(base.stat_data,p);
+              }else if(fnName==="remove"){
+                var targetArr=g._.get(base.stat_data,p);
+                if(Array.isArray(targetArr)){
+                  var remTarget=parsedArgs[1];
+                  g._.set(base.stat_data,p,targetArr.filter(function(item,idx){return item!==remTarget&&idx!==remTarget;}));
+                }else if(targetArr&&typeof targetArr==="object"&&parsedArgs[1]!=null){
+                  g._.unset(targetArr,String(parsedArgs[1]));
+                }else{
+                  g._.unset(base.stat_data,p);
+                }
+              }else if(fnName==="insert"){
+                var dest=g._.get(base.stat_data,p);
+                if(Array.isArray(dest)){
+                  dest.push(parsedArgs.length>=3?parsedArgs[2]:parsedArgs[1]);
+                }else if(dest&&typeof dest==="object"&&parsedArgs.length>=3){
+                  dest[String(parsedArgs[1])]=parsedArgs[2];
+                }
+              }else if(fnName==="assign"){
+                var destObj=g._.get(base.stat_data,p);
+                if(destObj&&typeof destObj==="object"&&!Array.isArray(destObj)){
+                  if(parsedArgs.length>=3){
+                    destObj[String(parsedArgs[1])]=parsedArgs[2];
+                  }else if(parsedArgs[1]&&typeof parsedArgs[1]==="object"){
+                    Object.assign(destObj,parsedArgs[1]);
+                  }
+                }
+              }
+            }
+          }catch(eParse){}
+        }
+        g.__liyuanApplyMvuSchemas(base);
+        return Promise.resolve(base);
+      }
+    };
+  }
+
+  // 跨帧全局对象共享（刀2：initializeGlobal / waitGlobalInitialized）
+  g.initializeGlobal=function(name,value){
+    if(!name)return;
+    g[name]=value;
+    var pw=parentWin();
+    if(pw){
+      try{
+        if(!pw.__liyuanSharedGlobals)pw.__liyuanSharedGlobals={};
+        pw.__liyuanSharedGlobals[name]=value;
+        pw[name]=value;
+        pw.postMessage({liyuanGlobalInit:{name:String(name)}},"*");
+      }catch(e){}
+    }
+    if(typeof g.eventEmit==="function")g.eventEmit("global_"+name+"_initialized");
+  };
+  g.waitGlobalInitialized=function(name,timeoutMs){
+    return new Promise(function(res){
+      var t0=Date.now(),lim=timeoutMs||5000;
+      function check(){
+        try{
+          if(g[name])return g[name];
+          var pw=parentWin();
+          if(pw){
+            var shared=(pw.__liyuanSharedGlobals&&pw.__liyuanSharedGlobals[name])||pw[name];
+            if(shared){
+              g[name]=shared;
+              return shared;
+            }
+          }
+        }catch(e){}
+        return null;
+      }
+      var hit=check();
+      if(hit)return res(hit);
+      var stopObj=null;
+      if(typeof g.eventOnce==="function"){
+        stopObj=g.eventOnce("global_"+name+"_initialized",function(){
+          var v=check()||true;
+          res(v);
+        });
+      }
+      (function poll(){
+        var v=check();
+        if(v){if(stopObj&&stopObj.stop)stopObj.stop();return res(v);}
+        if(Date.now()-t0>lim){if(stopObj&&stopObj.stop)stopObj.stop();return res(false);}
+        setTimeout(poll,50);
+      })();
+    });
+  };
+  // 默认将 Mvu 共享到父页以唤醒 waitGlobalInitialized('Mvu')
+  try{if(g.Mvu)g.initializeGlobal("Mvu",g.Mvu);}catch(eMvu){}
+
+  // 将所有函数与对象完整挂入 window.TavernHelper（严格对齐 JS-Slash-Runner 4.12.1 src/function/index.ts & predefine.js）
+  if(g.TavernHelper&&typeof g.TavernHelper==="object"){
+    g.TavernHelper._th_impl={
+      _init:function(){},
+      _log:function(){},
+      _clearLog:function(){},
+      writeExtensionField:function(){return Promise.resolve();}
+    };
+    g.TavernHelper._bind={
+      _eventOn:g.eventOn,
+      _eventOnButton:g.eventOnButton,
+      _eventMakeLast:g.eventMakeLast,
+      _eventMakeFirst:g.eventMakeFirst,
+      _eventOnce:g.eventOnce,
+      _eventEmit:g.eventEmit,
+      _eventEmitAndWait:g.eventEmitAndWait,
+      _eventRemoveListener:g.eventRemoveListener,
+      _eventClearEvent:g.eventClearEvent,
+      _eventClearListener:g.eventClearListener,
+      _eventClearAll:g.eventClearAll,
+      _initializeGlobal:g.initializeGlobal,
+      _waitGlobalInitialized:g.waitGlobalInitialized,
+      _registerMacroLike:g.registerMacroLike,
+      _getButtonEvent:g.getButtonEvent,
+      _getScriptButtons:g.getScriptButtons,
+      _replaceScriptButtons:g.replaceScriptButtons,
+      _updateScriptButtonsWith:g.updateScriptButtonsWith,
+      _appendInexistentScriptButtons:g.appendInexistentScriptButtons,
+      _getScriptName:g.getScriptName,
+      _getScriptInfo:g.getScriptInfo,
+      _replaceScriptInfo:g.replaceScriptInfo,
+      _getVariables:g.getVariables,
+      _getAllVariables:g.getAllVariables,
+      _replaceVariables:g.replaceVariables,
+      _updateVariablesWith:g.updateVariablesWith,
+      _insertOrAssignVariables:g.insertOrAssignVariables,
+      _insertVariables:g.insertVariables,
+      _deleteVariable:g.deleteVariable,
+      _reloadIframe:g.reloadIframe,
+      _errorCatched:g.errorCatched,
+      _getIframeName:g.getIframeName,
+      _getScriptId:g.getScriptId,
+      _getCurrentMessageId:g.getCurrentMessageId
+    };
+    var thKeys=["audioEnable","audioImport","audioMode","audioPlay","audioSelect","playAudio","pauseAudio","getAudioList","replaceAudioList","appendAudioList","getAudioSettings","setAudioSettings","getCurrentAudio","builtin","getCharacterNames","getCharacterIds","getCurrentCharacterName","getCurrentCharacterId","createCharacter","createOrReplaceCharacter","deleteCharacter","getCharacter","replaceCharacter","updateCharacterWith","getChatMessages","setChatMessages","setChatMessage","createChatMessages","deleteChatMessages","rotateChatMessages","formatAsDisplayedMessage","retrieveDisplayedMessage","refreshOneMessage","tavern_events","iframe_events","isAdmin","getTavernHelperExtensionId","getExtensionType","getExtensionStatus","getExtensionInstallationInfo","isInstalledExtension","installExtension","uninstallExtension","reinstallExtension","updateExtension","getTavernFile","uploadTavernFile","deleteTavernFile","importRawCharacter","importRawPreset","importRawChat","importRawWorldbook","importRawTavernRegex","injectPrompts","uninjectPrompts","builtin_prompt_default_order","placeholder_prompt_default_order","getModelList","getProxyPresetNames","initializeGlobal","waitGlobalInitialized","getLorebookEntries","replaceLorebookEntries","updateLorebookEntriesWith","setLorebookEntries","createLorebookEntries","createLorebookEntry","deleteLorebookEntries","deleteLorebookEntry","getLorebookSettings","setLorebookSettings","getCharLorebooks","setCurrentCharLorebooks","getLorebooks","deleteLorebook","createLorebook","getCurrentCharPrimaryLorebook","getChatLorebook","setChatLorebook","getOrCreateChatLorebook","isPresetNormalPrompt","isPresetSystemPrompt","isPresetPlaceholderPrompt","default_preset","getPresetNames","getLoadedPresetName","loadPreset","createPreset","createOrReplacePreset","deletePreset","renamePreset","getPreset","replacePreset","updatePresetWith","setPreset","getPersonaNames","getPersonaIds","getCurrentPersonaName","getCurrentPersonaId","getPersonaAvatarPath","createPersona","createOrReplacePersona","deletePersona","getPersona","replacePersona","updatePersonaWith","RawCharacter","getCharData","getCharAvatarPath","getChatHistoryBrief","getChatHistoryDetail","registerMacroLike","unregisterMacroLike","getAllEnabledScriptButtons","getScriptTrees","replaceScriptTrees","updateScriptTreesWith","triggerSlash","triggerSlashWithResult","formatAsTavernRegexedString","isCharacterTavernRegexesEnabled","getTavernRegexes","replaceTavernRegexes","updateTavernRegexesWith","substitudeMacros","getLastMessageId","errorCatched","getMessageId","registerVariableSchema","getVariables","getAllVariables","replaceVariables","updateVariablesWith","insertOrAssignVariables","deleteVariable","insertVariables","getTavernHelperVersion","getFrontendVersion","updateTavernHelper","updateFrontendVersion","getTavernVersion","getWorldbookNames","getGlobalWorldbookNames","rebindGlobalWorldbooks","getCharWorldbookNames","rebindCharWorldbooks","getChatWorldbookName","rebindChatWorldbook","getOrCreateChatWorldbook","createWorldbook","createOrReplaceWorldbook","deleteWorldbook","getWorldbook","replaceWorldbook","updateWorldbookWith","createWorldbookEntries","deleteWorldbookEntries","getButtonEvent","getScriptButtons","replaceScriptButtons","updateScriptButtonsWith","appendInexistentScriptButtons","getScriptName","getScriptInfo","replaceScriptInfo","getIframeName","getScriptId","getCurrentMessageId","reloadIframe","eventOn","eventOnce","eventMakeFirst","eventMakeLast","eventOnButton","eventEmit","eventEmitAndWait","eventRemoveListener","eventClearEvent","eventClearListener","eventClearAll","registerMvuSchema"];
+    for(var ti=0;ti<thKeys.length;ti++){
+      var tk=thKeys[ti];
+      if(g[tk]!==undefined&&g.TavernHelper[tk]===undefined)g.TavernHelper[tk]=g[tk];
+    }
+    if(typeof g.TavernHelper.generate==="function"&&typeof g.generate!=="function")g.generate=g.TavernHelper.generate;
+    if(typeof g.TavernHelper.generateRaw==="function"&&typeof g.generateRaw!=="function")g.generateRaw=g.TavernHelper.generateRaw;
+    if(typeof g.TavernHelper.stopGenerationById==="function"&&typeof g.stopGenerationById!=="function")g.stopGenerationById=g.TavernHelper.stopGenerationById;
+    if(typeof g.TavernHelper.stopAllGeneration==="function"&&typeof g.stopAllGeneration!=="function")g.stopAllGeneration=g.TavernHelper.stopAllGeneration;
+  }
+
+  // SillyTavern.getContext() 第一层完整投影（刀2）
+  var eventSourceAdapter={
+    on:function(e,cb){return g.eventOn(e,cb);},
+    once:function(e,cb){return g.eventOnce(e,cb);},
+    makeFirst:function(e,cb){return g.eventMakeFirst(e,cb);},
+    makeLast:function(e,cb){return g.eventMakeLast(e,cb);},
+    emit:function(){return g.eventEmit.apply(g,arguments);},
+    emitAndWait:function(){return g.eventEmitAndWait.apply(g,arguments);},
+    removeListener:function(e,cb){return g.eventRemoveListener(e,cb);}
+  };
+  if(!g.__liyuanExtensionPrompts)g.__liyuanExtensionPrompts={};
+  if(!g.__liyuanSlashCommands){
+    var pwCmd=(pw0&&pw0.__liyuanSlashCommands)?pw0.__liyuanSlashCommands:{};
+    g.__liyuanSlashCommands=pwCmd;
+    if(pw0&&!pw0.__liyuanSlashCommands)pw0.__liyuanSlashCommands=pwCmd;
+  }
+  var slashParserAdapter={
+    commands:g.__liyuanSlashCommands,
+    addCommandObject:function(cmdObj){
+      if(!cmdObj||typeof cmdObj!=="object"||!cmdObj.name)return;
+      var name=String(cmdObj.name);
+      g.__liyuanSlashCommands[name]=cmdObj;
+      if(Array.isArray(cmdObj.aliases)){
+        cmdObj.aliases.forEach(function(a){if(a)g.__liyuanSlashCommands[String(a)]=cmdObj;});
+      }
+    }
+  };
+  var slashCommandClass={
+    fromProps:function(props){
+      if(!props||typeof props!=="object")return null;
+      return Object.assign({aliases:[],returns:"",namedArgumentList:[],unnamedArgumentList:[]},props);
+    }
+  };
+  var presetManagerAdapter={
+    apiId:"openai",
+    getSelectedPresetName:function(){return g.getLoadedPresetName();},
+    getAllPresets:function(){return g.getPresetNames();},
+    findPreset:function(n){return n||"in_use";},
+    selectPreset:function(){return true;},
+    savePreset:function(){return Promise.resolve(true);},
+    deletePreset:function(){return Promise.resolve(true);},
+    getPresetList:function(){return {presets:[g.getPreset("in_use")],preset_names:{"in_use":0}};},
+    readPresetExtensionField:function(opts){
+      var p=opts&&opts.path?String(opts.path):"";
+      if(p==="regex_scripts")return [];
+      if(p==="tavern_helper.scripts")return [];
+      return undefined;
+    }
+  };
+  function buildStContext(){
+    var c=readRuntimeCtx();
+    var charName=c?String(c.charName||""):"";
+    var userName=c?String(c.userName||""):"";
+    var rawMsgs=(c&&Array.isArray(c.messages))?c.messages:[];
+    var stChat=rawMsgs.map(function(m,idx){
+      var txt=String((m&&(m.message!=null?m.message:m.text))||"");
+      var mVars=(g.__liyuanScopedVars&&g.__liyuanScopedVars.message&&g.__liyuanScopedVars.message[String(idx)])||m.data||g.getAllVariables();
+      return {
+        name:m.name||(m.role==="user"?userName:charName),
+        is_user:m.role==="user",
+        is_system:Boolean(m.is_hidden),
+        mes:txt,
+        swipe_id:m.swipe_id||0,
+        swipes:Array.isArray(m.swipes)?m.swipes:[txt],
+        variables:[mVars],
+        extra:m.extra||{},
+        send_date:Date.now()
+      };
+    });
+    var charRecord=buildCharRecord();
+    var avatarId=charRecord.avatar||"0.png";
+    if(!g.__liyuanStChatMeta)g.__liyuanStChatMeta={};
+    g.__liyuanStChatMeta.variables=g.getVariables({type:"chat"});
+    var chatMeta=g.__liyuanStChatMeta;
+    if(!g.__liyuanStExtSettings){
+      g.__liyuanStExtSettings={
+        variables:{global:g.getVariables({type:"global"})},
+        disabledExtensions:[],
+        character_allowed_regex:[avatarId],
+        preset_allowed_regex:{openai:["in_use","default"]},
+        regex:[],
+        tavern_helper:{
+          script:{
+            enabled:{global:true,characters:[avatarId],presets:["in_use","default"]},
+            scripts:[]
+          }
+        }
+      };
+    }else{
+      g.__liyuanStExtSettings.variables={global:g.getVariables({type:"global"})};
+      g.__liyuanStExtSettings.character_allowed_regex=[avatarId];
+      if(g.__liyuanStExtSettings.tavern_helper&&g.__liyuanStExtSettings.tavern_helper.script&&g.__liyuanStExtSettings.tavern_helper.script.enabled){
+        g.__liyuanStExtSettings.tavern_helper.script.enabled.characters=[avatarId];
+      }
+    }
+    var extSettings=g.__liyuanStExtSettings;
+    var chars=[charRecord];
+    return {
+      chat:stChat,
+      characters:chars,
+      characterId:0,
+      this_chid:0,
+      groupId:null,
+      chatId:(c&&(c.chatId||c.sessionId))||"default",
+      name1:userName,
+      name2:charName,
+      chatMetadata:chatMeta,
+      chat_metadata:chatMeta,
+      extensionSettings:extSettings,
+      extension_settings:extSettings,
+      extensionPrompts:g.__liyuanExtensionPrompts,
+      extension_prompts:g.__liyuanExtensionPrompts,
+      setExtensionPrompt:function(key,val,pos,depth,scan,role){
+        g.__liyuanExtensionPrompts[String(key)]={identifier:String(key),value:String(val||""),position:pos,depth:depth,scan:Boolean(scan),role:role};
+      },
+      SlashCommandParser:slashParserAdapter,
+      SlashCommand:slashCommandClass,
+      getPresetManager:function(){return presetManagerAdapter;},
+      getRequestHeaders:function(){return {"Content-Type":"application/json"};},
+      selectCharacterById:function(){return Promise.resolve();},
+      getOneCharacter:function(){return Promise.resolve(charRecord);},
+      getCharacters:function(){return Promise.resolve(chars);},
+      loadWorldInfo:function(name){
+        return g.getWorldbook(name).then(function(entries){
+          var map={};
+          entries.forEach(function(e,idx){map[String(e.uid!=null?e.uid:idx)]=e;});
+          return {entries:map};
+        });
+      },
+      saveWorldInfo:function(name,data){
+        var list=data&&data.entries?(Array.isArray(data.entries)?data.entries:Object.values(data.entries)):[];
+        return g.replaceWorldbook(name,list).then(function(){
+          return g.eventEmit(g.tavern_events.WORLDINFO_UPDATED,name,data||{entries:{}});
+        });
+      },
+      reloadWorldInfoEditor:function(){},
+      eventSource:eventSourceAdapter,
+      event_types:g.tavern_events,
+      eventTypes:g.tavern_events,
+      substituteParams:g.substitudeMacros,
+      substituteParamsExtended:g.substitudeMacros,
+      saveMetadata:function(){return Promise.resolve();},
+      saveMetadataDebounced:function(){},
+      saveChatConditional:function(){return Promise.resolve();},
+      saveSettings:function(){return Promise.resolve();},
+      saveSettingsDebounced:function(){
+        setTimeout(function(){try{g.eventEmit(g.tavern_events.SETTINGS_UPDATED);}catch(e){}},0);
+      },
+      writeExtensionField:function(){return Promise.resolve();},
+      getCurrentChatId:function(){return (c&&(c.chatId||c.sessionId))||"default";},
+      getTokenCountAsync:function(text){return Promise.resolve(Math.ceil(String(text||"").length/2));},
+      getTokenCount:function(text){return Math.ceil(String(text||"").length/2);},
+      generateQuietPrompt:function(opts){
+        var p=typeof opts==="string"?opts:(opts&&opts.quietPrompt)||"";
+        return g.TavernHelper.generate({user_input:p,should_silence:true});
+      },
+      generateRaw:function(opts){
+        return g.TavernHelper.generateRaw(opts||{});
+      },
+      stopGeneration:function(){
+        g.TavernHelper.stopAllGeneration();
+        return true;
+      },
+      reloadCurrentChat:function(){return Promise.resolve();},
+      clearChat:function(){return Promise.resolve();},
+      addOneMessage:function(){}
+    };
+  }
+  if(!g.SillyTavern){
+    Object.defineProperty(g,"SillyTavern",{
+      get:function(){
+        var ctx=buildStContext();
+        ctx.getContext=buildStContext;
+        return ctx;
+      },
+      configurable:true
+    });
   }
 }catch(e){console.error("[liyuan globals]",e);}
 })();</script>`;

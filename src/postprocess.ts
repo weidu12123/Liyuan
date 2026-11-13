@@ -425,7 +425,7 @@ const skinDivToken = (i: number) => `${i}`;
  */
 function protectSkinDivs(text: string): { text: string; stash: string[] } {
 	const stash: string[] = [];
-	const startRe = /<div\b[^>]*\bstyle\s*=/gi;
+	const startRe = /<div\b[^>]*\b(?:style|class)\s*=/gi;
 	let out = "";
 	let i = 0;
 	for (;;) {
@@ -495,7 +495,7 @@ export function prepareDisplayText(text: string, skin?: DisplaySkin | null): str
 		}
 		return cleaned;
 	}
-	if (/<div\b[^>]*\bstyle\s*=/i.test(t) && /<\/div>/i.test(t)) {
+	if (/<div\b[^>]*\b(?:style|class)\s*=/i.test(t) && /<\/div>/i.test(t)) {
 		const { text: protectedText, stash } = protectSkinDivs(t);
 		let cleaned = displayAssistantText(protectedText);
 		for (let i = 0; i < stash.length; i++) {

@@ -144,17 +144,13 @@ test("skin 开关:默认开,cardSkinOff 关,setSkinEnabled 幂等往返", () => 
 	assert.deepEqual(on.cardSkinOff, []);
 });
 
-test("displayRules: substituteRegex 非零的规则整条跳过,warn", () => {
-	const warnings: string[] = [];
-	const oldWarn = console.warn;
-	try {
-		console.warn = (...args) => warnings.push(args.join(" "));
-		const rules = displayRules([{ ...skinScript, substituteRegex: 1 }]);
-		assert.equal(rules.length, 0);
-		assert.ok(warnings.some((w) => w.includes("substituteRegex")));
-	} finally {
-		console.warn = oldWarn;
-	}
+test("displayRules: substituteRegex 非零的规则正常提取并携带 substituteRegex 模式", () => {
+	const rules1 = displayRules([{ ...skinScript, substituteRegex: 1 }]);
+	assert.equal(rules1.length, 1);
+	assert.equal(rules1[0].substituteRegex, 1);
+	const rules2 = displayRules([{ ...skinScript, substituteRegex: 2 }]);
+	assert.equal(rules2.length, 1);
+	assert.equal(rules2[0].substituteRegex, 2);
 });
 
 test("displayRules: minDepth/maxDepth 随规则带下去;越界/非数按酒馆同判当无限定", () => {

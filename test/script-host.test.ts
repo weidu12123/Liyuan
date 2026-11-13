@@ -58,16 +58,17 @@ test("宿主文档幂等：同一函数两次调用逐字相同（帧只因清�
 
 // ---- 作用域变量：红线在垫片源码里就该看得见 ----
 
-test("垫片给了作者自留地写族（global/script），且账本作用域写入被明确拒绝", () => {
+test("垫片支持全作用域变量读写（chat/message/script/character/preset/global/extension）并同步 Liyuan.data.write", () => {
 	const s = IFRAME_TAVERN_GLOBALS_SNIPPET;
 	assert.ok(s.includes("insertOrAssignVariables"));
 	assert.ok(s.includes("replaceVariables"));
 	assert.ok(s.includes("updateVariablesWith"));
-	// 拒绝路径：非 global/script 一律 warn 后空转
-	assert.ok(s.includes('t!=="global"&&t!=="script"'));
-	assert.ok(s.includes("梨园账本只读"));
-	// 自留地落 localStorage，与账本（__liyuanVariables）分家
+	assert.ok(s.includes("insertVariables"));
+	assert.ok(s.includes("deleteVariable"));
+	assert.ok(s.includes("registerVariableSchema"));
 	assert.ok(s.includes("liyuan.authorVars."));
+	assert.ok(s.includes('g.Liyuan.call("data.write"'));
+	assert.ok(s.includes('g.Liyuan.call("state.commit"'));
 });
 
 test("垫片补上 toastr（作者唯一反馈渠道；缺它是 ReferenceError）", () => {

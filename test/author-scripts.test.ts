@@ -7,7 +7,14 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { authorScriptHash, authorScriptManifest, authorScriptSig, buildAuthorScripts, extractAuthorScripts } from "../src/authorScripts.ts";
+import {
+	authorScriptHash,
+	authorScriptManifest,
+	authorScriptSig,
+	buildAuthorScripts,
+	extractAuthorScripts,
+	extractAuthorScriptVariables,
+} from "../src/authorScripts.ts";
 import { buildCardFrontSnapshot } from "../src/cardfront.ts";
 import { findLocalCard, findLocalPreset, localCards, localPresets } from "./fixtures.ts";
 
@@ -168,6 +175,84 @@ test("指纹随顺序变化（预设/卡对调 = 不同的执行序）", () => {
 test("空清单的指纹是空串（前端据此判「这张卡没脚本」）", () => {
 	assert.equal(authorScriptSig([]), "");
 	assert.deepEqual(authorScriptManifest([]), []);
+});
+
+test("刀1：支持 type='folder' 文件夹展开与文件夹级 enabled 门控", () => {
+	const raw = cardRaw([
+		{
+			type: "folder",
+			id: "f1",
+			name: "启用文件夹",
+			enabled: true,
+			scripts: [
+				script({ id: "in-folder-1", content: "window.a=1;" }),
+				script({ id: "in-folder-disabled", enabled: false, content: "window.b=2;" }),
+			],
+		},
+		{
+			type: "folder",
+			id: "f2",
+			name: "禁用文件夹",
+			enabled: false,
+			scripts: [script({ id: "in-disabled-folder", content: "window.c=3;" })],
+		},
+		script({ id: "top-level", content: "window.d=4;" }),
+	]);
+	const out = extractAuthorScripts(raw, "card");
+	assert.deepEqual(
+		out.map((s) => s.id),
+		["in-folder-1", "top-level"],
+	);
+});
+
+test("刀1：兼容旧版 TavernHelper_scripts、value 包装、代码块围栏及 data/button/info 元数据", () => {
+	const legacyRaw = {
+		data: {
+			extensions: {
+				TavernHelper_scripts: [
+					{
+						type: "script",
+						value: {
+							id: "leg-1",
+							name: "旧版单脚本",
+							enabled: true,
+							content: "```javascript\nconst x = 42;\n```",
+							info: "脚本说明",
+							data: { initCount: 10 },
+							buttons: [{ name: "打开面板", visible: true }],
+						},
+					},
+					{
+						type: "folder",
+						name: "旧版文件夹",
+						value: [
+							{
+								id: "leg-2",
+								name: "文件夹内旧脚本",
+								enabled: true,
+								content: "console.log('ok');",
+							},
+						],
+					},
+				],
+				TavernHelper_characterScriptVariables: {
+					faction: "青云门",
+				},
+			},
+		},
+	};
+	const out = extractAuthorScripts(legacyRaw, "card");
+	assert.equal(out.length, 2);
+	assert.equal(out[0].id, "leg-1");
+	assert.equal(out[0].content, "const x = 42;");
+	assert.equal(out[0].info, "脚本说明");
+	assert.deepEqual(out[0].data, { initCount: 10 });
+	assert.deepEqual(out[0].button, {
+		enabled: true,
+		buttons: [{ name: "打开面板", visible: true }],
+	});
+	assert.equal(out[1].id, "leg-2");
+	assert.deepEqual(extractAuthorScriptVariables(legacyRaw), { faction: "青云门" });
 });
 
 // ---- 实卡 / 实预设：按形状发现，没有就跳过 ----

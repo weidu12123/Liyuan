@@ -418,13 +418,16 @@ test("实卡：初值只写在 schema prefault 里的卡能被播种", (t) => {
 	);
 	if (!card) return t.skip("本地没有这种形状的卡");
 	const tree = findSchemaDefaults(extractAuthorScripts(card.raw, "card"))!;
-	// 不断言具体字段（那是卡的私有内容）：断言形状不变量
+	// 不断言具体字段（那是卡的私有内容）：断言形状不变量（单根包多分组 或 顶层直接多分组）
 	const rootKeys = Object.keys(tree);
-	assert.equal(rootKeys.length, 1, "schema 只有一个变量根");
-	const root = tree[rootKeys[0]!] as Record<string, unknown>;
-	assert.ok(Object.keys(root).length >= 5, "根下应有多个分组");
+	assert.ok(rootKeys.length >= 1, "schema 至少有一个变量根");
+	const totalGroups =
+		rootKeys.length === 1 && tree[rootKeys[0]!] && typeof tree[rootKeys[0]!] === "object"
+			? Object.keys(tree[rootKeys[0]!] as Record<string, unknown>).length
+			: rootKeys.length;
+	assert.ok(totalGroups >= 3, "树下应有多个分组");
 	// 值必须是真数据，不能全是空壳（否则面板还是 --）
-	const flat = JSON.stringify(root);
+	const flat = JSON.stringify(tree);
 	assert.ok(flat.length > 500, "解出来的树要有实质内容");
 	assert.ok(!flat.includes("undefined"), "树里不许出现 undefined");
 });

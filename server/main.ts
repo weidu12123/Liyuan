@@ -53,6 +53,7 @@ import { applyMacros } from "../src/card-macros.ts";
 import { prepareDisplayText } from "../src/postprocess.ts";
 import { findInitVar, findSchemaDefaults, seedMvuIfNeeded } from "../src/mvu.ts";
 import { authorScriptManifest, extractAuthorScripts } from "../src/authorScripts.ts";
+import { ScriptApiService, type ScriptMessageItem, type ScriptTargetDescriptor } from "../src/script-api.ts";
 import { buildGreeting } from "../src/greeting.ts";
 import { StageEngine, type AssistantMsgLike, type StageModelLike, type StageStreamFn } from "../src/stage/engine.ts";
 import { displayConversationBranch, storyBranch, messageMode } from "../src/conversation-mode.ts";
@@ -2322,6 +2323,14 @@ const restHost: RestHost = {
 			reasoning: opts?.reasoning ?? "off",
 			signal: opts?.signal,
 		}),
+	invokeScriptApi: (body) =>
+		scriptApi.invoke({
+			action: String(body.action ?? ""),
+			params: body.params && typeof body.params === "object" ? (body.params as Record<string, unknown>) : body,
+			target: body.target && typeof body.target === "object" ? (body.target as never) : undefined,
+			scriptId: typeof body.scriptId === "string" ? body.scriptId : undefined,
+			requestId: typeof body.requestId === "string" ? body.requestId : undefined,
+		}),
 };
 
 /**
@@ -3076,6 +3085,350 @@ btw = createBtwRunner({
 	},
 });
 
+const scriptLoreHost = {
+	write: (input: { title: string; keys: string[]; content: string; constant?: boolean; book?: string }) => {
+		const config = loadConfig(cwd);
+		const targetBook = input.book?.trim() || mountedLorebookPaths(config)[0];
+		if (!targetBook) {
+			throw new Error("当前尚未挂载任何独立世界书，请先调用 lorebook_create 新建世界书，或传入 book 指定目标世界书。"); // i18n-ignore：脚本回执
+		}
+		const [abs] = loreWriteTargets(cwd, config, targetBook);
+		const entry = appendLorebookFileEntry(abs, {
+			comment: input.title,
+			keys: input.keys,
+			content: input.content,
+			...(input.constant !== undefined ? { constant: input.constant } : {}),
+		});
+		if (entry) void restHost.softRefreshConfig();
+		return entry;
+	},
+	update: (
+		fingerprint: string,
+		patch: { title?: string; keys?: string[]; content?: string; constant?: boolean },
+	) => {
+		const r = patchLoreEntryAnywhere(cwd, loadConfig(cwd), fingerprint, {
+			...(patch.title !== undefined ? { comment: patch.title } : {}),
+			...(patch.keys !== undefined ? { keys: patch.keys } : {}),
+			...(patch.content !== undefined ? { content: patch.content } : {}),
+			...(patch.constant !== undefined ? { constant: patch.constant } : {}),
+		});
+		if (r) void restHost.softRefreshConfig();
+		return r;
+	},
+	remove: (fingerprint: string) => {
+		const r = deleteLoreEntryAnywhere(cwd, loadConfig(cwd), fingerprint);
+		if (r) void restHost.softRefreshConfig();
+		return r;
+	},
+	listMarked: () => loadMergedLoreMarked(cwd, loadConfig(cwd)),
+	listBooks: () => lorebookShelf(cwd, loadConfig(cwd)),
+	mountBook: (path: string, mounted: boolean) => {
+		const next = setLorebookMounted(cwd, loadConfig(cwd), path, mounted);
+		void restHost.softRefreshConfig();
+		return next;
+	},
+};
+
+const resolveScriptModel = (spec?: { provider?: string; id?: string }): StageModelLike | undefined => {
+	if (spec?.provider && spec?.id) {
+		const found = session.modelRuntime.getModel(spec.provider, spec.id);
+		if (found) return found as StageModelLike;
+	}
+	return (sideEntryOf()?.model ?? session.model) as StageModelLike | undefined;
+};
+
+const runScriptModelStream = async (
+	model: StageModelLike | undefined,
+	context: { systemPrompt?: string; messages: Array<{ role: "user" | "assistant"; content: Array<{ type: "text"; text: string }>; timestamp: number }> },
+	opts: { maxTokens?: number; reasoning?: string; signal: AbortSignal; onDelta?: (kind: "text" | "thinking", delta: string) => void },
+): Promise<{ text: string; thinking: string; model: string; stopReason?: string }> => {
+	if (!model) throw new Error(t("无可用模型"));
+	const stream = session.modelRuntime.streamSimple(
+		model as never,
+		context as never,
+		{
+			maxTokens: opts.maxTokens ?? 4096,
+			reasoning: (opts.reasoning ?? "off") as never,
+			signal: opts.signal,
+		},
+	);
+	let text = "";
+	let thinking = "";
+	let stopReason: string | undefined;
+	for await (const ev of stream as unknown as AsyncIterable<{
+		type: string;
+		delta?: string;
+		message?: AssistantMsgLike;
+		error?: AssistantMsgLike;
+	}>) {
+		if (ev.type === "text_delta" && ev.delta) {
+			text += ev.delta;
+			opts.onDelta?.("text", ev.delta);
+		} else if (ev.type === "thinking_delta" && ev.delta) {
+			thinking += ev.delta;
+			opts.onDelta?.("thinking", ev.delta);
+		} else if (ev.type === "done" && ev.message) {
+			stopReason = ev.message.stopReason;
+			if (!text) {
+				text = ev.message.content
+					.filter((c) => c.type === "text")
+					.map((c) => c.text ?? "")
+					.join("");
+			}
+			if (!thinking) {
+				thinking = ev.message.content
+					.filter((c) => c.type === "thinking")
+					.map((c) => c.thinking ?? "")
+					.join("");
+			}
+		} else if (ev.type === "error") {
+			throw new Error(ev.error?.errorMessage || `stopReason=${ev.error?.stopReason ?? "error"}`);
+		}
+	}
+	return {
+		text: text.trim(),
+		thinking: thinking.trim(),
+		model: `${model.provider ?? "unknown"}/${model.id}`,
+		stopReason,
+	};
+};
+
+const scriptApi = new ScriptApiService({
+	cwd,
+	getConfig: () => loadConfig(cwd),
+	getTarget: (): ScriptTargetDescriptor => {
+		const cfg = loadConfig(cwd);
+		const chatDir = chatDirOfSessionDir(session.sessionManager.getSessionDir());
+		return {
+			card: cfg.card,
+			cardName: names.charName,
+			charName: names.charName,
+			userName: names.userName,
+			chatId: chatDir ? basename(chatDir) : null,
+			sessionId: session.sessionId,
+			leafId: session.sessionManager.getLeafId(),
+			mode: stage.mode === "agent" ? "agent" : "roleplay",
+			streaming: storyStreaming(),
+		};
+	},
+	getMessages: (): ScriptMessageItem[] => {
+		const state = currentState();
+		const mvuData = { stat_data: ((state.mvu && typeof state.mvu === "object" ? state.mvu : {}) as Record<string, unknown>) };
+		let rawBranch = session.sessionManager.getBranch();
+		try {
+			rawBranch = applyDraftRevisions(rawBranch);
+		} catch {
+			/* ignore */
+		}
+		const displayEntries = (displayConversationBranch(rawBranch) as unknown as Array<Record<string, unknown>>).filter(
+			(e) =>
+				(e.type === "message" && e.message) ||
+				(e.type === "custom_message" && (e.customType === "rp-greeting" || e.customType === "rp-edited-reply")),
+		);
+		const wireMsgs = annotateSwipes(toWireHistory(branchMessages(), names, { skin: null })).filter(
+			(m) => m.channel === "user" || m.channel === "narrative" || m.channel === "greeting",
+		);
+		let greetingSwipes: string[] | undefined;
+		let greetingSwipeId = 0;
+		try {
+			const cfg = loadConfig(cwd);
+			greetingSwipeId = cfg.greetingIndex ?? 0;
+			if (cfg.card) {
+				const cardAbs = isAbsolute(cfg.card) ? cfg.card : join(cwd, cfg.card);
+				const card = loadCardFile(cardAbs);
+				greetingSwipes = [card.firstMes, ...card.alternateGreetings];
+			}
+		} catch {
+			/* ignore */
+		}
+		return wireMsgs.map((m, idx) => {
+			const entry = displayEntries[idx];
+			const entryId = typeof entry?.id === "string" ? entry.id : undefined;
+			const role: "user" | "assistant" | "system" = m.channel === "user" ? "user" : "assistant";
+			const isGreeting = idx === 0 && m.channel === "greeting";
+			return {
+				index: idx,
+				message_id: idx,
+				...(entryId ? { entryId } : {}),
+				role,
+				channel: m.channel,
+				name: m.name ?? (role === "user" ? names.userName : names.charName),
+				text: m.text,
+				message: m.text,
+				mes: m.text,
+				...(m.thinking ? { thinking: m.thinking } : {}),
+				...(m.swipe ? { swipe: m.swipe } : {}),
+				...(isGreeting && greetingSwipes ? { swipe_id: greetingSwipeId, swipes: greetingSwipes } : {}),
+				data: mvuData,
+				variables: mvuData,
+			};
+		});
+	},
+	getState: () => currentState(),
+	applyStatePatch: async (patch) => {
+		const r = await restHost.applyStatePatch(patch);
+		return { ...r, state: currentState() };
+	},
+	submitChat: async ({ text, directorNote, wait }) => {
+		broadcast({
+			type: "message",
+			message: {
+				channel: "user",
+				name: names.userName,
+				text,
+				...(stage.mode !== "roleplay" ? { mode: stage.mode } : {}),
+			},
+		});
+		const note = directorNote ?? takeDirectorNote();
+		if (wait === false) {
+			const queued = stage.isStreaming;
+			void stage.performTurn(text, note);
+			return { queued };
+		}
+		const { queued, info } = await stage.performTurnAndWait(text, note);
+		const msgs = annotateSwipes(toWireHistory(branchMessages(), names, { skin: null }));
+		const lastReply = [...msgs].reverse().find((m) => m.channel === "narrative");
+		return {
+			queued,
+			aborted: info.aborted,
+			entryId: info.entryId,
+			error: info.error,
+			replyText: lastReply?.text ?? "",
+		};
+	},
+	regenerateChat: async (input) => {
+		const text = input?.text?.trim();
+		const note = input?.directorNote ?? takeDirectorNote();
+		if (text) {
+			await handlePrompt(`/reroll ${text}`);
+		} else {
+			if (note) pendingDirectorNote = note;
+			await regenerateSwipe();
+		}
+		const msgs = annotateSwipes(toWireHistory(branchMessages(), names, { skin: null }));
+		const lastReply = [...msgs].reverse().find((m) => m.channel === "narrative");
+		return {
+			entryId: session.sessionManager.getLeafId() ?? undefined,
+			replyText: lastReply?.text ?? "",
+		};
+	},
+	abortChat: () => {
+		for (const id of [...pendingChoices.keys()]) settleChoice(id, { stop: true });
+		stage.abort();
+		void session.abort().catch(() => {});
+	},
+	updateLastReply: async (text) => {
+		await handlePrompt(`/editreply ${text}`);
+		session.sessionManager.flush();
+		return {
+			entryId: session.sessionManager.getLeafId(),
+			text,
+		};
+	},
+	switchGreeting: async (index) => {
+		await hostSwitchGreeting(String(index));
+		session.sessionManager.flush();
+		const cfg = loadConfig(cwd);
+		const msgs = annotateSwipes(toWireHistory(branchMessages(), names, { skin: null }));
+		const greet = msgs.find((m) => m.channel === "greeting");
+		return {
+			greetingIndex: cfg.greetingIndex ?? index,
+			text: greet?.text ?? "",
+		};
+	},
+	dropLastReply: async () => {
+		await handlePrompt("/drop");
+		session.sessionManager.flush();
+		return {
+			leafId: session.sessionManager.getLeafId(),
+		};
+	},
+	runExplicitGeneration: async (input) => {
+		const model = resolveScriptModel(input.model);
+		const sysParts: string[] = [];
+		if (input.systemPrompt?.trim()) sysParts.push(input.systemPrompt.trim());
+		const msgs: Array<{ role: "user" | "assistant"; content: Array<{ type: "text"; text: string }>; timestamp: number }> = [];
+		if (input.messages && input.messages.length > 0) {
+			for (const m of input.messages) {
+				if (m.role === "system") {
+					sysParts.push(m.content.trim());
+				} else {
+					msgs.push({
+						role: m.role,
+						content: [{ type: "text", text: m.content }],
+						timestamp: Date.now(),
+					});
+				}
+			}
+		}
+		if (input.prompt?.trim()) {
+			msgs.push({
+				role: "user",
+				content: [{ type: "text", text: input.prompt.trim() }],
+				timestamp: Date.now(),
+			});
+		}
+		if (msgs.length === 0) {
+			msgs.push({
+				role: "user",
+				content: [{ type: "text", text: sysParts.pop() ?? "" }],
+				timestamp: Date.now(),
+			});
+		}
+		return await runScriptModelStream(
+			model,
+			{
+				...(sysParts.length > 0 ? { systemPrompt: sysParts.join("\n\n") } : {}),
+				messages: msgs,
+			},
+			{
+				maxTokens: input.maxTokens,
+				reasoning: input.reasoning,
+				signal: input.signal,
+				onDelta: input.onDelta,
+			},
+		);
+	},
+	runContextualGeneration: async (input) => {
+		const model = resolveScriptModel(input.model);
+		const assembled = stage.btwAssembly();
+		const sys = [assembled.systemPrompt, input.systemPrompt?.trim()].filter(Boolean).join("\n\n");
+		const userContent = assembled.stageBlock
+			? `${assembled.stageBlock}\n\n${input.prompt.trim()}`
+			: input.prompt.trim();
+		return await runScriptModelStream(
+			model,
+			{
+				systemPrompt: sys,
+				messages: [
+					{
+						role: "user",
+						content: [{ type: "text", text: userContent }],
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				maxTokens: input.maxTokens,
+				reasoning: input.reasoning,
+				signal: input.signal,
+				onDelta: input.onDelta,
+			},
+		);
+	},
+	getCurrentChatDir: () => chatDirOfSessionDir(session.sessionManager.getSessionDir()),
+	getLoreHost: () => scriptLoreHost,
+	getPanels: () => currentPanels(),
+	savePanel: (input) => restHost.savePanel(input),
+	importPanels: (list) => restHost.importPanels(list),
+	closePanel: (name) => restHost.closePanel(name),
+	getStoryView: () => restHost.storyView(),
+	editStoryFile: (input) => restHost.editStoryFile(input),
+	getWorldlineView: () => restHost.worldlineView(),
+	listModels: () => restHost.listModels(),
+	notify: (level, text) => restHost.notify(level, text),
+});
+
 /**
  * 手动压缩（/compact 与 WS compact 帧共用）：走台上引擎自管压缩（M4）。
  * 摘要落树后 resyncAll——重放时被覆盖的楼层照旧全在（树只追加），
@@ -3484,6 +3837,35 @@ const handlePrompt = async (text: string) => {
 			return;
 		}
 		cli?.out("[assets] 用法：/assets [list | read <相对路径.md> | write <相对路径.md> <内容>]"); // i18n-ignore：CLI 终端输出
+		return;
+	}
+	const scriptMatch = /^\/script(?:[ \t]+([\s\S]*))?$/i.exec(trimmed);
+	if (scriptMatch) {
+		const sub = (scriptMatch[1] ?? "").trim();
+		if (!sub) {
+			const env = await scriptApi.invoke({ action: "capabilities.read" });
+			cli?.out(`[script] ${JSON.stringify(env)}`); // i18n-ignore：CLI 终端输出
+			return;
+		}
+		const spaceIdx = sub.search(/\s/);
+		const action = spaceIdx > 0 ? sub.slice(0, spaceIdx).trim() : sub;
+		const rest = spaceIdx > 0 ? sub.slice(spaceIdx + 1).trim() : "";
+		let parsedParams: Record<string, unknown> = {};
+		if (rest) {
+			try {
+				const obj = JSON.parse(rest);
+				parsedParams = obj && typeof obj === "object" && !Array.isArray(obj) ? (obj as Record<string, unknown>) : { value: obj };
+			} catch {
+				parsedParams = { text: rest, prompt: rest };
+			}
+		}
+		const env = await scriptApi.invoke({
+			action,
+			params: parsedParams,
+			...(parsedParams.target && typeof parsedParams.target === "object" ? { target: parsedParams.target as never } : {}),
+			...(typeof parsedParams.scriptId === "string" ? { scriptId: parsedParams.scriptId } : {}),
+		});
+		cli?.out(`[script] ${JSON.stringify(env)}`); // i18n-ignore：CLI 终端输出
 		return;
 	}
 	// ST 式变体：无参 /reroll 与 /swipe 由宿主处理（需重开一拍，扩展命令上下文无此能力）

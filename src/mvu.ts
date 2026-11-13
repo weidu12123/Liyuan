@@ -39,14 +39,19 @@ export type MvuTree = Record<string, unknown>;
  *
  * 返回 null＝这张卡没有可解的初始树（不是 MVU 卡，或初值只写在散文里——不硬解）。
  */
-export function findInitVar(entries: Array<{ comment?: string; content?: string }>): MvuTree | null {
+export function findInitVar(entries: Array<{ comment?: string; content?: string }> | undefined | null): MvuTree | null {
+	if (!Array.isArray(entries)) return null;
 	for (const e of entries) {
 		const content = e.content ?? "";
 		const name = e.comment ?? "";
 		const wrapped = /\[initvar\]([\s\S]*?)\[\/initvar\]/i.exec(content);
 		let body: string | null = null;
 		if (wrapped) body = wrapped[1] ?? "";
-		else if (/\[\s*initvar\s*\]/i.test(name) && content.trim()) body = content;
+		else if (/\[\s*(?:initvar|InitialVariables)\s*\]/i.test(name) && content.trim()) {
+			body = content.replace(/^(?:@@[a-zA-Z_]+[^\r\n]*\r?\n)+/, "");
+		} else if (/^(?:@@[a-zA-Z_]+[^\r\n]*\r?\n)*@@initial_variables\b[^\r\n]*\r?\n/i.test(content)) {
+			body = content.replace(/^(?:@@[a-zA-Z_]+[^\r\n]*\r?\n)+/, "");
+		}
 		if (body == null) continue;
 		const tree = parseInitVarYaml(body);
 		if (tree && Object.keys(tree).length > 0) return tree;
@@ -90,8 +95,14 @@ export function findMvuRules(
 export function isMvuRulesEntry(e: { comment?: string; content?: string }): boolean {
 	const content = (e.content ?? "").trim();
 	if (!content) return false;
-	// initvar 数据条目排除（它没有 check:，但双保险）
-	if (/\[initvar\]/i.test(content) || /\[\s*initvar\s*\]/i.test(e.comment ?? "")) return false;
+	// initvar / InitialVariables 数据条目排除（它没有 check:，但双保险）
+	if (
+		/\[initvar\]/i.test(content) ||
+		/\[\s*(?:initvar|InitialVariables)\s*\]/i.test(e.comment ?? "") ||
+		/^@@initial_variables\b/m.test(content)
+	) {
+		return false;
+	}
 	// MVU 规则声明约定：check: 列表
 	return /(^|\n)\s*check\s*:/i.test(content);
 }
@@ -171,14 +182,38 @@ export function parseInitVarYaml(src: string): MvuTree {
 		}
 	}
 	const root: MvuTree = {};
-	const stack: Array<{ indent: number; obj: MvuTree }> = [{ indent: -1, obj: root }];
+	const stack: Array<{ indent: number; obj: MvuTree; parentObj?: MvuTree; keyInParent?: string }> = [{ indent: -1, obj: root }];
 	for (const rawLine of src.split(/\r?\n/)) {
 		const line = rawLine.replace(/\t/g, " ");
 		const trimmed = line.trim();
 		if (!trimmed || trimmed.startsWith("#")) continue;
-		const m = /^([^:]+):\s*(.*)$/.exec(trimmed);
-		if (!m) continue; // 不是 key: value 行（如多行数组项）——跳过，不毁树
 		const indent = line.length - line.trimStart().length;
+		if (trimmed.startsWith("- ")) {
+			const itemRaw = trimmed.slice(2).trim();
+			while (stack.length > 1 && indent < stack[stack.length - 1]!.indent) stack.pop();
+			const top = stack[stack.length - 1]!;
+			if (top.parentObj && top.keyInParent) {
+				const curContainer = top.parentObj[top.keyInParent];
+				let arr: unknown[];
+				if (Array.isArray(curContainer)) {
+					arr = curContainer;
+				} else {
+					arr = [];
+					top.parentObj[top.keyInParent] = arr;
+				}
+				const kv = /^([^:]+):\s*(.*)$/.exec(itemRaw);
+				if (kv) {
+					const itemObj: MvuTree = { [kv[1]!.trim()]: kv[2]!.trim() ? parseScalar(kv[2]!.trim()) : {} };
+					arr.push(itemObj);
+					stack.push({ indent: indent + 1, obj: itemObj });
+				} else if (itemRaw) {
+					arr.push(parseScalar(itemRaw));
+				}
+			}
+			continue;
+		}
+		const m = /^([^:]+):\s*(.*)$/.exec(trimmed);
+		if (!m) continue;
 		const key = m[1]!.trim();
 		const rawVal = m[2]!.trim();
 		// 回退到正确的父层：弹出所有 indent >= 本行的祖先
@@ -188,7 +223,7 @@ export function parseInitVarYaml(src: string): MvuTree {
 			// 无行内值 ⇒ 开一个子映射，后续更深缩进的行挂进来
 			const child: MvuTree = {};
 			parent[key] = child;
-			stack.push({ indent, obj: child });
+			stack.push({ indent, obj: child, parentObj: parent, keyInParent: key });
 		} else {
 			parent[key] = parseScalar(rawVal);
 		}
@@ -196,10 +231,17 @@ export function parseInitVarYaml(src: string): MvuTree {
 	return root;
 }
 
-/** 标量求值：`{}`/`[]`/布尔/数字/去引号字符串 */
+/** 标量求值：`{}`/`[]`/行内数组对象/布尔/数字/去引号字符串 */
 function parseScalar(raw: string): unknown {
 	if (raw === "{}") return {};
 	if (raw === "[]") return [];
+	if ((raw.startsWith("[") && raw.endsWith("]")) || (raw.startsWith("{") && raw.endsWith("}"))) {
+		try {
+			return JSON.parse(raw);
+		} catch {
+			/* fallthrough */
+		}
+	}
 	if (raw === "true") return true;
 	if (raw === "false") return false;
 	if (raw === "null" || raw === "~") return null;

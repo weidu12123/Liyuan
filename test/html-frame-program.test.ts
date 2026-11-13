@@ -64,6 +64,31 @@ test("looksLikeProgramApp: 视口接管 CSS / fixed+vh 才算；体积不作数"
 		"x".repeat(10_000) +
 		"</script></body></html>";
 	assert.equal(looksLikeProgramApp(statusLike, true), false);
+
+	// 回归：状态栏内部带隐藏弹窗（.dy-overlay { position: fixed; inset: 0; height: var(--h, 100dvh); }）
+	// 绝不能被误判为全屏接管程序卡而锁死 78vh
+	const statusWithFixedVhModal =
+		"<!doctype html><html><head><style>" +
+		"body { margin: 0; padding: 10px 0; background-color: transparent; }" +
+		".dy-missing-portrait-overlay { position: fixed; inset: 0; width: var(--w, 100vw); height: var(--h, 100dvh); }" +
+		"</style></head><body><div class='card'>状态栏</div><script>1</script></body></html>";
+	assert.equal(looksLikeProgramApp(statusWithFixedVhModal, true), false, "含 fixed+100dvh 弹窗的状态栏不得误判为 programApp");
+});
+
+test("HEIGHT_REPORTER_SNIPPET: 跳过 position:fixed 与 display:none 子节点，并注入 --TH-viewport-height（防全屏烟花 canvas 叠加 paddingBottom 无限拉长）", () => {
+	const fireworkGreeting =
+		"<html><head><style>" +
+		"body { padding: 20px; min-height: 100vh; overflow: hidden; }" +
+		"#fireworks-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }" +
+		"</style></head><body>" +
+		"<canvas id='fireworks-canvas'></canvas>" +
+		"<div class='info-card'>欢迎</div>" +
+		"<script>1</script></body></html>";
+	assert.equal(looksLikeProgramApp(fireworkGreeting, true), false);
+	const doc = buildSrcDoc(fireworkGreeting, true, true);
+	assert.ok(doc.includes("--TH-viewport-height"), "应注入酒馆助手 --TH-viewport-height 视口高度变量");
+	assert.ok(doc.includes('cs.position==="fixed"'), "高度上报器应排除 position:fixed 子元素");
+	assert.ok(doc.includes('cs.display==="none"'), "高度上报器应排除 display:none 子元素");
 });
 
 test("buildSrcDoc 接管型:不注入 height:auto 覆盖、不注入高度上报（接管型帧抖动/塌陷根修）", () => {

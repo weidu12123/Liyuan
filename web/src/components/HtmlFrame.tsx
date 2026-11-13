@@ -25,6 +25,7 @@ export function HtmlFrame({
 	seamless = false,
 	minHeight = 120,
 	maxHeight = 560,
+	messageId,
 }: {
 	html: string;
 	title?: string;
@@ -33,8 +34,11 @@ export function HtmlFrame({
 	seamless?: boolean;
 	minHeight?: number;
 	maxHeight?: number;
+	/** 所在消息的 0-based 楼层号（供消息帧 getCurrentMessageId() / getMessageId() 识别自身楼层） */
+	messageId?: number;
 }) {
-	const frameId = useId();
+	const rawId = useId().replace(/[^a-zA-Z0-9_-]/g, "_");
+	const frameId = typeof messageId === "number" && messageId >= 0 ? `TH-message--${messageId}--0_${rawId}` : rawId;
 	const ref = useRef<HTMLIFrameElement>(null);
 	const wrapRef = useRef<HTMLElement>(null);
 	/**
@@ -124,14 +128,30 @@ export function HtmlFrame({
 			try {
 				const doc = el.contentDocument;
 				const body = doc?.body;
-				// 与脚本帧同一策略：量内容子节点，避免 100vh/scrollHeight 反馈环
+				// 与脚本帧同一策略：量流内子节点，跳过 position:fixed 与 display:none
 				let h = 0;
 				if (body) {
 					for (const node of Array.from(body.children)) {
 						const tag = node.tagName;
-						if (tag === "SCRIPT" || tag === "STYLE" || tag === "LINK") continue;
+						if (tag === "SCRIPT" || tag === "STYLE" || tag === "LINK" || tag === "META" || tag === "TITLE") continue;
 						const eln = node as HTMLElement;
+						if (typeof window.getComputedStyle === "function") {
+							try {
+								const cs = (doc?.defaultView ?? window).getComputedStyle(eln);
+								if (cs.display === "none" || cs.position === "fixed") continue;
+							} catch {
+								/* ignore */
+							}
+						}
 						h = Math.max(h, eln.offsetTop + eln.offsetHeight, Math.ceil(eln.getBoundingClientRect().bottom));
+					}
+					if (h > 0 && typeof window.getComputedStyle === "function") {
+						try {
+							const pb = Math.ceil(Number.parseFloat((doc?.defaultView ?? window).getComputedStyle(body).paddingBottom) || 0);
+							if (pb > 0) h += pb;
+						} catch {
+							/* ignore */
+						}
 					}
 					if (h < 1) h = body.offsetHeight || 0;
 				}
@@ -176,8 +196,19 @@ export function HtmlFrame({
 				return next;
 			});
 		};
+		const onResize = () => {
+			try {
+				ref.current?.contentWindow?.postMessage({ type: "TH_UPDATE_VIEWPORT_HEIGHT" }, "*");
+			} catch {
+				/* ignore */
+			}
+		};
 		window.addEventListener("message", onMsg);
-		return () => window.removeEventListener("message", onMsg);
+		window.addEventListener("resize", onResize);
+		return () => {
+			window.removeEventListener("message", onMsg);
+			window.removeEventListener("resize", onResize);
+		};
 	}, [scripts, seamless, frameId, minHeight, programApp]);
 
 	return (
@@ -206,9 +237,11 @@ export function HtmlFrame({
 			{inView ? (
 				<iframe
 					ref={ref}
+					id={frameId}
 					name={frameId}
 					className="msg-html-frame"
 					data-liyuan-card-runtime="message"
+					data-liyuan-message-id={typeof messageId === "number" ? String(messageId) : undefined}
 					title={title || (seamless ? t("界面") : "HTML")}
 					sandbox={sandbox}
 					srcDoc={srcDoc}

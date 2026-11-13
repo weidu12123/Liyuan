@@ -180,7 +180,7 @@ test("实卡: first_mes/备选开场白 一律 html 皮肤、零 status 段", ()
 			...((Array.isArray(c.data.alternate_greetings) ? c.data.alternate_greetings : []) as unknown[]).map(String),
 		];
 		if (!greetings.some((t) => t.includes("StatusBlock"))) return false;
-		return displayRules(extractRegexScripts(c.raw)).length >= 2;
+		return displayRules(extractRegexScripts(c.raw)).filter((r) => r.source.includes("StatusBlock")).length >= 2;
 	});
 	// 发行包与 clean clone 不带样本卡;有卡则必须全绿
 	if (!card) return;

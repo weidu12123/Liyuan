@@ -36,6 +36,8 @@ export interface DisplayRule {
 	minDepth?: number;
 	/** ST maxDepth:只对第 N 条往后(更新)的消息生效;无限定则不带此字段 */
 	maxDepth?: number;
+	/** ST substituteRegex: 0=不替换, 1=RAW(原样代入宏), 2=ESCAPED(转义正则元字符代入宏) */
+	substituteRegex?: number;
 }
 
 /** 一档皮肤快照:wire hello / REST 共用,前端据此注入显示管线 */
@@ -122,10 +124,7 @@ function depthField(v: unknown, floor: number): number | undefined {
  */
 function parseRuleShape(r: Record<string, unknown>, side: string): DisplayRule | null {
 	const label = String(r.scriptName ?? "?");
-	if (typeof r.substituteRegex === "number" && r.substituteRegex !== 0) {
-		console.warn(`[cardfront] 规则「${label}」用了 substituteRegex,v1 不支持,跳过${side}`);
-		return null;
-	}
+	const subMode = typeof r.substituteRegex === "number" && r.substituteRegex > 0 ? r.substituteRegex : undefined;
 	const find = typeof r.findRegex === "string" ? r.findRegex : "";
 	if (!find.trim()) return null;
 	const parsed = parseFindRegex(find);
@@ -144,6 +143,7 @@ function parseRuleShape(r: Record<string, unknown>, side: string): DisplayRule |
 		...(trim.length > 0 ? { trim } : {}),
 		...(minDepth !== undefined ? { minDepth } : {}),
 		...(maxDepth !== undefined ? { maxDepth } : {}),
+		...(subMode !== undefined ? { substituteRegex: subMode } : {}),
 	};
 }
 

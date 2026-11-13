@@ -63,9 +63,15 @@ export function looksLikeProgramApp(html: string, scripts: boolean): boolean {
 	if (!scripts || !html) return false;
 	if (!/<script[\s>]/i.test(html)) return false;
 	if (hasRootViewportCss(html)) return true;
-	// fixed 铺满判定：要求 fixed 与 100vh 在同一样式块内（真全屏 UI），
-	// 而非文档任意两处各出现一次（某卡欢迎卡有 fixed 装饰 + 某处 100vh，但整体是内容流）
-	if (/\bposition\s*:\s*fixed[^}]*100[dsl]?vh|\b100[dsl]?vh[^}]*position\s*:\s*fixed/i.test(html)) return true;
+	// 根级内联样式（<html/body style="position:fixed...100vh">）才算全屏接管；
+	// 普通子元素/隐藏弹窗（如状态栏内的 .modal-overlay { position:fixed; height:100dvh }）绝不算接管
+	if (
+		/<(?:html|body)\b[^>]*\bstyle\s*=\s*(["'])[\s\S]*?(?:\bposition\s*:\s*fixed[\s\S]*?100[dsl]?vh|\b100[dsl]?vh[\s\S]*?position\s*:\s*fixed)[\s\S]*?\1/i.test(
+			html,
+		)
+	) {
+		return true;
+	}
 	return false;
 }
 
@@ -142,27 +148,41 @@ const TAKEOVER_DOC_CSS =
 	`html,body{margin:0;padding:0;background:transparent}` + `img,video{max-width:100%;height:auto}`;
 
 /**
- * 高度上报：量「内容盒子」而不是 documentElement.scrollHeight。
- * 后者在 min-height:100vh / height:100% 时会跟着 iframe 外高一起涨（每轮 +4px 白边）。
- * 只报 body 直接子元素的底部；忽略 script/style；稳定后不再 setInterval 狂刷。
+ * 高度上报（对齐酒馆助手 4.12.1 adjust_viewport.js + adjust_iframe_height.js）：
+ * 1. 注入 --TH-viewport-height 绑定父窗口真实视口高度（随窗口 resize 更新），使卡内 vh 不随 iframe 自身高度自激；
+ * 2. 测量流内（in-flow）子元素底部 + body.paddingBottom，严格跳过 position:fixed（如全屏烟花 canvas、隐藏遮罩层）
+ *    与 display:none 节点，且不对 position:fixed 节点挂 ResizeObserver，从根源斩断「fixed 100% + body padding」
+ *    导致的每轮 +paddingBottom 无限拉长死循环。
  */
 export const HEIGHT_REPORTER_SNIPPET =
 	`<script>(function(){` +
+	`function syncVp(){try{var vh=(window.parent&&window.parent!==window&&window.parent.innerHeight)||window.innerHeight||800;document.documentElement.style.setProperty("--TH-viewport-height",vh+"px");}catch(e){}}` +
+	`syncVp();` +
+	`window.addEventListener("message",function(e){if(e&&e.data&&e.data.type==="TH_UPDATE_VIEWPORT_HEIGHT")syncVp();});` +
 	`var last=0,stable=0;` +
+	`function isFlowNode(el){` +
+	`if(!el||el.nodeType!==1)return false;` +
+	`var tag=el.tagName;` +
+	`if(tag==="SCRIPT"||tag==="STYLE"||tag==="LINK"||tag==="META"||tag==="TITLE"||tag==="NOSCRIPT"||tag==="TEMPLATE")return false;` +
+	`if(typeof getComputedStyle==="function"){` +
+	`try{var cs=getComputedStyle(el);if(cs.display==="none"||cs.position==="fixed")return false;}catch(e){}` +
+	`}` +
+	`return true;` +
+	`}` +
 	`function contentH(){` +
 	`var b=document.body;if(!b)return 0;` +
 	`var h=0,kids=b.children;` +
 	`for(var i=0;i<kids.length;i++){` +
-	`var el=kids[i],tag=el.tagName;` +
-	`if(tag==="SCRIPT"||tag==="STYLE"||tag==="LINK"||tag==="META")continue;` +
+	`var el=kids[i];` +
+	`if(!isFlowNode(el))continue;` +
 	`var r=el.getBoundingClientRect();` +
 	`var bottom=Math.ceil(r.bottom+(window.scrollY||window.pageYOffset||0));` +
 	`var oh=el.offsetTop+el.offsetHeight;` +
 	`h=Math.max(h,bottom,oh);` +
 	`}` +
-	`/* 计入 body 下内边距（如为底部 fixed 状态栏预留的 padding-bottom），避免出现内层滚动条 */` +
+	`/* 计入 body 下内边距（仅当存在流内内容节点时），避免底部内边距被裁切 */` +
 	`if(h>0&&typeof getComputedStyle==="function"){try{var pb=Math.ceil(parseFloat(getComputedStyle(b).paddingBottom)||0);if(pb>0)h+=pb;}catch(e){}}` +
-	`/* 无可见子节点时退回 offsetHeight，仍避免 documentElement 的 100vh */` +
+	`/* 无可见流内子节点时退回 offsetHeight，仍避免 documentElement 的 100vh */` +
 	`if(h<1)h=b.offsetHeight||0;` +
 	`return h;` +
 	`}` +
@@ -177,7 +197,7 @@ export const HEIGHT_REPORTER_SNIPPET =
 	`try{new ResizeObserver(post).observe(document.body);` +
 	`var kids=document.body?document.body.children:[];` +
 	`for(var i=0;i<kids.length;i++){` +
-	`var t=kids[i].tagName;if(t==="SCRIPT"||t==="STYLE")continue;` +
+	`if(!isFlowNode(kids[i]))continue;` +
 	`try{new ResizeObserver(post).observe(kids[i]);}catch(e){}}` +
 	`}catch(e){}` +
 	`}` +
@@ -359,6 +379,40 @@ export function escapeScriptEndTags(html: string): string {
 export const SCRIPT_FRAME_CSP =
 	`default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: http: data: blob:; style-src 'unsafe-inline' https: http: data:; img-src data: blob: https: http:; font-src data: https: http:; media-src data: blob: https: http:; connect-src https: http: ws: wss: data: blob:; worker-src blob: data:; frame-src 'none'`;
 
+export const MVU_BUNDLE_DATA_URI =
+	"data:text/javascript;charset=utf-8," +
+	encodeURIComponent(
+		`const g = typeof window !== "undefined" ? window : globalThis;` +
+			`if (g.Mvu && typeof g.initializeGlobal === "function") g.initializeGlobal("Mvu", g.Mvu);` +
+			`if (typeof g.eventEmit === "function") {` +
+			`  const d = g.Mvu && typeof g.Mvu.getMvuData === "function" ? g.Mvu.getMvuData() : { stat_data: {} };` +
+			`  g.eventEmit("mag_variable_initialized", d, 0);` +
+			`}` +
+			`export const Mvu = g.Mvu;` +
+			`export default g.Mvu;`,
+	);
+
+export const MVU_ZOD_DATA_URI =
+	"data:text/javascript;charset=utf-8," +
+	encodeURIComponent(
+		`const g = typeof window !== "undefined" ? window : globalThis;` +
+			`export function registerMvuSchema(...args) {` +
+			`  return typeof g.registerMvuSchema === "function" ? g.registerMvuSchema(...args) : undefined;` +
+			`}` +
+			`export default registerMvuSchema;`,
+	);
+
+export const IMPORT_MAP_SNIPPET = `<script type="importmap">${JSON.stringify({
+	imports: {
+		"https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js": MVU_BUNDLE_DATA_URI,
+		"https://cdn.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js": MVU_BUNDLE_DATA_URI,
+		"https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js": MVU_BUNDLE_DATA_URI,
+		"https://cdn.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate@beta/artifact/bundle.js": MVU_BUNDLE_DATA_URI,
+		"https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js": MVU_ZOD_DATA_URI,
+		"https://cdn.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js": MVU_ZOD_DATA_URI,
+	},
+})}</script>`;
+
 export function buildSrcDoc(html: string, scripts: boolean, seamless: boolean, viewportPx?: number): string {
 	// 先修用户 HTML 内脚本截断，再注入带真实 </script> 的垫片
 	const raw = escapeScriptEndTags(html.trim());
@@ -374,7 +428,7 @@ export function buildSrcDoc(html: string, scripts: boolean, seamless: boolean, v
 		: `default-src 'none'; style-src 'unsafe-inline' https: http: data:; img-src data: blob: https: http:; font-src data: https: http:; media-src data: blob: https: http:`;
 	const seamlessCss = isFull ? (takeover ? TAKEOVER_DOC_CSS : SEAMLESS_DOC_CSS) : SEAMLESS_FRAGMENT_CSS;
 	// 脚本帧：垫片桥必须先于卡脚本，保证 eventOn / TavernHelper / jQuery / 变量系统在初始化时已存在
-	const bridge = scripts ? IFRAME_TAVERN_BRIDGE_SNIPPET + IFRAME_TAVERN_GLOBALS_SNIPPET : "";
+	const bridge = scripts ? IMPORT_MAP_SNIPPET + IFRAME_TAVERN_BRIDGE_SNIPPET + IFRAME_TAVERN_GLOBALS_SNIPPET : "";
 	const head =
 		`<meta charset="utf-8">` +
 		`<meta http-equiv="Content-Security-Policy" content="${csp}">` +

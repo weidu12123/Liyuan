@@ -40,8 +40,8 @@ import { WelcomePanel } from "./components/HomePage.tsx";
 import { StatusPanel } from "./components/StatusPanel.tsx";
 import { UpdateModal, UpdateToast } from "./components/UpdateFlow.tsx";
 import { bumpWatchPanels, PanelRefreshContext } from "./components/kit.tsx";
-import { registerLiyuanToast, registerTavernChatBridge } from "./tavernShim.ts";
-import { syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
+import { callLiyuanScriptApi, emitCardRuntimeEvent, registerLiyuanToast, registerTavernChatBridge, tavern_events } from "./tavernShim.ts";
+import { syncCardRuntimeContext, syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
 import { setAtHome, shouldShowHomeOnBoot, touchVisit } from "./visit.ts";
 import { getTheme, setTheme } from "./theme.ts";
 import { getWallpaperConfig, type WallpaperConfig } from "./themes.ts";
@@ -623,10 +623,102 @@ export default function App() {
 	 * 只投递给正式消息帧和脚本宿主，创作预览使用独立测试数据。
 	 */
 	useEffect(() => {
-		const mvu = worldState?.mvu;
-		if (!mvu || typeof mvu !== "object") return;
+		const mvu = worldState?.mvu && typeof worldState.mvu === "object" ? worldState.mvu : {};
 		return syncCardRuntimeVariables(mvu);
 	}, [worldState?.mvu]);
+
+	const [loadedScriptVars, setLoadedScriptVars] = useState<{
+		chat?: Record<string, unknown>;
+		messages?: Record<string, Record<string, unknown>>;
+	}>({});
+	const [loadedWorldbooks, setLoadedWorldbooks] = useState<string[]>([]);
+	const [cardGreetings, setCardGreetings] = useState<string[]>([]);
+	const [cardGreetingIndex, setCardGreetingIndex] = useState<number>(0);
+	const [scriptButtons, setScriptButtons] = useState<Array<{ scriptId: string; name: string; eventId: string }>>([]);
+
+	useEffect(() => {
+		const onMsg = (ev: MessageEvent) => {
+			const d = ev.data as { liyuanScriptButtons?: Array<{ scriptId?: unknown; name?: unknown; eventId?: unknown }> } | null;
+			if (!d || !Array.isArray(d.liyuanScriptButtons)) return;
+			const next = d.liyuanScriptButtons
+				.filter((b) => b && typeof b.name === "string" && b.name.trim() && typeof b.eventId === "string")
+				.map((b) => ({
+					scriptId: String(b.scriptId ?? "card"),
+					name: String(b.name).trim(),
+					eventId: String(b.eventId),
+				}));
+			setScriptButtons(next);
+		};
+		window.addEventListener("message", onMsg);
+		return () => window.removeEventListener("message", onMsg);
+	}, []);
+
+	useEffect(() => {
+		const sid = sessionIdRef.current;
+		if (!sid) return;
+		let cancelled = false;
+		void Promise.all([
+			callLiyuanScriptApi<{ data?: Record<string, unknown> }>("data.read", { scope: "chat" }),
+			callLiyuanScriptApi<{ data?: Record<string, Record<string, unknown>> }>("data.read", { scope: "message" }),
+			callLiyuanScriptApi<{ mounted?: Array<{ name?: string; path?: string }>; available?: Array<{ name?: string; path?: string }> }>("lorebooks.list", {}),
+		]).then(([chatEnv, msgEnv, lbEnv]) => {
+			if (cancelled) return;
+			setLoadedScriptVars({
+				chat: chatEnv.ok && chatEnv.result?.data && typeof chatEnv.result.data === "object" ? chatEnv.result.data : {},
+				messages: msgEnv.ok && msgEnv.result?.data && typeof msgEnv.result.data === "object" ? msgEnv.result.data : {},
+			});
+			const names: string[] = [];
+			if (charName.trim()) {
+				names.push(`${charName.trim()}·世界书`, charName.trim());
+			}
+			if (lbEnv.ok && lbEnv.result) {
+				const list = [...(lbEnv.result.mounted ?? []), ...(lbEnv.result.available ?? [])];
+				for (const item of list) {
+					const n = String(item.name || item.path || "").replace(/\.json$/i, "").trim();
+					if (n && !names.includes(n)) names.push(n);
+				}
+			}
+			setLoadedWorldbooks(names);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [sessions, charName]);
+
+	useEffect(() => {
+		const currentSession = sessions?.find((s) => s.current);
+		const runtimeMsgs = messages
+			.filter((m) => m.channel === "user" || m.channel === "narrative" || m.channel === "greeting")
+			.map((m, idx) => {
+				const isGreeting = idx === 0 && m.channel === "greeting";
+				const swipes = isGreeting && cardGreetings.length > 0 ? cardGreetings : [m.text];
+				const swipeId = isGreeting ? (m.greetingPick?.index ?? cardGreetingIndex ?? 0) : (m.swipe?.index ?? 0);
+				return {
+					message_id: idx,
+					index: idx,
+					role: (m.channel === "user" ? "user" : "assistant") as "user" | "assistant",
+					channel: m.channel,
+					name: m.name ?? (m.channel === "user" ? userName : charName),
+					message: m.text,
+					mes: m.text,
+					text: m.text,
+					swipe_id: swipeId,
+					swipes,
+				};
+			});
+		return syncCardRuntimeContext({
+			card: currentSession?.card,
+			charName,
+			userName,
+			chatId: currentSession?.chatId ?? null,
+			sessionId: sessionIdRef.current,
+			mode: conversationMode === "agent" ? "agent" : "roleplay",
+			streaming: busy,
+			messages: runtimeMsgs,
+			worldbooks: loadedWorldbooks.length > 0 ? loadedWorldbooks : charName.trim() ? [`${charName.trim()}·世界书`, charName.trim(), "default"] : ["default"],
+			scriptVars: loadedScriptVars,
+		});
+	}, [messages, charName, userName, conversationMode, busy, sessions, loadedScriptVars, loadedWorldbooks, cardGreetings, cardGreetingIndex]);
 
 	useEffect(() => {
 		welcomeRef.current = welcome;
@@ -791,6 +883,24 @@ export default function App() {
 	 * 不是「这条消息怎么画」，故不受 hasSkin（有没有显示规则）影响，只受皮肤总开关约束。
 	 */
 	const [authorScripts, setAuthorScripts] = useState<AuthorScript[]>([]);
+	useEffect(() => {
+		if (!authorScripts.length) {
+			setScriptButtons([]);
+			return;
+		}
+		const seeded: Array<{ scriptId: string; name: string; eventId: string }> = [];
+		const seen = new Set<string>();
+		for (const s of authorScripts) {
+			const btnCfg = (s as unknown as { button?: { enabled?: boolean; buttons?: Array<{ name?: string; visible?: boolean }> } }).button;
+			if (!btnCfg || btnCfg.enabled === false || !Array.isArray(btnCfg.buttons)) continue;
+			for (const b of btnCfg.buttons) {
+				if (!b?.name || b.visible === false || seen.has(b.name)) continue;
+				seen.add(b.name);
+				seeded.push({ scriptId: s.id, name: b.name, eventId: `th_btn_${s.id}_${b.name}` });
+			}
+		}
+		if (seeded.length > 0) setScriptButtons(seeded);
+	}, [authorScripts]);
 	/** 生成中的这条就是最新消息（depth 0）：作者「N 楼外删掉」类规则不该落在它头上 */
 	const liveSkin = useMemo(() => skinAtDepth(cardSkin, 0), [cardSkin]);
 	/** 当前这批作者脚本的清单指纹（见 syncAuthorScripts）；声明在两个使用者之前 */
@@ -857,6 +967,8 @@ export default function App() {
 		void (async () => {
 			try {
 				const card = await apiGet<CardResponse>("/api/card");
+				setCardGreetings(Array.isArray(card.greetings) ? card.greetings.map((g) => g.text) : []);
+				setCardGreetingIndex(typeof card.greetingIndex === "number" ? card.greetingIndex : 0);
 				if (card.path && /\.png$/i.test(card.path)) {
 					// 不拼缓存参数：新鲜度由服务端 ETag 保证（换过卡图 mtime 就变）。
 					// 拼 `&t=Date.now()` 会让这张几 MB 的卡图永不命中缓存，且与 CardPanel 的
@@ -953,7 +1065,9 @@ export default function App() {
 						setWarnings([]);
 						setActiveChoice(null);
 						turnActsRef.current = [];
+						emitCardRuntimeEvent(tavern_events.CHAT_CHANGED, frame.sessionId);
 					}
+					emitCardRuntimeEvent(tavern_events.APP_READY);
 					// 会话树常驻左栏下半区：收到 hello 后同步一次列表与 current 标记
 					sendRef.current({ type: "sessions" });
 						document.title = t("梨园");
@@ -1001,7 +1115,18 @@ export default function App() {
 							...(acts.length ? { activities: acts } : {}),
 							...(segs?.length ? { segments: segs } : {}),
 						};
-						setMessages((ms) => upsertTurnReply(ms, incoming));
+						setMessages((ms) => {
+							const next = upsertTurnReply(ms, incoming);
+							if (frame.message.channel === "narrative") {
+								const storyIdx = Math.max(
+									0,
+									next.filter((m) => m.channel === "user" || m.channel === "narrative" || m.channel === "greeting").length - 1,
+								);
+								emitCardRuntimeEvent(tavern_events.MESSAGE_RECEIVED, storyIdx, "normal");
+								emitCardRuntimeEvent(tavern_events.CHARACTER_MESSAGE_RENDERED, storyIdx, "normal");
+							}
+							return next;
+						});
 					} else if (frame.message.channel === "greeting") {
 						// 未开聊时切换开场白：替换已有开场白气泡，禁止往下叠楼
 						setMessages((ms) => {
@@ -1011,7 +1136,18 @@ export default function App() {
 							return [...rest, frame.message];
 						});
 					} else {
-						setMessages((ms) => [...ms, frame.message]);
+						setMessages((ms) => {
+							const next = [...ms, frame.message];
+							if (frame.message.channel === "user" && !frame.message.backstage) {
+								const storyIdx = Math.max(
+									0,
+									next.filter((m) => m.channel === "user" || m.channel === "narrative" || m.channel === "greeting").length - 1,
+								);
+								emitCardRuntimeEvent(tavern_events.MESSAGE_SENT, storyIdx);
+								emitCardRuntimeEvent(tavern_events.USER_MESSAGE_RENDERED, storyIdx);
+							}
+							return next;
+						});
 					}
 					break;
 				case "delta":
@@ -1020,6 +1156,7 @@ export default function App() {
 						setThinkingLive(false);
 						streamRef.current += frame.delta;
 						setStreamText(streamRef.current);
+						emitCardRuntimeEvent(tavern_events.STREAM_TOKEN_RECEIVED, frame.delta);
 					} else {
 						setThinkingLive(true);
 						streamThinkingRef.current += frame.delta;
@@ -1063,6 +1200,7 @@ export default function App() {
 						setStreamMode(streamModeRef.current);
 						resetActs();
 						resetSegs();
+						emitCardRuntimeEvent(tavern_events.GENERATION_STARTED, "normal", {}, false);
 					} else {
 						// 服务端 abort 会立刻广播 end，但 provider 流可能仍在吐 delta。
 						// 若用户已按停止：保持 abortingRef，继续丢弃迟到 delta，直到下一次 start。
@@ -1071,6 +1209,11 @@ export default function App() {
 						setBusy(false);
 						setThinkingLive(false);
 						setToolNote(null);
+						if (wasAborting) {
+							emitCardRuntimeEvent(tavern_events.GENERATION_STOPPED);
+						} else {
+							emitCardRuntimeEvent(tavern_events.GENERATION_ENDED);
+						}
 						// 本轮 agent 可能写了技能/知识库/世界书等资产：通知 watchAgent 面板重拉
 						// 并清 GET 缓存——服务端的写客户端看不见（invalidateAfterWrite 只认前端自己发的写），
 						// 不清则「打开面板吃缓存」会让 agent 刚改的东西在 TTL 内不露面。
@@ -1559,6 +1702,23 @@ export default function App() {
 				setInput("");
 				setPending([]);
 				return;
+			}
+		}
+		if (typed.startsWith("/") && pending.length === 0) {
+			const mSlash = /^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/.exec(typed);
+			if (mSlash) {
+				const st = (window as unknown as { SillyTavern?: { SlashCommandParser?: { commands?: Record<string, { callback?: (named: Record<string, unknown>, unnamed: string) => unknown }> } } }).SillyTavern;
+				const regCmd = st?.SlashCommandParser?.commands?.[mSlash[1]];
+				if (regCmd && typeof regCmd.callback === "function") {
+					try {
+						void Promise.resolve(regCmd.callback({}, (mSlash[2] ?? "").trim()));
+					} catch (err) {
+						console.error("[liyuan slash command]", mSlash[1], err);
+					}
+					setInput("");
+					if (inputRef.current) inputRef.current.style.height = "auto";
+					return;
+				}
 			}
 		}
 		let sent: boolean;
@@ -2968,7 +3128,7 @@ export default function App() {
 							</div>
 						)}
 					<div className="list" ref={listRef} onScroll={onScroll} onPointerDown={() => composerTools && setComposerTools(false)}>
-						<div className="flow">
+						<div id="chat" className="flow">
 							{/* 欢迎区嵌在聊天流（学 ST）：顶栏/侧栏/输入框仍可用 */}
 							{welcome ? (
 								<WelcomePanel
@@ -3496,7 +3656,7 @@ export default function App() {
 							if (e.dataTransfer.files.length > 0) void doUpload(e.dataTransfer.files);
 						}}
 					>
-						{/* 生效世界状态：输入框上方，与输入同宽一排 */}
+						{/* 生效世界状态与角色卡脚本快捷按钮：输入框上方，与输入同宽一排 */}
 						{!welcome && (
 							<div className="composer-shell status-above">
 							{conversationMode === "roleplay" && (
@@ -3506,6 +3666,21 @@ export default function App() {
 									active={rightPanel === "status"}
 									onOpenPanel={() => toggleRight("status")}
 								/>
+							)}
+							{conversationMode === "roleplay" && scriptButtons.length > 0 && (
+								<div className="script-btn-strip" style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
+									{scriptButtons.map((btn) => (
+										<button
+											key={btn.eventId}
+											type="button"
+											className="drawer-btn"
+											style={{ fontSize: "12px", padding: "2px 8px" }}
+											onClick={() => emitCardRuntimeEvent(btn.eventId)}
+										>
+											{btn.name}
+										</button>
+									))}
+								</div>
 							)}
 						</div>
 						)}

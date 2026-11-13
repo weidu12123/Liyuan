@@ -50,7 +50,7 @@ export interface LoreDeps {
 	 * 本面的检索语料 → 命中。limit 由工具传入（各面默认值不同，见 schema）。
 	 * 语料范围是各面注入时的决定（见文件头），工具本身不关心条目从哪来。
 	 */
-	searchLore: (query: string, limit: number) => LoreHitLike[];
+	searchLore: (query: string, limit: number) => LoreHitLike[] | Promise<LoreHitLike[]>;
 	/** 语料规模（助手诊断话术要报「共 N 条」）；未注入则不报 */
 	loreSize?: () => number;
 
@@ -150,7 +150,7 @@ export const lorebookSearch: ToolSpec<LoreDeps> = {
 		const limit = stage ? STAGE_LIMIT : intArg(args, "limit", ASSISTANT_LIMIT, 1, 20);
 		let hits: LoreHitLike[] = [];
 		try {
-			hits = deps.searchLore(query, limit);
+			hits = await deps.searchLore(query, limit);
 		} catch (err) {
 			// 不抛：告诉模型怎么往下走（台上继续演，助手报障）
 			return {

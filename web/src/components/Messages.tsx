@@ -239,7 +239,7 @@ export function Paragraphs({ text }: { text: string }) {
  * 作者正则皮肤 → HTML 块（seamless 帧）→ 其余 RP 排版。
  * 状态栏是作者正则产出的 HTML，走 html 分支；梨园不再按标签名抠「统一状态卡」。
  */
-export function RichContent({ text, skin }: { text: string; skin?: SkinProp | null }) {
+export function RichContent({ text, skin, messageId }: { text: string; skin?: SkinProp | null; messageId?: number }) {
 	// 缓存切分（8/19）：每次重渲染都重跑一遍作者正则＋HTML 切分是白花钱——
 	// 流式期间父组件每个增量都会重渲染整列消息，未缓存时全列消息逐条重跑
 	const parts = useMemo(() => splitRichContentParts(text, skin), [text, skin]);
@@ -251,7 +251,7 @@ export function RichContent({ text, skin }: { text: string; skin?: SkinProp | nu
 		<>
 			{parts.map((p, i) => {
 				// 皮肤/正文内嵌 HTML：无痕 seamless；agent show_html 通道不经此路径
-				if (p.kind === "html") return <HtmlFrame key={i} html={p.html} scripts={p.scripts} seamless />;
+				if (p.kind === "html") return <HtmlFrame key={i} html={p.html} scripts={p.scripts} seamless messageId={messageId} />;
 				if (p.kind === "text" && p.text.trim()) return <Paragraphs key={i} text={p.text} />;
 				return null;
 			})}
@@ -323,12 +323,14 @@ export function TurnTimeline({
 	skin,
 	live,
 	plain,
+	messageId,
 }: {
 	segments: TurnSegment[];
 	skin?: SkinProp | null;
 	live?: boolean;
 	/** Authoring code remains text; it never mounts a live card runtime iframe. */
 	plain?: boolean;
+	messageId?: number;
 }) {
 	const countOf = (segs: TurnSegment[]) => {
 		const thinks = segs.filter((s) => s.kind === "thinking").length;
@@ -346,7 +348,7 @@ export function TurnTimeline({
 		return (
 			<>
 				{texts.map((seg, i) => (
-					plain ? <Paragraphs key={i} text={(seg as Extract<TurnSegment, { kind: "text" }>).text} /> : <RichContent key={i} text={(seg as Extract<TurnSegment, { kind: "text" }>).text} skin={skin} />
+					plain ? <Paragraphs key={i} text={(seg as Extract<TurnSegment, { kind: "text" }>).text} /> : <RichContent key={i} text={(seg as Extract<TurnSegment, { kind: "text" }>).text} skin={skin} messageId={messageId} />
 				))}
 				{process.length > 0 && (
 					<details className="turn-process">
@@ -382,7 +384,7 @@ export function TurnTimeline({
 	return (
 		<>
 			{groups.map((g, gi) => {
-				if (g.kind === "text") return plain ? <Paragraphs key={gi} text={g.seg.text} /> : <RichContent key={gi} text={g.seg.text} skin={skin} />;
+				if (g.kind === "text") return plain ? <Paragraphs key={gi} text={g.seg.text} /> : <RichContent key={gi} text={g.seg.text} skin={skin} messageId={messageId} />;
 				const active = gi === groups.length - 1; // 最新过程组=正在动的，展开跟读
 				const { thinks, calls } = countOf(g.segs);
 				return (
@@ -876,9 +878,13 @@ export function Bubble({
 			? applySkinKeepingBody(body, skin.rules, skin)
 			: body;
 	const stage = !isUser && !editing && isFullInterface(skinnedBody);
+	const msgIndex = floor !== undefined ? floor - 1 : undefined;
 	return (
 		<div
-			className={`msg ${isUser ? "msg-user" : "msg-char"} ${isUser && msg.backstage ? "msg-user-backstage" : ""} ${editing ? "msg-editing" : ""} ${stage ? "msg-stage" : ""}`}
+			className={`msg mes ${isUser ? "msg-user" : "msg-char"} ${isUser && msg.backstage ? "msg-user-backstage" : ""} ${editing ? "msg-editing" : ""} ${stage ? "msg-stage" : ""}`}
+			data-mesid={msgIndex !== undefined ? String(msgIndex) : undefined}
+			data-message-id={msgIndex}
+			{...(msgIndex !== undefined ? ({ mesid: String(msgIndex) } as Record<string, string>) : {})}
 		>
 			{/* 导演备注（PLAN-DIRECTOR-NOTE）：本条回复生成时随行的戏外指示——只作显示，
 			   渲染成用户气泡下的小气泡；模型看不见，切变体时跟着变（记录在变体上）。 */}
@@ -945,11 +951,13 @@ export function Bubble({
 				<>
 					{/* 时间线态：思考/工具/正文按发生顺序依次上屏（codex 式）。
 					    附件仍取自正文尾行，故正文用时间线渲染、附件另挂。 */}
-					{timeline ? (
-						<TurnTimeline segments={timeline} skin={skin} />
-					) : (
-						body && (isUser ? <Paragraphs text={body} /> : <RichContent text={body} skin={skin} />)
-					)}
+					<div className="mes_text">
+						{timeline ? (
+							<TurnTimeline segments={timeline} skin={skin} messageId={msgIndex} />
+						) : (
+							body && (isUser ? <Paragraphs text={body} /> : <RichContent text={body} skin={skin} messageId={msgIndex} />)
+						)}
+					</div>
 					{attachments.length > 0 && (
 						<div className="msg-attach">
 							{attachments.map((a) =>

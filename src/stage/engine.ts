@@ -68,6 +68,14 @@ import {
 import { runScribeTurn, STATE_ENTRY_TYPE } from "./scribe-run.ts";
 import { seedMvuIfNeeded, findMvuRules } from "../mvu.ts";
 import {
+	compileStagePromptTemplates,
+	createEjsContext,
+	evalLoreEntryContent,
+	evaluateDecoratorIf,
+	hasPromptTemplateSyntax,
+	parseWorldInfoDecorators,
+} from "../ejs-engine.ts";
+import {
 	MAX_ROUNDS,
 	runStageTool,
 	stageTools,
@@ -161,7 +169,7 @@ export interface StageStreamEvent {
 	error?: AssistantMsgLike;
 }
 
-interface StageTurnEndInfo {
+export interface StageTurnEndInfo {
 	/** Controls derived story writes; an authoring turn stays authoring even after switching back. */
 	mode?: ConversationMode;
 	aborted: boolean;
@@ -579,7 +587,7 @@ export const mergeFinalText = (draft: string, text: string): string => {
 export class StageEngine {
 	#deps: StageEngineDeps;
 	#busy = false;
-	#queue: Array<{ text: string; note?: string }> = [];
+	#queue: Array<{ text: string; note?: string; onDone?: (info: StageTurnEndInfo) => void }> = [];
 	#abort: AbortController | null = null;
 	#warnedMacros = "";
 	#warnedProtocolDrop = "";
@@ -705,20 +713,38 @@ export class StageEngine {
 	 * 用户新输入开一拍：先落 user 消息再开演；忙时排队（流式中送达的输入不打断叙事）。
 	 * directorNote＝导演备注（PLAN-DIRECTOR-NOTE）：戏外当拍指示，只进本拍装配、不落树，用完即焚。
 	 */
-	async performTurn(userText: string, directorNote?: string): Promise<void> {
+	async performTurn(userText: string, directorNote?: string): Promise<StageTurnEndInfo> {
 		if (this.#busy) {
 			this.#queue.push({ text: userText, ...(directorNote ? { note: directorNote } : {}) });
-			return;
+			return { aborted: false };
 		}
-		await this.#run(userText, directorNote);
+		const info = await this.#run(userText, directorNote);
 		await this.#drain();
+		return info;
+	}
+
+	/** 供脚本接口使用：即使忙时排队，也等待该拍真正执行完毕并返回其 StageTurnEndInfo */
+	async performTurnAndWait(userText: string, directorNote?: string): Promise<{ queued: boolean; info: StageTurnEndInfo }> {
+		if (this.#busy) {
+			return await new Promise<{ queued: boolean; info: StageTurnEndInfo }>((resolve) => {
+				this.#queue.push({
+					text: userText,
+					...(directorNote ? { note: directorNote } : {}),
+					onDone: (info) => resolve({ queued: true, info }),
+				});
+			});
+		}
+		const info = await this.#run(userText, directorNote);
+		await this.#drain();
+		return { queued: false, info };
 	}
 
 	/** 再生成：叶已钉在 user（swipe/reroll 已 branch），不追加 user 消息直接开演；directorNote 同 performTurn */
-	async regenerate(directorNote?: string): Promise<void> {
-		if (this.#busy) return;
-		await this.#run(null, directorNote);
+	async regenerate(directorNote?: string): Promise<StageTurnEndInfo> {
+		if (this.#busy) return { aborted: false, error: "busy" };
+		const info = await this.#run(null, directorNote);
 		await this.#drain();
+		return info;
 	}
 
 	/** 强制停止本拍：已流出的部分正文仍落树可见 */
@@ -740,7 +766,10 @@ export class StageEngine {
 		const cardDir = (chatDir ? cardDirOfChatDir(chatDir) : null) ?? resolveCardSpace(cwd, config.card)?.dir ?? null;
 		const branch = sm.getBranch() as BranchEntryLike[];
 		const state = stateFromBranch(branch);
-		const { history, summary: branchSummary } = rebuildHistory(branch, materials.promptRules);
+		const { history, summary: branchSummary } = rebuildHistory(branch, materials.promptRules, {
+			charName: card.name,
+			userName: config.userName,
+		});
 		const summary = branchSummary || readChatSummary(chatDir);
 		const chatAppend = chatDir ? readUserRules(cardDir ?? "", chatDir).chat : undefined;
 		const userRules = chatAppend ? { ...materials.userRules, chat: chatAppend } : materials.userRules;
@@ -835,11 +864,14 @@ export class StageEngine {
 	async #drain(): Promise<void> {
 		while (this.#queue.length > 0 && !this.#busy) {
 			const next = this.#queue.shift();
-			if (next !== undefined) await this.#run(next.text, next.note);
+			if (next !== undefined) {
+				const info = await this.#run(next.text, next.note);
+				next.onDone?.(info);
+			}
 		}
 	}
 
-	async #run(userText: string | null, directorNote?: string): Promise<void> {
+	async #run(userText: string | null, directorNote?: string): Promise<StageTurnEndInfo> {
 		const ev = this.#deps.events ?? {};
 		this.#busy = true;
 		this.#turnMode = this.mode;
@@ -861,6 +893,7 @@ export class StageEngine {
 			this.#turnMode = undefined;
 			ev.onTurnEnd?.(endInfo);
 		}
+		return endInfo;
 	}
 
 	async #turn(userText: string | null, directorNote?: string): Promise<StageTurnEndInfo> {
@@ -917,8 +950,17 @@ export class StageEngine {
 			...sm.getBranch(),
 			...(userText !== null ? [{ type: "message", message: nowMsg(userText) }] : []),
 		] as BranchEntryLike[];
-		const state = stateFromBranch(branch);
-		const { history, lastNarrativeText, summary: branchSummary } = rebuildHistory(branch, materials.promptRules);
+		const state = seedMvuIfNeeded(
+			stateFromBranch(branch),
+			materials.allLoreEntries ?? materials.card.book,
+			config.userName,
+			card.name,
+			materials.cardAuthorScripts,
+		) as WorldState;
+		const { history, lastNarrativeText, summary: branchSummary } = rebuildHistory(branch, materials.promptRules, {
+			charName: card.name,
+			userName: config.userName,
+		});
 		const summary = branchSummary || readChatSummary(chatDir);
 		const chatCardDir = chatDir ? cardDirOfChatDir(chatDir) : null;
 		const chatAppend = chatDir ? readUserRules(chatCardDir ?? "", chatDir).chat : undefined;
@@ -933,12 +975,42 @@ export class StageEngine {
 		const languageMismatch = lastNarrativeText
 			? detectsLanguageMismatch(lastNarrativeText, config.language)
 			: false;
-		// 关键词扫描只看剧情流
-		const windowText = history
+		const tplCompiled = await compileStagePromptTemplates({
+			cardAgentsRaw: materials.cardAgentsRaw ?? materials.cardAgents,
+			cardAgentsRendered: materials.cardAgents,
+			entries: materials.entries,
+			allLoreEntries: materials.allLoreEntries ?? materials.entries,
+			state,
+			charName: card.name,
+			userName: config.userName,
+			chatId: sm.getSessionId(),
+			messages: history.map((m) => ({ role: m.role, content: m.text })),
+		});
+		const effectiveEntries = tplCompiled.entries;
+		const effectiveCardAgents = tplCompiled.cardAgents;
+
+		// 关键词扫描只看剧情流（含 @@preprocessing 动态产出的关键词）
+		const baseWindowText = history
 			.slice(-config.scanDepth)
 			.map((m) => m.text)
 			.join("\n");
-		const activated = scanEntries(materials.entries, windowText, config.maxLoreInjections);
+		const windowText = tplCompiled.preprocessedWindowText
+			? `${baseWindowText}\n${tplCompiled.preprocessedWindowText}`
+			: baseWindowText;
+		const rawActivated = scanEntries(effectiveEntries, windowText, config.maxLoreInjections);
+		const activated = await Promise.all(
+			rawActivated.map(async (e) =>
+				hasPromptTemplateSyntax(e.content)
+					? {
+							...e,
+							content: await evalLoreEntryContent(e, tplCompiled.ejsContext, {
+								charName: card.name,
+								userName: config.userName,
+							}),
+						}
+					: e,
+			),
+		);
 
 		// 面板快照（M1 读磁盘缓存；写侧与分支化随 M3）。
 		// 声明了数据的面板喂**数据**不喂外观——一张 HTML 面板的标签动辄四千字，
@@ -1034,10 +1106,10 @@ export class StageEngine {
 		const systemPrompt = buildStageSystemPrompt({
 			card,
 			config,
-			constantLore: constantLoreOf(materials),
+			constantLore: constantLoreOf({ ...materials, entries: effectiveEntries }),
 			userRules,
 			chatMemoryIndex,
-			cardAgents: materials.cardAgents,
+			cardAgents: effectiveCardAgents,
 			// 预设装配段：原文原序，marker 已按预设作者的位置填入梨园材料
 			presetBefore: materials.presetBefore.map((p) => p.text),
 			filledMarkers: materials.filledMarkers,
@@ -1053,10 +1125,10 @@ export class StageEngine {
 			card,
 			config,
 			languageMismatch,
-			cardAgentsActive: materials.cardAgents.trim().length > 0,
+			cardAgentsActive: effectiveCardAgents.trim().length > 0,
 			panelIndex,
 			...(wsDeps.rules.wordRange ? { wordRange: wsDeps.rules.wordRange } : {}),
-			loreIndex: formatLoreIndex(materials.entries),
+			loreIndex: formatLoreIndex(effectiveEntries),
 			rosterIndex,
 			...(memoryRecall ? { memoryRecall } : {}),
 			// off 挡（无原生思考通道、不主动检索）：绿灯命中给正文兜底；其余档位给标题让模型自取。
@@ -2114,12 +2186,46 @@ export class StageEngine {
 		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
 		const lh = this.#deps.loreHost;
 		return {
-			searchLore: (query, limit) => {
+			searchLore: async (query, limit) => {
 				const m = loadStageMaterials(cwd);
 				// 语料 = 世界书（已挂载的独立书）+ 补充设定集；materials 已剥离外部插件协议条目。
 				const hits = searchEntries(m.entries, query, limit);
 				const marked = lh?.listMarked() as Array<LorebookEntry & { source?: string }> | undefined;
-				return hits.map((h) => ({ ...h, entry: { ...h.entry, source: marked?.find((e) => loreFingerprint(e.content) === loreFingerprint(h.entry.content))?.source } }));
+				const branch = sm.getBranch() as BranchEntryLike[];
+				const curState = seedMvuIfNeeded(
+					stateFromBranch(branch),
+					m.allLoreEntries ?? m.card.book,
+					m.config.userName,
+					m.card.name,
+					m.cardAuthorScripts,
+				) as WorldState;
+				const ejsCtx = createEjsContext({
+					state: curState,
+					allLoreEntries: m.allLoreEntries ?? m.entries,
+					charName: m.card.name,
+					userName: m.config.userName,
+					chatId: sm.getSessionId(),
+				});
+				const results = [];
+				for (const h of hits) {
+					const dec = parseWorldInfoDecorators(h.entry);
+					if (!(await evaluateDecoratorIf(dec.ifConditions, ejsCtx))) continue;
+					const content = hasPromptTemplateSyntax(h.entry.content)
+						? await evalLoreEntryContent(h.entry, ejsCtx, {
+								charName: m.card.name,
+								userName: m.config.userName,
+							})
+						: h.entry.content;
+					results.push({
+						...h,
+						entry: {
+							...h.entry,
+							content,
+							source: marked?.find((e) => loreFingerprint(e.content) === loreFingerprint(h.entry.content))?.source,
+						},
+					});
+				}
+				return results;
 			},
 			// ---- 世界书读侧与书一级（列举/挂载/启停）：两视图都可用 ----
 			listLore: lh ? lh.listMarked : () => loadStageMaterials(cwd).entries,

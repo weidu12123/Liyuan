@@ -271,7 +271,7 @@ export function applyCardSkin(
 	let lower: string | null = null;
 	for (const r of rules) {
 		try {
-			const source = substMacros(r.source, macros, true);
+			const source = substMacros(r.source, macros, r.substituteRegex !== 1);
 			// 预筛：必须出现的字面串不在文本里 ⇒ 这条规则不可能匹配，别让引擎白扫（见 requiredLiteral）
 			const lit = requiredLiteral(source);
 			if (lit) {

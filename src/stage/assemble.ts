@@ -141,7 +141,11 @@ export function activeSummary(branch: BranchEntryLike[]): { summary: string; cut
  *
  * M4：有 rp-summary 时，被覆盖的早期条目整段不进历史，改由 summary 字段回读为【前情提要】。
  */
-export function rebuildHistory(branch: BranchEntryLike[], promptRules: DisplayRule[] = []): RebuiltHistory {
+export function rebuildHistory(
+	branch: BranchEntryLike[],
+	promptRules: DisplayRule[] = [],
+	macros: { charName: string; userName: string } = { charName: "", userName: "" },
+): RebuiltHistory {
 	branch = applyDraftRevisions(storyBranch(branch), { omitEditRequests: true });
 	const active = activeSummary(branch);
 	const live = active ? branch.slice(active.cut) : branch;
@@ -208,7 +212,7 @@ export function rebuildHistory(branch: BranchEntryLike[], promptRules: DisplayRu
 		// **之前**跑：cleanAssistantText 的 unwrap 会先拆掉 <w2g> 等标签，晚了正则打空
 		// （与显示层「禁止 unwrap 先于作者正则」同一条纪律）。
 		const rules = needDepth ? rulesAtDepth(promptRules, groups - 1 - groupOf[i]) : promptRules;
-		if (rules.length > 0) text = applyCardSkin(text, rules, { charName: "", userName: "" });
+		if (rules.length > 0) text = applyCardSkin(text, rules, macros);
 		if (role === "assistant") text = cleanAssistantText(text);
 		text = text.trim();
 		if (!text) continue;

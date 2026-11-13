@@ -355,6 +355,8 @@ export interface RestHost {
 		userText: string,
 		opts?: { maxTokens?: number; reasoning?: string; signal?: AbortSignal },
 	): Promise<string | { error: string }>;
+	/** 梨园自身脚本接口（Script API）统一入口 */
+	invokeScriptApi(body: Record<string, unknown>): Promise<import("../src/script-api.ts").ScriptCallEnvelope>;
 }
 
 interface SessionInfoLite {
@@ -2142,6 +2144,20 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				}
 				const queued = host.queueCommand(text);
 				sendJson(res, 200, { ok: true, queued, note: queued ? t("生成中：已排队到本轮结束执行") : t("已提交执行") });
+				return true;
+			}
+
+			// ---- 梨园自身脚本接口（06/07 文档：真实业务负责人 + 目标绑定 + 结构化完成回执） ----
+			case "GET /api/script/capabilities": {
+				const env = await host.invokeScriptApi({ action: "capabilities.read" });
+				sendJson(res, 200, env);
+				return true;
+			}
+			case "POST /api/script": {
+				const rawBody = await readBody(req);
+				const body = rawBody.trim() ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
+				const env = await host.invokeScriptApi(body);
+				sendJson(res, 200, env);
 				return true;
 			}
 

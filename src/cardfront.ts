@@ -84,7 +84,7 @@ export function buildCardFrontSnapshot(
 		// 用不了，其二每次切预设就弹「您的正则未正确更新…」——都是为酒馆助手宿主写的，
 		// 换到梨园的宿主帧里既无处可依附又误报。预设的 regex_scripts（上面 presetRules）照旧生效，
 		// 那条是真在工作的；被切掉的只有运行时 JS 这一路。
-		scripts: buildAuthorScripts(raw),
+		scripts: buildAuthorScripts(raw, presetRaw),
 	};
 }
 
@@ -280,24 +280,25 @@ export function displayRules(scripts: unknown[]): DisplayRule[] {
  * - `markdownOnly`（纯显示）排除——那是 displayRules 的活
  * 翻译器与显示层同一套（applyCardSkin：$1/{{match}}/trim 展开），只是规则集不同、挂在历史路径。
  */
-export function promptRules(scripts: unknown[]): DisplayRule[] {
+export function placementPromptRules(scripts: unknown[], targetPlacement: number): DisplayRule[] {
 	const out: DisplayRule[] = [];
 	for (const s of scripts) {
 		if (!s || typeof s !== "object") continue;
 		const r = s as Record<string, unknown>;
 		if (r.disabled === true) continue;
 		const placement = Array.isArray(r.placement) ? r.placement : [];
-		if (!placement.includes(2)) continue; // 2 = AI 输出
+		if (!placement.includes(targetPlacement)) continue;
 		const mdOnly = r.markdownOnly === true;
 		const prOnly = r.promptOnly === true;
-		if (mdOnly && !prOnly) continue; // 纯显示，送模侧不管
-		if (!mdOnly && !prOnly) {
-			// 两个 only 都没勾＝破坏性：酒馆落盘时改原文；梨园无原文概念，归送模侧
-		}
+		if (mdOnly && !prOnly) continue;
 		const rule = parseRuleShape(r, "（送模侧）");
 		if (rule) out.push(rule);
 	}
 	return out;
+}
+
+export function promptRules(scripts: unknown[]): DisplayRule[] {
+	return placementPromptRules(scripts, 2);
 }
 
 /** 皮肤开关:默认开;关过的卡记在 config.cardSkinOff(路径列表,同 disabledLore 模式) */

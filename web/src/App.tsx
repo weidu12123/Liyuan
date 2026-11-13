@@ -40,7 +40,14 @@ import { WelcomePanel } from "./components/HomePage.tsx";
 import { StatusPanel } from "./components/StatusPanel.tsx";
 import { UpdateModal, UpdateToast } from "./components/UpdateFlow.tsx";
 import { bumpWatchPanels, PanelRefreshContext } from "./components/kit.tsx";
-import { callLiyuanScriptApi, emitCardRuntimeEvent, registerLiyuanToast, registerTavernChatBridge, tavern_events } from "./tavernShim.ts";
+import {
+	callLiyuanScriptApi,
+	emitCardRuntimeEvent,
+	registerLiyuanToast,
+	registerTavernChatBridge,
+	tavern_events,
+} from "./tavernShim.ts";
+import { runPureTavernBrowserTurn } from "./pureTavernRunner.ts";
 import { syncCardRuntimeContext, syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
 import { setAtHome, shouldShowHomeOnBoot, touchVisit } from "./visit.ts";
 import { getTheme, setTheme } from "./theme.ts";
@@ -629,16 +636,34 @@ export default function App() {
 
 	const [loadedScriptVars, setLoadedScriptVars] = useState<{
 		chat?: Record<string, unknown>;
+		character?: Record<string, unknown>;
+		preset?: Record<string, unknown>;
+		global?: Record<string, unknown>;
 		messages?: Record<string, Record<string, unknown>>;
 	}>({});
+	const [loadedPreset, setLoadedPreset] = useState<{
+		name?: string;
+		names: string[];
+		raw: Record<string, unknown> | null;
+		dirty?: boolean;
+		fetched?: boolean;
+	}>({ names: [], raw: null, fetched: false });
+	const [runtimePresetReady, setRuntimePresetReady] = useState(false);
 	const [loadedWorldbooks, setLoadedWorldbooks] = useState<string[]>([]);
 	const [cardGreetings, setCardGreetings] = useState<string[]>([]);
 	const [cardGreetingIndex, setCardGreetingIndex] = useState<number>(0);
 	const [scriptButtons, setScriptButtons] = useState<Array<{ scriptId: string; name: string; eventId: string }>>([]);
+	const lastPresetNameRef = useRef<string | undefined>(undefined);
+	const runtimeFetchSeqRef = useRef(0);
+	const presetModeRef = useRef<"liyuan" | "pure">("liyuan");
+	const pureAbortRef = useRef<AbortController | null>(null);
 
 	useEffect(() => {
 		const onMsg = (ev: MessageEvent) => {
-			const d = ev.data as { liyuanScriptButtons?: Array<{ scriptId?: unknown; name?: unknown; eventId?: unknown }> } | null;
+			const d = ev.data as {
+				liyuanScriptButtons?: Array<{ scriptId?: unknown; name?: unknown; eventId?: unknown }>;
+				liyuanScriptOwner?: unknown;
+			} | null;
 			if (!d || !Array.isArray(d.liyuanScriptButtons)) return;
 			const next = d.liyuanScriptButtons
 				.filter((b) => b && typeof b.name === "string" && b.name.trim() && typeof b.eventId === "string")
@@ -647,29 +672,86 @@ export default function App() {
 					name: String(b.name).trim(),
 					eventId: String(b.eventId),
 				}));
-			setScriptButtons(next);
+			const owner = typeof d.liyuanScriptOwner === "string" ? d.liyuanScriptOwner.trim() : "";
+			if (!owner) {
+				setScriptButtons(next);
+				return;
+			}
+			setScriptButtons((prev) => {
+				const kept = prev.filter((b) => b.scriptId !== owner);
+				const merged = [...kept, ...next];
+				const seen = new Set<string>();
+				return merged.filter((b) => {
+					if (seen.has(b.name)) return false;
+					seen.add(b.name);
+					return true;
+				});
+			});
 		};
 		window.addEventListener("message", onMsg);
 		return () => window.removeEventListener("message", onMsg);
 	}, []);
 
-	useEffect(() => {
+	const refreshRuntimePresetAndVars = useCallback((activeCharName?: string) => {
 		const sid = sessionIdRef.current;
 		if (!sid) return;
-		let cancelled = false;
+		const seq = ++runtimeFetchSeqRef.current;
+		const effectiveCharName = (activeCharName ?? charName).trim();
 		void Promise.all([
 			callLiyuanScriptApi<{ data?: Record<string, unknown> }>("data.read", { scope: "chat" }),
 			callLiyuanScriptApi<{ data?: Record<string, Record<string, unknown>> }>("data.read", { scope: "message" }),
+			callLiyuanScriptApi<{ data?: Record<string, unknown> }>("data.read", { scope: "global" }),
+			callLiyuanScriptApi<{ data?: Record<string, unknown> }>("data.read", { scope: "preset" }),
+			callLiyuanScriptApi<{ data?: Record<string, unknown> }>("data.read", { scope: "character" }),
 			callLiyuanScriptApi<{ mounted?: Array<{ name?: string; path?: string }>; available?: Array<{ name?: string; path?: string }> }>("lorebooks.list", {}),
-		]).then(([chatEnv, msgEnv, lbEnv]) => {
-			if (cancelled) return;
+			callLiyuanScriptApi<{ active?: string | null; presets?: Array<{ file?: string; name?: string }> }>("preset.list", {}),
+			callLiyuanScriptApi<{ name?: string; dirty?: boolean; raw?: Record<string, unknown> }>("preset.get", { includeRaw: true }),
+		]).then(([chatEnv, msgEnv, globalEnv, presetVarEnv, charVarEnv, lbEnv, presetListEnv, presetGetEnv]) => {
+			if (seq !== runtimeFetchSeqRef.current) return;
+			const pRaw = presetGetEnv.ok && presetGetEnv.result?.raw && typeof presetGetEnv.result.raw === "object"
+				? presetGetEnv.result.raw
+				: null;
+			const pExtVars = (() => {
+				const ext = pRaw?.extensions as Record<string, unknown> | undefined;
+				const th = (ext?.tavern_helper ?? ext?.TavernHelper) as Record<string, unknown> | undefined;
+				const v = th?.variables;
+				return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+			})();
+			const serverPresetVars =
+				presetVarEnv.ok && presetVarEnv.result?.data && typeof presetVarEnv.result.data === "object"
+					? presetVarEnv.result.data
+					: {};
 			setLoadedScriptVars({
 				chat: chatEnv.ok && chatEnv.result?.data && typeof chatEnv.result.data === "object" ? chatEnv.result.data : {},
 				messages: msgEnv.ok && msgEnv.result?.data && typeof msgEnv.result.data === "object" ? msgEnv.result.data : {},
+				global: globalEnv.ok && globalEnv.result?.data && typeof globalEnv.result.data === "object" ? globalEnv.result.data : {},
+				character: charVarEnv.ok && charVarEnv.result?.data && typeof charVarEnv.result.data === "object" ? charVarEnv.result.data : {},
+				preset: { ...pExtVars, ...serverPresetVars },
 			});
+			const pName = presetGetEnv.ok && typeof presetGetEnv.result?.name === "string"
+				? presetGetEnv.result.name
+				: (typeof presetListEnv.result?.active === "string" ? presetListEnv.result.active : undefined);
+			const pNames = presetListEnv.ok && Array.isArray(presetListEnv.result?.presets)
+				? presetListEnv.result.presets
+						.map((x) => (typeof x?.name === "string" ? x.name.trim() : ""))
+						.filter(Boolean)
+				: [];
+			setLoadedPreset({
+				name: pName,
+				names: pNames,
+				raw: pRaw,
+				dirty: presetGetEnv.ok ? presetGetEnv.result?.dirty === true : false,
+				fetched: true,
+			});
+			if (lastPresetNameRef.current !== undefined && lastPresetNameRef.current !== pName) {
+				emitCardRuntimeEvent(tavern_events.PRESET_CHANGED, pName ?? "");
+				emitCardRuntimeEvent(tavern_events.OAI_PRESET_CHANGED_AFTER);
+			}
+			lastPresetNameRef.current = pName ?? "";
+
 			const names: string[] = [];
-			if (charName.trim()) {
-				names.push(`${charName.trim()}·世界书`, charName.trim()); // i18n-ignore：协议名
+			if (effectiveCharName) {
+				names.push(`${effectiveCharName}·世界书`, effectiveCharName); // i18n-ignore：协议名
 			}
 			if (lbEnv.ok && lbEnv.result) {
 				const list = [...(lbEnv.result.mounted ?? []), ...(lbEnv.result.available ?? [])];
@@ -680,10 +762,11 @@ export default function App() {
 			}
 			setLoadedWorldbooks(names);
 		});
-		return () => {
-			cancelled = true;
-		};
-	}, [sessions, charName]);
+	}, [charName]);
+
+	useEffect(() => {
+		refreshRuntimePresetAndVars(charName);
+	}, [sessions, charName, refreshRuntimePresetAndVars]);
 
 	useEffect(() => {
 		const currentSession = sessions?.find((s) => s.current);
@@ -706,7 +789,7 @@ export default function App() {
 					swipes,
 				};
 			});
-		return syncCardRuntimeContext({
+		const stopSync = syncCardRuntimeContext({
 			card: currentSession?.card,
 			charName,
 			userName,
@@ -715,10 +798,18 @@ export default function App() {
 			mode: conversationMode === "agent" ? "agent" : "roleplay",
 			streaming: busy,
 			messages: runtimeMsgs,
+			presetName: loadedPreset.name,
+			presetNames: loadedPreset.names,
+			presetRaw: loadedPreset.raw,
+			presetDirty: loadedPreset.dirty,
 			worldbooks: loadedWorldbooks.length > 0 ? loadedWorldbooks : charName.trim() ? [`${charName.trim()}·世界书`, charName.trim(), "default"] : ["default"], // i18n-ignore：协议名
 			scriptVars: loadedScriptVars,
 		});
-	}, [messages, charName, userName, conversationMode, busy, sessions, loadedScriptVars, loadedWorldbooks, cardGreetings, cardGreetingIndex]);
+		if (loadedPreset.fetched && !runtimePresetReady) {
+			setRuntimePresetReady(true);
+		}
+		return stopSync;
+	}, [messages, charName, userName, conversationMode, busy, sessions, loadedScriptVars, loadedPreset, loadedWorldbooks, cardGreetings, cardGreetingIndex, runtimePresetReady]);
 
 	useEffect(() => {
 		welcomeRef.current = welcome;
@@ -1002,6 +1093,7 @@ export default function App() {
 			switch (frame.type) {
 				case "hello": {
 					syncLocaleFromConfig(frame.uiLanguage);
+					presetModeRef.current = frame.presetMode === "pure" ? "pure" : "liyuan";
 					modeRef.current = frame.conversationMode ?? "roleplay";
 					setConversationMode(modeRef.current);
 					streamModeRef.current = frame.turnMode ?? modeRef.current;
@@ -1093,6 +1185,7 @@ export default function App() {
 							setStreamText(streamRef.current);
 						}
 						refreshAvatars();
+						refreshRuntimePresetAndVars(frame.charName);
 					break;
 				}
 				case "message":
@@ -1417,7 +1510,7 @@ export default function App() {
 					break;
 			}
 		},
-		[pushToast, refreshAvatars, refreshCardFront],
+		[pushToast, refreshAvatars, refreshCardFront, refreshRuntimePresetAndVars],
 	);
 
 	const ws = useWire(onFrame, setConn);
@@ -1631,6 +1724,57 @@ export default function App() {
 
 	const isAddressingBtw = conversationMode === "roleplay" && parseBtwText(input) !== null;
 
+	const dispatchPureTavernTurn = useCallback(
+		async (text: string, notes: string[] = []) => {
+			if (pureAbortRef.current) {
+				pushToast("warning", t("生成中"));
+				return;
+			}
+			const ac = new AbortController();
+			pureAbortRef.current = ac;
+			(window as unknown as { __liyuanAbortPureGeneration?: () => void }).__liyuanAbortPureGeneration = () => ac.abort();
+			setMessages((ms) => [...ms, { channel: "user", name: userName, text }]);
+			clearStream();
+			resetSegs();
+			resetActs();
+			streamModeRef.current = "roleplay";
+			setStreamMode("roleplay");
+			setBusy(true);
+			try {
+				const r = await runPureTavernBrowserTurn({
+					userText: text,
+					notes,
+					signal: ac.signal,
+					onStreamDelta: (fullText, fullThinking) => {
+						streamRef.current = fullText;
+						streamThinkingRef.current = fullThinking;
+						setStreamText(fullText);
+						setStreamThinking(fullThinking);
+						const nextSegs: TurnSegment[] = [];
+						if (fullThinking) nextSegs.push({ kind: "thinking", text: fullThinking });
+						if (fullText) nextSegs.push({ kind: "text", text: fullText });
+						setSegs(nextSegs);
+					},
+				});
+				if (!r.ok && r.error && !r.aborted) {
+					pushToast("error", r.error);
+				}
+				refreshRuntimePresetAndVars(charName);
+			} catch (err) {
+				if (!ac.signal.aborted) {
+					pushToast("error", err instanceof Error ? err.message : String(err));
+				}
+			} finally {
+				if (pureAbortRef.current === ac) pureAbortRef.current = null;
+				delete (window as unknown as { __liyuanAbortPureGeneration?: () => void }).__liyuanAbortPureGeneration;
+				clearStream();
+				resetSegs();
+				setBusy(false);
+			}
+		},
+		[charName, userName, pushToast, refreshRuntimePresetAndVars],
+	);
+
 	const send = useCallback(() => {
 		const typed = input.trim();
 		// 附件随消息：路径清单作为尾行附在正文后（这一行即持久记录，重放同路径解析）
@@ -1726,6 +1870,11 @@ export default function App() {
 			sent = typed === "/compact" || /^\/compact\s*$/i.test(typed)
 				? ws.send({ type: "compact" })
 				: ws.send({ type: "prompt", text: typed });
+		} else if (conversationMode === "roleplay" && presetModeRef.current === "pure" && !typed.startsWith("/")) {
+			const notes = noteRows.map((s) => s.trim()).filter(Boolean);
+			if (notes.length > 0) setNoteRows([]);
+			void dispatchPureTavernTurn(text, notes);
+			sent = true;
 		} else {
 			// 备注随下一次生成走：先发 /note 再发正文（同一 WS 保序）；命令（/rewind 等）不带走备注
 			if (!typed.startsWith("/") && !sendNotes()) {
@@ -1746,7 +1895,7 @@ export default function App() {
 		atBottomRef.current = true;
 		setAtBottom(true);
 		if (inputRef.current) inputRef.current.style.height = "auto";
-	}, [input, pending, ws, openStoreModal, pushToast, toggleRight, conversationMode, saveAgentCheckpoint, rewindAgentTurn, sendNotes, parseBtwText]);
+	}, [input, pending, ws, openStoreModal, pushToast, toggleRight, conversationMode, saveAgentCheckpoint, rewindAgentTurn, sendNotes, parseBtwText, noteRows, dispatchPureTavernTurn]);
 
 
 	// 卡 HTML（如 某卡 开场表单）调用 triggerSlash(`/send …|/trigger`)
@@ -1784,7 +1933,11 @@ export default function App() {
 				setWelcome(false);
 				setAtHome(false);
 				touchVisit();
-				ws.send({ type: "prompt", text: body });
+				if (modeRef.current === "roleplay" && presetModeRef.current === "pure" && !body.startsWith("/")) {
+					void dispatchPureTavernTurn(body);
+				} else {
+					ws.send({ type: "prompt", text: body });
+				}
 				setInput("");
 				setPending([]);
 				atBottomRef.current = true;
@@ -2705,7 +2858,7 @@ export default function App() {
 			  * 页面级作者脚本宿主：卡/预设声明的悬浮球等常驻 UI 在此起跑，产物挂到父页 body。
 			  * 帧自身零尺寸不可见，放在这里只为跟着 App 的生命周期走（换卡即换帧、卸载即收 DOM）。
 			  */}
-			<ScriptHost scripts={authorScripts} />
+			<ScriptHost scripts={runtimePresetReady ? authorScripts : []} />
 
 			<div className="toasts">
 				<UpdateToast
@@ -4072,7 +4225,11 @@ export default function App() {
 												unfinished: true,
 											};
 											setMessages((ms) => upsertTurnReply(ms, leftover));
-											ws.send({ type: "abort" });
+											if (pureAbortRef.current) {
+												pureAbortRef.current.abort();
+											} else {
+												ws.send({ type: "abort" });
+											}
 										}}
 										title={t("停止")}
 										aria-label={t("停止生成")}

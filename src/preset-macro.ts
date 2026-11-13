@@ -24,6 +24,8 @@ export interface MacroEnv {
 	lastMessage?: string;
 	/** 当前聊天最新一条角色回复正文（{{lastcharmessage}}） */
 	lastCharMessage?: string;
+	/** 世界书 position=7 (outlet) 槽位映射 */
+	outlets?: Map<string, string>;
 	/** 本轮求值发生过写入的局部键 */
 	dirtyLocal?: Set<string>;
 	/** 本轮求值发生过写入的全局键 */
@@ -58,10 +60,12 @@ export function createMacroEnv(init: {
 	lastCharMessage?: string;
 	vars?: Map<string, string> | Record<string, unknown>;
 	globalVars?: Map<string, string> | Record<string, unknown>;
+	outlets?: Map<string, string> | Record<string, unknown>;
 }): MacroEnv {
 	return {
 		vars: toMacroMap(init.vars),
 		globalVars: toMacroMap(init.globalVars),
+		outlets: init.outlets ? toMacroMap(init.outlets) : undefined,
 		charName: init.charName,
 		userName: init.userName,
 		userText: init.userText,
@@ -213,6 +217,12 @@ function evalToken(token: string, env: MacroEnv, unsupported: Set<string>): stri
 			return stepVarValue(env.globalVars, rest.split("::")[0] ?? "", -1, env.dirtyGlobal);
 		case "getglobalvar":
 			return env.globalVars.get(rest.split("::")[0]?.trim() ?? "") ?? "";
+		case "outlet": {
+			const outletKey = rest.split("::")[0]?.trim() ?? "";
+			if (env.outlets) return env.outlets.get(outletKey) ?? "";
+			if (name) unsupported.add(name);
+			return token;
+		}
 		case "random": {
 			const args = rest.includes("::") ? rest.split("::") : rest.split(",");
 			// 内容寻址钉死（M-C，TAXONOMY §4.5）：同参数恒选同项。破限信件体的几十个

@@ -94,16 +94,15 @@ test("没有声明 / 坏输入 → 空数组，永不抛", () => {
 	assert.deepEqual(extractAuthorScripts(cardRaw([null, 42, "x"]), "card"), []);
 });
 
-test("预设自带的脚本不进宿主（8/29 定案：悬浮球占屏点不动、防奶人误报正则）", () => {
-	// 解析器仍认得预设那种写法……
-	assert.equal(extractAuthorScripts(presetRaw([script({ id: "p" })]), "preset").length, 1);
-	// ……但消费面只收卡：预设声明再多也不会被交给宿主帧
-	const out = buildAuthorScripts(cardRaw([script({ id: "c" })]));
+test("预设与卡自带的脚本一并进宿主：预设在前、卡在后，按 source:id 去重", () => {
+	const out = buildAuthorScripts(
+		cardRaw([script({ id: "c" }), script({ id: "dup", name: "卡同名" })]),
+		presetRaw([script({ id: "p" }), script({ id: "dup", name: "预设同名" })]),
+	);
 	assert.deepEqual(
 		out.map((s) => `${s.source}:${s.id}`),
-		["card:c"],
+		["preset:p", "preset:dup", "card:c", "card:dup"],
 	);
-	// 卡里什么都没有时，就是空——不会从预设那边补
 	assert.deepEqual(buildAuthorScripts(null), []);
 });
 
@@ -113,7 +112,7 @@ test("同来源同 id 只留第一条", () => {
 	assert.equal(out[0].content, "$(function(){})");
 });
 
-test("cardfront 快照只带卡的 scripts，预设的不带（hello 与 REST 同源的那趟载荷）", () => {
+test("cardfront 快照同时携带预设与卡的 scripts（hello 与 REST 同源）", () => {
 	const snap = buildCardFrontSnapshot(
 		{ card: "a.png", userName: "旅人" },
 		cardRaw([script()]) as Record<string, unknown>,
@@ -122,7 +121,7 @@ test("cardfront 快照只带卡的 scripts，预设的不带（hello 与 REST �
 	);
 	assert.deepEqual(
 		snap.scripts.map((s) => `${s.source}:${s.id}`),
-		["card:s1"],
+		["preset:p", "card:s1"],
 	);
 	// 没有显示规则不影响脚本：两条通道各走各的
 	assert.equal(snap.hasSkin, false);

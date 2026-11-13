@@ -62,7 +62,15 @@ import { buildCardPreviewRequest, CardPreviewHub } from "./card-preview.ts";
 import { createBtwRunner, type BtwRunner } from "./btw.ts";
 import { DEFAULT_BTW_PERSONA, resolveBtwPersonaTemplates } from "../src/stage/btw.ts";
 import { ScreenshotHub } from "./screenshot.ts";
-import { stateFromBranch, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
+import { stateFromBranch, rebuildHistory, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
+import { loadStageMaterials } from "../src/stage/materials.ts";
+import { assemblePureTavern } from "../src/stage/pure-tavern.ts";
+import {
+	resolveUpstreamRequest,
+	translateAnthropicSseEvent,
+	translateGeminiSseData,
+} from "../src/stage/pure-proxy.ts";
+import { readScriptScopeVarsSync, writeScriptScopeVarUpdatesSync } from "../src/script-api.ts";
 import {
 	activePanels,
 	closePanel as closePanelInMap,
@@ -984,6 +992,7 @@ const helloFrame = (): ServerFrame => {
 	return {
 		type: "hello",
 		uiLanguage: cfg.uiLanguage,
+		presetMode: cfg.presetMode ?? "liyuan",
 		sessionId: session.sessionId,
 		charName: names.charName,
 		userName: names.userName,
@@ -2537,6 +2546,237 @@ const httpServer = createServer((req, res) => {
 		if (accessGuarded(urlPath) && !requestAuthed(req)) {
 			res.writeHead(401, { "content-type": "application/json" });
 			res.end(JSON.stringify({ error: t("需要登录") }));
+			return;
+		}
+		if (req.method === "POST" && urlPath === "/api/pure-tavern/prepare") {
+			if (storyStreaming()) {
+				res.writeHead(409, { "content-type": "application/json" });
+				res.end(JSON.stringify({ ok: false, error: t("模型正在写，稍后再改") }));
+				return;
+			}
+			const body = await readJsonBody(req);
+			const userText = typeof body.userText === "string" ? body.userText.trim() : "";
+			const reuseUserMessage = body.reuseUserMessage === true;
+			const model = session.model as StageModelLike | undefined;
+			if (!model) {
+				res.writeHead(400, { "content-type": "application/json" });
+				res.end(JSON.stringify({ ok: false, error: t("尚未配置剧情模型——请先在「连接」面板选择模型") }));
+				return;
+			}
+			const materials = loadStageMaterials(cwd);
+			const { config, card } = materials;
+			const sm = session.sessionManager;
+			const branch = [
+				...sm.getBranch(),
+				...(!reuseUserMessage && userText
+					? [{ type: "message", message: { role: "user", content: [{ type: "text", text: userText }], timestamp: Date.now() } }]
+					: []),
+			] as BranchEntryLike[];
+			const { history } = rebuildHistory(branch, materials.promptRules, {
+				charName: card.name,
+				userName: config.userName,
+			});
+			const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
+			const sessionId = sm.getSessionId();
+			const presetName = materials.presetDoc?.name;
+			const chatVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "chat", presetName);
+			const globalVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "global", presetName);
+			const characterVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "character", presetName);
+			const presetVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "preset", presetName);
+			const lastUserMsg =
+				userText ||
+				([...history].reverse().find((m) => m.role === "user")?.text ?? "");
+			const pure = await assemblePureTavern({
+				card,
+				presetDoc: materials.presetDoc,
+				loreEntries: materials.pureLoreEntries ?? materials.entries,
+				allLoreEntries: materials.allLoreEntries ?? materials.entries,
+				userName: config.userName,
+				userPersona: config.userPersona,
+				history,
+				userText: lastUserMsg,
+				scanDepth: config.scanDepth,
+				maxLoreInjections: config.maxLoreInjections,
+				chatId: sessionId,
+				model: model.id,
+				chatVars,
+				globalVars,
+				characterVars,
+				presetVars,
+				worldInfoRegexRules: materials.worldInfoRegexRules,
+				userInputRegexRules: materials.userInputRegexRules,
+			});
+			writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "chat", pure.dirtyLocal, presetName);
+			writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "global", pure.dirtyGlobal, presetName);
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(
+				JSON.stringify({
+					ok: true,
+					model: { id: model.id, provider: model.provider, api: typeof model.api === "string" ? model.api : undefined },
+					messages: pure.rawOpenAiMessages,
+					samplers: pure.samplers ?? config.samplers ?? {},
+					presetName: presetName ?? null,
+					presetRaw: materials.presetDoc?.raw ?? null,
+					charName: card.name,
+					userName: config.userName,
+				}),
+			);
+			return;
+		}
+		if (req.method === "POST" && urlPath === "/api/backends/chat-completions/generate") {
+			const model = session.model as (StageModelLike & { headers?: Record<string, string> }) | undefined;
+			if (!model) {
+				res.writeHead(400, { "content-type": "application/json" });
+				res.end(JSON.stringify({ error: { message: t("无可用模型") } }));
+				return;
+			}
+			const authResult = await session.modelRuntime.getAuth(model as never);
+			if (!authResult) {
+				res.writeHead(401, { "content-type": "application/json" });
+				res.end(JSON.stringify({ error: { message: t("模型 {model} 没有可用鉴权", { model: `${model.provider}/${model.id}` }) } }));
+				return;
+			}
+			const incomingPayload = await readJsonBody(req);
+			const up = resolveUpstreamRequest(
+				{
+					id: model.id,
+					provider: model.provider,
+					api: typeof model.api === "string" ? model.api : undefined,
+					baseUrl: model.baseUrl,
+					headers: model.headers,
+				},
+				authResult.auth,
+				incomingPayload,
+			);
+			const ac = new AbortController();
+			req.on("close", () => {
+				if (!res.writableEnded) ac.abort();
+			});
+			const upstreamRes = await fetch(up.url, {
+				method: "POST",
+				headers: up.headers,
+				body: JSON.stringify(up.body),
+				signal: ac.signal,
+			});
+			if (!upstreamRes.ok || !upstreamRes.body) {
+				const errText = await upstreamRes.text().catch(() => "");
+				res.writeHead(upstreamRes.status || 502, {
+					"content-type": upstreamRes.headers.get("content-type") || "application/json",
+				});
+				res.end(errText || JSON.stringify({ error: { message: `Upstream HTTP ${upstreamRes.status}` } }));
+				return;
+			}
+			if (up.protocol === "openai-passthrough" || !up.isStream) {
+				res.writeHead(upstreamRes.status, {
+					"content-type": upstreamRes.headers.get("content-type") || "text/event-stream; charset=utf-8",
+					"cache-control": "no-cache",
+				});
+				const reader = upstreamRes.body.getReader();
+				try {
+					for (;;) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						if (value && value.length > 0 && !res.writableEnded) res.write(Buffer.from(value));
+					}
+				} finally {
+					if (!res.writableEnded) res.end();
+				}
+				return;
+			}
+			res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+			const reader = upstreamRes.body.getReader();
+			const decoder = new TextDecoder();
+			let buf = "";
+			let currentEvent = "";
+			try {
+				for (;;) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					buf += decoder.decode(value, { stream: true });
+					let nl: number;
+					while ((nl = buf.indexOf("\n")) >= 0) {
+						const line = buf.slice(0, nl).replace(/\r$/, "");
+						buf = buf.slice(nl + 1);
+						if (!line) {
+							currentEvent = "";
+							continue;
+						}
+						if (line.startsWith("event:")) {
+							currentEvent = line.slice(6).trim();
+							continue;
+						}
+						if (!line.startsWith("data:")) continue;
+						const dataStr = line.slice(5).trim();
+						if (!dataStr || dataStr === "[DONE]") continue;
+						try {
+							const dataJson = JSON.parse(dataStr) as Record<string, unknown>;
+							const chunk =
+								up.protocol === "anthropic"
+									? translateAnthropicSseEvent(currentEvent || String(dataJson.type || ""), dataJson)
+									: translateGeminiSseData(dataJson);
+							if (chunk && !res.writableEnded) res.write(chunk);
+						} catch {
+							/* ignore partial/non-json */
+						}
+					}
+				}
+				if (!res.writableEnded) res.write("data: [DONE]\n\n");
+			} finally {
+				if (!res.writableEnded) res.end();
+			}
+			return;
+		}
+		if (req.method === "POST" && urlPath === "/api/pure-tavern/commit") {
+			const body = await readJsonBody(req);
+			const userText = typeof body.userText === "string" ? body.userText.trim() : "";
+			const assistantText = typeof body.assistantText === "string" ? body.assistantText : "";
+			const thinking = typeof body.thinking === "string" ? body.thinking : "";
+			const aborted = body.aborted === true;
+			const reuseUserMessage = body.reuseUserMessage === true;
+			const notes = Array.isArray(body.notes) ? body.notes.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
+			const modelInfo = body.model && typeof body.model === "object" ? (body.model as { provider?: string; id?: string }) : undefined;
+			const sm = session.sessionManager;
+			if (!reuseUserMessage && userText) {
+				sm.appendMessage({
+					role: "user",
+					content: [{ type: "text", text: userText }],
+					timestamp: Date.now(),
+				} as never);
+			}
+			let entryId: string | undefined;
+			if (assistantText.trim() || thinking.trim()) {
+				const content: Array<{ type: string; text?: string; thinking?: string }> = [];
+				if (thinking.trim()) content.push({ type: "thinking", thinking: thinking.trim() });
+				if (assistantText) content.push({ type: "text", text: assistantText });
+				entryId = sm.appendMessage({
+					role: "assistant",
+					content,
+					api: "openai-completions",
+					provider: modelInfo?.provider ?? session.model?.provider ?? "pure",
+					model: modelInfo?.id ?? session.model?.id ?? "pure",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: aborted ? "aborted" : "stop",
+					timestamp: Date.now(),
+					details: {
+						rpPureTavern: true,
+						...(notes.length > 0 ? { rpNotes: notes } : {}),
+					},
+				} as never);
+			}
+			sm.flush();
+			resyncAll();
+			const totalMessages = annotateSwipes(toWireHistory(branchMessages(), names, { skin: null })).filter(
+				(m) => m.channel === "user" || m.channel === "narrative" || m.channel === "greeting",
+			).length;
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ ok: true, entryId: entryId ?? null, totalMessages }));
 			return;
 		}
 		if (await handleApiRequest(req, res, restHost)) return;

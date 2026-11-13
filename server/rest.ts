@@ -496,6 +496,7 @@ const CONFIG_EDITABLE = new Set([
 	"lorebook",
 	"lorebooks",
 	"preset",
+	"presetMode",
 	"samplers",
 	"disabledLore",
 	"backendControl",

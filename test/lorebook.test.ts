@@ -39,6 +39,35 @@ test("卡内嵌格式归一化（keys/enabled/insertion_order）", () => {
 	assert.equal(entries[0].comment, "t");
 });
 
+test("ST 世界书与卡内嵌格式保留 position/depth/role/outletName", () => {
+	const entries = normalizeEntries([
+		{ uid: 1, key: ["k1"], content: "before", position: 0 },
+		{ uid: 2, key: ["k2"], content: "after", position: 1 },
+		{ uid: 3, key: ["k3"], content: "atDepth", position: 4, depth: 2, role: 2 },
+		{ uid: 4, key: ["k4"], content: "outlet", position: 7, outletName: "custom_slot" },
+		{
+			id: 5,
+			keys: ["k5"],
+			content: "cardExtDepth",
+			position: "before_char",
+			extensions: { position: 4, depth: 3, role: 1, outlet_name: "from_ext" },
+		},
+		{ id: 6, keys: ["k6"], content: "cardAfterChar", position: "after_char" },
+	]);
+	assert.equal(entries[0].position, 0);
+	assert.equal(entries[1].position, 1);
+	assert.equal(entries[2].position, 4);
+	assert.equal(entries[2].depth, 2);
+	assert.equal(entries[2].role, "assistant");
+	assert.equal(entries[3].position, 7);
+	assert.equal(entries[3].outletName, "custom_slot");
+	assert.equal(entries[4].position, 4);
+	assert.equal(entries[4].depth, 3);
+	assert.equal(entries[4].role, "user");
+	assert.equal(entries[4].outletName, "from_ext");
+	assert.equal(entries[5].position, 1);
+});
+
 test("合并去重（独立世界书与卡内嵌书内容相同）", () => {
 	const entries = loadLorebookFile(bookPath);
 	const merged = mergeEntries(entries, entries);

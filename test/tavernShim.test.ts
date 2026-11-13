@@ -779,5 +779,304 @@ test("提示词模板：window.EjsTemplate (evalTemplate / 小写 evaltemplate /
 	assert.equal(win.EjsTemplate.getFeatures().enabled, true);
 });
 
+test("第3步·预设三通道 A/B/C、正则查询、global/preset 变量与 reasoning 管理器完整联调", async () => {
+	// 构造轻量级真实感 DOM（验证通道 C 原地复用 <li> 与 classList 翻转）
+	class MiniClassList {
+		#set = new Set<string>();
+		constructor(init = "") {
+			init.split(/\s+/).filter(Boolean).forEach((c) => this.#set.add(c));
+		}
+		contains(c: string) {
+			return this.#set.has(c);
+		}
+		add(...cs: string[]) {
+			cs.forEach((c) => this.#set.add(c));
+		}
+		remove(...cs: string[]) {
+			cs.forEach((c) => this.#set.delete(c));
+		}
+		toString() {
+			return [...this.#set].join(" ");
+		}
+	}
+	class MiniElement {
+		tagName: string;
+		id = "";
+		children: MiniElement[] = [];
+		attrs = new Map<string, string>();
+		listeners = new Map<string, Array<() => void>>();
+		textContent = "";
+		style = { cssText: "" };
+		ownerDocument: MiniDocument;
+		#classList = new MiniClassList();
+		constructor(tag: string, doc: MiniDocument) {
+			this.tagName = tag.toUpperCase();
+			this.ownerDocument = doc;
+		}
+		get className() {
+			return this.#classList.toString();
+		}
+		set className(v: string) {
+			this.#classList = new MiniClassList(v);
+		}
+		get classList() {
+			return this.#classList;
+		}
+		setAttribute(k: string, v: string) {
+			this.attrs.set(k, String(v));
+			if (k === "id") this.id = String(v);
+		}
+		getAttribute(k: string) {
+			return this.attrs.get(k) ?? null;
+		}
+		appendChild(ch: MiniElement) {
+			const idx = this.children.indexOf(ch);
+			if (idx >= 0) this.children.splice(idx, 1);
+			this.children.push(ch);
+			return ch;
+		}
+		remove() {
+			/* no-op in mini test */
+		}
+		addEventListener(ev: string, fn: () => void) {
+			const list = this.listeners.get(ev) ?? [];
+			list.push(fn);
+			this.listeners.set(ev, list);
+		}
+		click() {
+			for (const fn of this.listeners.get("click") ?? []) fn();
+		}
+		querySelector(sel: string): MiniElement | null {
+			const match = (el: MiniElement): boolean => {
+				if (sel.startsWith("#")) return el.id === sel.slice(1);
+				if (sel.startsWith(".")) return el.classList.contains(sel.slice(1));
+				if (sel.startsWith("[") && sel.endsWith("]")) return el.attrs.has(sel.slice(1, -1));
+				return false;
+			};
+			for (const ch of this.children) {
+				if (match(ch)) return ch;
+				const sub = ch.querySelector(sel);
+				if (sub) return sub;
+			}
+			return null;
+		}
+	}
+	class MiniDocument {
+		readyState = "complete";
+		body: MiniElement;
+		constructor() {
+			this.body = new MiniElement("body", this);
+		}
+		createElement(tag: string) {
+			return new MiniElement(tag, this);
+		}
+		getElementById(id: string) {
+			return this.body.querySelector(`#${id}`);
+		}
+		querySelector(sel: string) {
+			return this.body.querySelector(sel);
+		}
+	}
+
+	const miniDoc = new MiniDocument();
+	const rpcCalls: Array<{ action: string; params: Record<string, unknown> }> = [];
+	const presetRaw = {
+		temperature: 0.88,
+		prompts: [
+			{ identifier: "main", name: "Main", role: "system", content: "主规则", system_prompt: true, marker: false },
+			{ identifier: "style1", name: "文风·古韵", role: "system", content: "古风描写", system_prompt: false, marker: false },
+			{
+				identifier: "deep1",
+				name: "深度提醒",
+				role: "user",
+				content: "保持人称",
+				system_prompt: false,
+				marker: false,
+				injection_position: 1,
+				injection_depth: 2,
+				injection_order: 333,
+			},
+			{ identifier: "chatHistory", name: "Chat History", role: "system", system_prompt: true, marker: true },
+		],
+		prompt_order: [
+			{
+				character_id: 100001,
+				order: [
+					{ identifier: "main", enabled: true },
+					{ identifier: "style1", enabled: true },
+					{ identifier: "deep1", enabled: false },
+					{ identifier: "chatHistory", enabled: true },
+				],
+			},
+		],
+		extensions: {
+			regex_scripts: [
+				{
+					id: "r1",
+					scriptName: "TGbreak V2.1.6 校验",
+					findRegex: "/foo/g",
+					replaceString: "bar",
+					trimStrings: [],
+					placement: [2],
+					disabled: false,
+					markdownOnly: true,
+					promptOnly: false,
+					runOnEdit: true,
+				},
+			],
+			tavern_helper: {
+				scripts: [{ id: "big_ui", content: "x".repeat(20000), enabled: true }],
+				variables: { wave_mode: "novel" },
+			},
+		},
+	};
+
+	const parentWin: Record<string, unknown> = {
+		document: miniDoc,
+		__liyuanRuntimeContext: {
+			card: "c.png",
+			charName: "云澜",
+			userName: "沈舟",
+			chatId: "chat-1",
+			sessionId: "sess-1",
+			mode: "roleplay",
+			streaming: false,
+			presetName: "TGbreak😺V2.1.6",
+			presetNames: ["TGbreak😺V2.1.6", "梦鲸思客V5-1030-exp"],
+			presetRaw,
+			worldbooks: [],
+			displayRules: [],
+			scriptVars: {
+				global: { sleep_var_zishu_define: "1600字" },
+				preset: { preset_flag: "on" },
+				chat: {},
+			},
+			messages: [{ message_id: 0, role: "assistant", name: "云澜", message: "你好", text: "你好" }],
+		},
+		Liyuan: {
+			call: async (action: string, params: Record<string, unknown> = {}) => {
+				rpcCalls.push({ action, params });
+				return { ok: true, action, result: {} };
+			},
+		},
+		postMessage: () => {},
+	};
+	parentWin.window = parentWin;
+	parentWin.globalThis = parentWin;
+	parentWin.addEventListener = () => {};
+	parentWin.setTimeout = setTimeout;
+	parentWin.clearTimeout = clearTimeout;
+	parentWin.console = console;
+	parentWin.Date = Date;
+	parentWin.Math = Math;
+	parentWin.JSON = JSON;
+	parentWin.Promise = Promise;
+	parentWin.Map = Map;
+	parentWin.Set = Set;
+	parentWin.Array = Array;
+	parentWin.Object = Object;
+	parentWin.String = String;
+	parentWin.Number = Number;
+	parentWin.Boolean = Boolean;
+	parentWin.RegExp = RegExp;
+	parentWin.Error = Error;
+	parentWin.TypeError = TypeError;
+	parentWin.parseInt = parseInt;
+	parentWin.parseFloat = parseFloat;
+	parentWin.isNaN = isNaN;
+	parentWin.isFinite = isFinite;
+	parentWin.encodeURIComponent = encodeURIComponent;
+
+	// 在父页跑 globals，再在子帧跑 bridge + globals
+	vm.createContext(parentWin);
+	vm.runInContext(stripScriptTags(IFRAME_TAVERN_GLOBALS_SNIPPET), parentWin);
+
+	const { win } = createIframeSandbox({
+		iframeName: "TH-script--preset--orb_v2",
+		parentWin,
+	});
+
+	// 1. 变量读取：global 与 preset 合并了服务端同步数据与预设自带 variables
+	assert.equal(win.getVariables({ type: "global" }).sleep_var_zishu_define, "1600字");
+	assert.equal(win.getVariables({ type: "preset" }).wave_mode, "novel");
+	assert.equal(win.getVariables({ type: "preset" }).preset_flag, "on");
+
+	// 2. 通道 A：预设名称、toPreset、getTavernRegexes({ type: 'preset' }) 与 reasoning 管理器
+	assert.equal(win.getLoadedPresetName(), "TGbreak😺V2.1.6");
+	assert.deepEqual([...win.getPresetNames()], ["in_use", "TGbreak😺V2.1.6", "梦鲸思客V5-1030-exp"]);
+	const pView = win.getPreset("in_use");
+	assert.equal(pView.settings.temperature, 0.88);
+	assert.equal(pView.prompts.length, 4);
+	assert.deepEqual(JSON.parse(JSON.stringify(pView.prompts.find((p: any) => p.id === "deep1")?.position)), {
+		type: "in_chat",
+		depth: 2,
+		order: 333,
+	});
+	assert.equal(pView.extensions.regex_scripts[0].script_name, "TGbreak V2.1.6 校验");
+
+	const presetRegexes = win.getTavernRegexes({ type: "preset", name: "in_use" });
+	assert.equal(presetRegexes.length, 1);
+	assert.equal(presetRegexes[0].script_name, "TGbreak V2.1.6 校验");
+	assert.equal(presetRegexes[0].enabled, true);
+
+	const reasoningMgr = win.SillyTavern.getContext().getPresetManager("reasoning");
+	assert.equal(reasoningMgr.apiId, "reasoning");
+	assert.equal(reasoningMgr.getSelectedPresetName(), "Default");
+
+	// 3. 通道 B：chatCompletionSettings 严格保持同一引用（《我即浪潮》强校验），builtin.promptManager.render 刷新 DOM
+	const stCtx1 = win.SillyTavern.getContext();
+	const stCtx2 = win.SillyTavern.getContext();
+	assert.strictEqual(stCtx1.chatCompletionSettings, stCtx2.chatCompletionSettings);
+	assert.equal(typeof win.builtin.promptManager.render, "function");
+	assert.equal(typeof (parentWin as any).builtin.promptManager.render, "function");
+
+	// 通道 C：隐藏 #completion_prompt_manager_list 原地存在并可按 li[data-pm-identifier] 操作
+	const ul = miniDoc.getElementById("completion_prompt_manager_list")!;
+	assert.ok(ul, "父页应挂载隐藏 #completion_prompt_manager_list");
+	const liStyle1 = ul.children.find((el) => el.getAttribute("data-pm-identifier") === "style1")!;
+	const liDeep1 = ul.children.find((el) => el.getAttribute("data-pm-identifier") === "deep1")!;
+	assert.ok(liStyle1 && !liStyle1.classList.contains("completion_prompt_manager_prompt_disabled"));
+	assert.ok(liDeep1 && liDeep1.classList.contains("completion_prompt_manager_prompt_disabled"));
+	assert.equal(liStyle1.querySelector(".prompt-manager-name")?.getAttribute("data-pm-name"), "文风·古韵");
+
+	// 点击 .prompt-manager-toggle-action 应原地翻转 class 并保持同一 <li> 实例（触发 MutationObserver）
+	liStyle1.querySelector(".prompt-manager-toggle-action")!.click();
+	assert.ok(liStyle1.classList.contains("completion_prompt_manager_prompt_disabled"), "点击切换后应加上 disabled 类");
+	assert.strictEqual(
+		ul.children.find((el) => el.getAttribute("data-pm-identifier") === "style1"),
+		liStyle1,
+		"必须原地复用 li 节点，不能整棵销毁重绘",
+	);
+	assert.equal(win.getPreset("in_use").prompts.find((p: any) => p.id === "style1")?.enabled, false);
+
+	// 等待通道 C 防抖写回落到 Liyuan.preset.update，且不包含未变动的 20KB tavern_helper.scripts
+	await new Promise((r) => setTimeout(r, 120));
+	const updateCall = rpcCalls.find((c) => c.action === "preset.update");
+	assert.ok(updateCall, "通道 C 开关点击应触发 Liyuan.preset.update");
+	const patch = updateCall!.params.patch as Record<string, any>;
+	assert.ok(Array.isArray(patch.order));
+	assert.equal(patch.order.find((o: any) => o.identifier === "style1")?.enabled, false);
+	assert.ok(!JSON.stringify(patch).includes("xxxxxxxx"), "增量补丁不得重复序列化未变的 tavern_helper.scripts");
+
+	// 4. 通道 A：updatePresetWith 写回并刷新隐藏 DOM
+	rpcCalls.length = 0;
+	await win.updatePresetWith("in_use", (p: any) => {
+		const target = p.prompts.find((x: any) => x.id === "deep1");
+		target.enabled = true;
+		return p;
+	});
+	assert.ok(!liDeep1.classList.contains("completion_prompt_manager_prompt_disabled"), "通道 A 更新应同步移除隐藏 DOM 的 disabled 类");
+	assert.ok(rpcCalls.some((c) => c.action === "preset.update"));
+
+	// 5. 通道 B：原地改 chatCompletionSettings + saveSettingsDebounced
+	rpcCalls.length = 0;
+	stCtx1.chatCompletionSettings.prompts[1].content = "现代白描";
+	stCtx1.saveSettingsDebounced();
+	await new Promise((r) => setTimeout(r, 120));
+	const bCall = rpcCalls.find((c) => c.action === "preset.update");
+	assert.ok(bCall, "saveSettingsDebounced 应落盘变更的 prompts 内容");
+	assert.equal((bCall!.params.patch as any).prompts?.[0]?.content, "现代白描");
+});
+
 
 

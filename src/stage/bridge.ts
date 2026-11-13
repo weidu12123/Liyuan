@@ -16,6 +16,8 @@ export interface StageToolResult {
 
 export interface StageHooks {
 	systemPrompt: string;
+	/** true = 跳过 pi 的 SYSTEM.md / APPEND_SYSTEM.md / AGENTS.md，完全以 systemPrompt 为准（纯酒馆复现模式用） */
+	replaceSystemPrompt?: boolean;
 	toolNames: string[];
 	context(messages: unknown[]): unknown[];
 	providerPayload(payload: unknown, model?: StageModelLike): unknown;

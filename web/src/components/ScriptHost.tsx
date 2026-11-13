@@ -20,8 +20,9 @@ export { isBlockedExternalScriptNode, scriptFrameMeta };
 
 type HostWindow = Window & { [AUTHOR_SCRIPTS_GLOBAL]?: AuthorScript[] };
 
-/** 这些节点是梨园自己的：React 根，以及包含根的祖先（万一将来根被包了一层） */
+/** 这些节点是梨园自己的：React 根（及其祖先）和预设管理器隐藏 DOM 镜像 */
 function isLiyuanOwned(el: Element, root: Element | null): boolean {
+	if (el.id === "completion_prompt_manager_list") return true;
 	if (!root) return false;
 	return el === root || el.contains(root);
 }

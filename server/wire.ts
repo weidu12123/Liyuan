@@ -292,6 +292,8 @@ export type ServerFrame =
 			type: "hello";
 			/** 界面语言（config.uiLanguage；没写＝前端按浏览器语言） */
 			uiLanguage?: "zh" | "en";
+			/** 预设运行模式（"liyuan" | "pure"） */
+			presetMode?: "liyuan" | "pure";
 			conversationMode?: ConversationMode;
 			turnMode?: ConversationMode;
 			/** agent 子项目：当前分支的章目录（正文经 GET /api/story 取，hello 不扛正文） */

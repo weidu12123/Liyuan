@@ -725,7 +725,12 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 			);
 			writeFileSync(
 				join(cliRoot, "liyuan.config.json"),
-				JSON.stringify({ card: "assets/cards/default_Sera.json", preset: "assets/presets/test_preset.json", userName: "旅人" }),
+				JSON.stringify({
+					card: "assets/cards/default_Sera.json",
+					preset: "assets/presets/test_preset.json",
+					presetMode: "pure",
+					userName: "旅人",
+				}),
 				"utf8",
 			);
 
@@ -755,8 +760,10 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 				child.stdin.write('/script data.read {"scope":"script","scriptId":"cli-test"}\n');
 				child.stdin.write("/script preset.list\n");
 				child.stdin.write('/script preset.get {"includeRaw":true}\n');
+				child.stdin.write('/script preset.preview {"userText":"推门进去"}\n');
 				child.stdin.write('/script preset.update {"patch":{"blocks":[{"id":"b1","enabled":true,"content":"新文风"}]}}\n');
 				child.stdin.write("/script preset.get\n");
+				child.stdin.write('/script preset.preview {"userText":"推门进去"}\n');
 				child.stdin.write("/exit\n");
 				child.stdin.end();
 			});
@@ -768,6 +775,9 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 			assert.ok(cliOutput.includes('"action":"preset.get"') && cliOutput.includes("旧文风"), "CLI 应读到初始预设原文");
 			assert.ok(cliOutput.includes('"action":"preset.update"') && cliOutput.includes('"status":"refreshed"'), "CLI 应更新草稿并完成热刷新");
 			assert.ok(cliOutput.includes('"dirty":true') && cliOutput.includes("新文风"), "CLI 再次读取应拿到草稿中已开启的新内容");
+			assert.ok(cliOutput.includes('"action":"preset.preview"') && cliOutput.includes('"presetMode":"pure"'), "CLI 应返回 preset.preview 报文");
+			assert.ok(cliOutput.includes("新文风") && cliOutput.includes("推门进去"), "CLI preset.preview 应实时体现新开启的预设内容与用户输入");
+			assert.ok(!cliOutput.includes("【世界状态】"), "preset.preview 报文不得含梨园静态/动态提示词");
 		} finally {
 			rmSync(cliRoot, { recursive: true, force: true });
 			rmSync(cliAgent, { recursive: true, force: true });

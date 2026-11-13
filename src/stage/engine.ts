@@ -64,6 +64,8 @@ import {
 } from "./compact.ts";
 import { runScribeTurn, STATE_ENTRY_TYPE } from "./scribe-run.ts";
 import { seedMvuIfNeeded, findMvuRules } from "../mvu.ts";
+import { readScriptScopeVarsSync, writeScriptScopeVarUpdatesSync } from "../script-api.ts";
+import { assemblePureTavern } from "./pure-tavern.ts";
 import {
 	compileStagePromptTemplates,
 	createEjsContext,
@@ -932,6 +934,7 @@ export class StageEngine {
 		// 素材现读：改卡/改预设/挂书即时生效
 		const materials = loadStageMaterials(cwd);
 		const { config, card } = materials;
+		const purePresetMode = !agentTurn && config.presetMode === "pure";
 
 		const model = this.#deps.getModel();
 		if (!model) {
@@ -945,13 +948,15 @@ export class StageEngine {
 			...sm.getBranch(),
 			...(userText !== null ? [{ type: "message", message: nowMsg(userText) }] : []),
 		] as BranchEntryLike[];
-		const state = seedMvuIfNeeded(
-			stateFromBranch(branch),
-			materials.allLoreEntries ?? materials.card.book,
-			config.userName,
-			card.name,
-			materials.cardAuthorScripts,
-		) as WorldState;
+		const state = purePresetMode
+			? (stateFromBranch(branch) as WorldState)
+			: (seedMvuIfNeeded(
+					stateFromBranch(branch),
+					materials.allLoreEntries ?? materials.card.book,
+					config.userName,
+					card.name,
+					materials.cardAuthorScripts,
+				) as WorldState);
 		const { history, lastNarrativeText, summary: branchSummary } = rebuildHistory(branch, materials.promptRules, {
 			charName: card.name,
 			userName: config.userName,
@@ -967,110 +972,24 @@ export class StageEngine {
 			return { aborted: false, error: "no-user-input" };
 		}
 
-		const languageMismatch = lastNarrativeText
+		const languageMismatch = !purePresetMode && lastNarrativeText
 			? detectsLanguageMismatch(lastNarrativeText, config.language)
 			: false;
-		const tplCompiled = await compileStagePromptTemplates({
-			cardAgentsRaw: materials.cardAgentsRaw ?? materials.cardAgents,
-			cardAgentsRendered: materials.cardAgents,
-			entries: materials.entries,
-			allLoreEntries: materials.allLoreEntries ?? materials.entries,
-			state,
-			charName: card.name,
-			userName: config.userName,
-			chatId: sm.getSessionId(),
-			messages: history.map((m) => ({ role: m.role, content: m.text })),
-		});
-		const effectiveEntries = tplCompiled.entries;
-		const effectiveCardAgents = tplCompiled.cardAgents;
 
-		// 关键词扫描只看剧情流（含 @@preprocessing 动态产出的关键词）
-		const baseWindowText = history
-			.slice(-config.scanDepth)
-			.map((m) => m.text)
-			.join("\n");
-		const windowText = tplCompiled.preprocessedWindowText
-			? `${baseWindowText}\n${tplCompiled.preprocessedWindowText}`
-			: baseWindowText;
-		const rawActivated = scanEntries(effectiveEntries, windowText, config.maxLoreInjections);
-		const activated = await Promise.all(
-			rawActivated.map(async (e) =>
-				hasPromptTemplateSyntax(e.content)
-					? {
-							...e,
-							content: await evalLoreEntryContent(e, tplCompiled.ejsContext, {
-								charName: card.name,
-								userName: config.userName,
-							}),
-						}
-					: e,
-			),
-		);
+		let systemPrompt = "";
+		let tools: StageTool[] = [];
+		let rpNames: string[] = [];
+		let agentNames: string[] = [];
+		let nativeNames: string[] = [];
+		let readDeps!: StageToolDeps;
+		let cardDeps!: CardDeps;
+		let mediaOpts = { tts: false };
+		let agentPrompt = "";
+		let storyDir: string | undefined;
+		let agentStateBlock = () => "";
+		let messages: unknown[] = [];
+		let samplers = config.samplers ?? materials.presetDoc?.samplers;
 
-		// 面板快照（M1 读磁盘缓存；写侧与分支化随 M3）。
-		// 声明了数据的面板喂**数据**不喂外观——一张 HTML 面板的标签动辄四千字，
-		// 每拍原样喂给模型纯属白烧，它要的只是里面那几十个字的事实。
-		let panelIndex: string | undefined;
-		try {
-			const panels = loadPanels(chatDataPath(cwd, sm.getSessionDir?.(), sm.getSessionId(), "panels"));
-			panelIndex =
-				formatPanelSnapshot(panels, { data: state.panelData }) ?? formatPanelIndex(panels) ?? undefined;
-		} catch {
-			panelIndex = undefined;
-		}
-
-		// M-C2：外部插件协议条目退场（世界书/卡内嵌通道 H 类）——每套组合只播报一次
-		if (materials.protocolDrops.length > 0) {
-			const key = materials.protocolDrops.map((d) => `${d.family}:${d.title}`).join("|");
-			if (key !== this.#warnedProtocolDrop) {
-				this.#warnedProtocolDrop = key;
-				const chars = materials.protocolDrops.reduce((n, d) => n + d.chars, 0);
-				const titles = materials.protocolDrops.map((d) => `${d.label}「${d.title}」`).join("、");
-				console.error(
-					`[stage] 外部插件协议退场：${materials.protocolDrops.length} 条 / ${chars} 字（${titles}）——梨园以工具记账，无需模型手写格式块`,
-				);
-			}
-		}
-
-		// M-A 工具组 + skill_read（M-R2 名称制：文件包+进口包非空才挂——不凭空点名）。
-		// 回合工作区 = 正文工件的落点；字数目标在此提取一次（数据，供末端注入）。
-		// 读侧依赖先建：统一层按注入情况决定哪些世界书工具上清单（M-D2）。
-		// skill 全部走标准按需档：名字+描述上 skill_read 清单，读不读归模型（8/23 定案）。
-		// 写卡手册（frontmatter mode: authoring）不上 skill_read 清单：它是 card_project 的说明书，由该工具的 guide 操作按需读
-		const skillList = materials.skillFiles.filter((f) => f.mode !== "authoring").map((f) => ({ name: f.name, description: f.description }));
-		const readDeps = this.#toolDeps(agentTurn ? "collaborator" : "stage");
-		// MCP 外设（8/06 重接）：hub 里本会话已连接的工具并入清单。
-		// 空数组＝没启用/没连上，与「未注入 mcp 依赖」同效——都不上清单。
-		const mcpTools = mcpStageTools(this.#deps.mcp);
-		// 媒体交付（8/06 重接）：tts 另需服务端环境，未就绪不上清单
-		const mediaOpts = { tts: this.#deps.ttsAvailable?.() === true };
-		const mediaTools = this.#deps.media ? mediaStageTools(config.language, mediaOpts) : [];
-		// P7：ask 工具依赖宿主注入 askUser（选择卡通道）；未注入则从清单剔除
-		const askEnabled = !!this.#deps.askUser;
-		const rpTools: StageTool[] = [
-			...stageTools(config.language, readDeps),
-			...(skillList.length > 0 ? [skillReadTool(config.language, skillList)] : []),
-			...writeTools(config.language).filter((t) => t.name !== "ask" || askEnabled),
-			...mediaTools,
-			...mcpTools,
-		];
-		const cardDeps: CardDeps = { ...readDeps, ...this.#deps.authoring };
-		const nativeNames = config.backendControl === false ? [] : session.getAllTools().map((t) => t.name).filter((n) => AUTHORING_NATIVE_TOOLS.includes(n));
-		// agent 模式清单（docs/PLAN-AGENT-CODING.md §五）＝扮演数据工具中与树无关的（世界线是树分支，不给）∪ skill_read ∪ ask
-		// ∪ 媒体 ∪ MCP ∪ 写卡工具 ∪ 原生七工具；稿子就用原生 read/grep/edit/write。排在最前：同名工具（ask）以 agent 版定义为准。
-		const storyDir = agentTurn ? storyDirectory(chatDir!) : undefined;
-		const agentTools: StageTool[] = agentTurn ? [
-			...stageTools(config.language, readDeps).filter((t) => !t.name.startsWith("worldline_")),
-			...(skillList.length ? [skillReadTool(config.language, skillList)] : []),
-			...(askEnabled ? [AGENT_ASK_TOOL] : []),
-			...(this.#deps.screenshot ? [AGENT_SCREENSHOT_TOOL] : []),
-			...mediaTools, ...mcpTools,
-			...authoringTools(config.language, cardDeps),
-		] : [];
-		const rpNames = rpTools.map((t) => t.name);
-		const agentNames = [...new Set([...agentTools.map((t) => t.name), ...nativeNames])];
-		const tools = [...new Map([...agentTools, ...rpTools].map((t) => [t.name, t])).values()];
-		const agentPrompt = agentSystemPrompt({ cwd, cardPath: config.card, chatDir, storyDir: storyDir!, userRules, chatMemoryIndex, cardAgents: materials.cardAgents, macro: { charName: card.name, userName: config.userName } });
 		const ws = createWorkspace({ sessionId: sm.getSessionId(), parentId: sm.getLeafId(),
 			...(userText === null ? { userId: [...branch].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.id } : {}) });
 		const draftStore = new DraftStore(draftDirectory(cwd, sm.getSessionDir?.(), sm.getSessionId()), ws.id);
@@ -1086,57 +1005,6 @@ export class StageEngine {
 		this.#workspace = agentTurn ? undefined : { ws, deps: wsDeps };
 		if (!agentTurn) { draftStore.write(ws); ev.onWorkspace?.(ws); }
 
-		// 【剧情记忆】被动召回：向量库注入侧。旁路调用必须带超时——provider 抽风时单次能卡
-		// 几百秒，扮演不能陪着干等；拿不到就当没有，这一拍不出该块。
-		const memoryRecall = agentTurn ? undefined : await this.#recallForBeat(sm.getSessionId(), lastUserText);
-
-		const fragments = this.#deps.getPromptFragments
-			? await this.#deps.getPromptFragments({ materials, state, lastUserText, history })
-			: [];
-		const extraSystemFragments = fragments.filter((f) => f.placement === "system" && f.text.trim()).map((f) => f.text);
-
-		const systemPrompt = buildStageSystemPrompt({
-			card,
-			config,
-			constantLore: constantLoreOf({ ...materials, entries: effectiveEntries }),
-			userRules,
-			chatMemoryIndex,
-			cardAgents: effectiveCardAgents,
-			...(extraSystemFragments.length > 0 ? { extraSystemFragments } : {}),
-			tools: tools.length > 0,
-			// MCP 外设索引进 system（不进每拍注入）：会话内字节稳定，不破前缀缓存。
-			// 与旧 director.ts 同一位置——工具清单里有 mcp__ 工具，这里说明它们是什么。
-			mcpTools: mcpTools.map((t) => ({ name: t.name, description: t.description })),
-		});
-		const rosterIndex = formatRosterIndex(state);
-		const injection = buildStageInjection({
-			state,
-			activatedLore: activated,
-			card,
-			config,
-			languageMismatch,
-			cardAgentsActive: effectiveCardAgents.trim().length > 0,
-			panelIndex,
-			loreIndex: formatLoreIndex(effectiveEntries),
-			rosterIndex,
-			...(memoryRecall ? { memoryRecall } : {}),
-			// off 挡（无原生思考通道、不主动检索）：绿灯命中给正文兜底；其余档位给标题让模型自取。
-			passiveLore: (this.#deps.getThinking?.() ?? "off") === "off",
-			// 导演备注（PLAN-DIRECTOR-NOTE）：本拍瞬时指示，不落树；无备注时与既有装配逐字相同。
-			...(directorNote?.trim() ? { directorNote } : {}),
-		});
-
-		// 卡级跨项目常驻摘要已废除（记忆与前情严格限在当前项目内，跨会话通过项目级 前情提要.md 接力）。
-		const residentSummary = undefined;
-		// agent 模式的项目状态块（docs/PLAN-AGENT-CODING.md §六）：与扮演同一份数据，多带稿子目录（不带正文）；每次装配现读目录。
-		const agentStateBlock = (): string => buildAgentStateBlock({ state, rosterIndex, summary, residentSummary, files: listStoryFiles(storyDir!) });
-
-		// 末端消息 = 梨园数据块 + 本拍用户原话。
-		// 顺序要紧：用户当拍的话必须落在梨园数据块之后。
-		const endsWithUser = history[history.length - 1]?.role === "user";
-		const past = endsWithUser ? history.slice(0, -1) : history;
-		const tailText = endsWithUser ? `${injection}\n\n${history[history.length - 1].text}` : injection;
-
 		const asUser = (text: string, timestamp = 0) => ({ role: "user", content: [{ type: "text", text }], timestamp });
 		const asAssistant = (text: string, timestamp = 0) => ({
 			role: "assistant",
@@ -1151,31 +1019,197 @@ export class StageEngine {
 			stopReason: "stop",
 			timestamp,
 		});
-
-		const timeline = applyHistoryInjections(past, tailText, fragments, { tailHasUserMessage: endsWithUser });
 		const nowTs = Date.now();
-		const messages: unknown[] = [
-			// M4 前情提要：被 rp-summary 覆盖的早期剧情在此回读（历史里那段已整体不存在）。
-			// 以 user 角色打头，措辞与 system「消息流约定」里的【前情提要】对上。
-			// 跨会话常驻摘要（如有）接在本局摘要之后：同一语义、同一句开场。
-			...(summary || residentSummary
-				? [
-						{
-							role: "user",
-							content: [
-								{
-									type: "text",
-									text: `【前情提要】以下是更早剧情的接力摘要，是既定事实：\n\n${[summary, residentSummary]
-										.filter(Boolean)
-										.join("\n\n")}`,
-								},
-							],
-							timestamp: 0,
-						},
-					]
-				: []),
-			...timeline.map((m) => (m.role === "user" ? asUser(m.text, m.isTail ? nowTs : 0) : asAssistant(m.text, m.isTail ? nowTs : 0))),
-		];
+
+		if (purePresetMode) {
+			const sessionId = sm.getSessionId();
+			const presetName = materials.presetDoc?.name;
+			const chatVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "chat", presetName);
+			const globalVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "global", presetName);
+			const characterVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "character", presetName);
+			const presetVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "preset", presetName);
+			const extFragments = this.#deps.getPromptFragments
+				? await this.#deps.getPromptFragments({ materials, state, lastUserText, history })
+				: [];
+			const pureResult = await assemblePureTavern({
+				card,
+				presetDoc: materials.presetDoc,
+				loreEntries: materials.pureLoreEntries ?? materials.entries,
+				allLoreEntries: materials.allLoreEntries ?? materials.entries,
+				userName: config.userName,
+				userPersona: config.userPersona,
+				history,
+				userText: lastUserText,
+				scanDepth: config.scanDepth,
+				maxLoreInjections: config.maxLoreInjections,
+				chatId: sessionId,
+				model: model.id,
+				chatVars,
+				globalVars,
+				characterVars,
+				presetVars,
+				extensionPrompts: extFragments,
+				worldInfoRegexRules: materials.worldInfoRegexRules,
+				userInputRegexRules: materials.userInputRegexRules,
+			});
+			writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "chat", pureResult.dirtyLocal, presetName);
+			writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "global", pureResult.dirtyGlobal, presetName);
+			systemPrompt = pureResult.systemPrompt;
+			messages = pureResult.messages.map((m) =>
+				m.role === "user" ? asUser(m.text, m.isTail ? nowTs : 0) : asAssistant(m.text, m.isTail ? nowTs : 0),
+			);
+			samplers = pureResult.samplers ?? config.samplers;
+			readDeps = this.#toolDeps("stage");
+			cardDeps = { ...readDeps, ...this.#deps.authoring };
+		} else {
+			const tplCompiled = await compileStagePromptTemplates({
+				cardAgentsRaw: materials.cardAgentsRaw ?? materials.cardAgents,
+				cardAgentsRendered: materials.cardAgents,
+				entries: materials.entries,
+				allLoreEntries: materials.allLoreEntries ?? materials.entries,
+				state,
+				charName: card.name,
+				userName: config.userName,
+				chatId: sm.getSessionId(),
+				messages: history.map((m) => ({ role: m.role, content: m.text })),
+			});
+			const effectiveEntries = tplCompiled.entries;
+			const effectiveCardAgents = tplCompiled.cardAgents;
+
+			const baseWindowText = history
+				.slice(-config.scanDepth)
+				.map((m) => m.text)
+				.join("\n");
+			const windowText = tplCompiled.preprocessedWindowText
+				? `${baseWindowText}\n${tplCompiled.preprocessedWindowText}`
+				: baseWindowText;
+			const rawActivated = scanEntries(effectiveEntries, windowText, config.maxLoreInjections);
+			const activated = await Promise.all(
+				rawActivated.map(async (e) =>
+					hasPromptTemplateSyntax(e.content)
+						? {
+								...e,
+								content: await evalLoreEntryContent(e, tplCompiled.ejsContext, {
+									charName: card.name,
+									userName: config.userName,
+								}),
+							}
+						: e,
+				),
+			);
+
+			let panelIndex: string | undefined;
+			try {
+				const panels = loadPanels(chatDataPath(cwd, sm.getSessionDir?.(), sm.getSessionId(), "panels"));
+				panelIndex =
+					formatPanelSnapshot(panels, { data: state.panelData }) ?? formatPanelIndex(panels) ?? undefined;
+			} catch {
+				panelIndex = undefined;
+			}
+
+			if (materials.protocolDrops.length > 0) {
+				const key = materials.protocolDrops.map((d) => `${d.family}:${d.title}`).join("|");
+				if (key !== this.#warnedProtocolDrop) {
+					this.#warnedProtocolDrop = key;
+					const chars = materials.protocolDrops.reduce((n, d) => n + d.chars, 0);
+					const titles = materials.protocolDrops.map((d) => `${d.label}「${d.title}」`).join("、");
+					console.error(
+						`[stage] 外部插件协议退场：${materials.protocolDrops.length} 条 / ${chars} 字（${titles}）——梨园以工具记账，无需模型手写格式块`,
+					);
+				}
+			}
+
+			const skillList = materials.skillFiles.filter((f) => f.mode !== "authoring").map((f) => ({ name: f.name, description: f.description }));
+			readDeps = this.#toolDeps(agentTurn ? "collaborator" : "stage");
+			const mcpTools = mcpStageTools(this.#deps.mcp);
+			mediaOpts = { tts: this.#deps.ttsAvailable?.() === true };
+			const mediaTools = this.#deps.media ? mediaStageTools(config.language, mediaOpts) : [];
+			const askEnabled = !!this.#deps.askUser;
+			const rpTools: StageTool[] = [
+				...stageTools(config.language, readDeps),
+				...(skillList.length > 0 ? [skillReadTool(config.language, skillList)] : []),
+				...writeTools(config.language).filter((t) => t.name !== "ask" || askEnabled),
+				...mediaTools,
+				...mcpTools,
+			];
+			cardDeps = { ...readDeps, ...this.#deps.authoring };
+			nativeNames = config.backendControl === false ? [] : session.getAllTools().map((t) => t.name).filter((n) => AUTHORING_NATIVE_TOOLS.includes(n));
+			storyDir = agentTurn ? storyDirectory(chatDir!) : undefined;
+			const agentTools: StageTool[] = agentTurn ? [
+				...stageTools(config.language, readDeps).filter((t) => !t.name.startsWith("worldline_")),
+				...(skillList.length ? [skillReadTool(config.language, skillList)] : []),
+				...(askEnabled ? [AGENT_ASK_TOOL] : []),
+				...(this.#deps.screenshot ? [AGENT_SCREENSHOT_TOOL] : []),
+				...mediaTools, ...mcpTools,
+				...authoringTools(config.language, cardDeps),
+			] : [];
+			rpNames = rpTools.map((t) => t.name);
+			agentNames = [...new Set([...agentTools.map((t) => t.name), ...nativeNames])];
+			tools = [...new Map([...agentTools, ...rpTools].map((t) => [t.name, t])).values()];
+			agentPrompt = agentSystemPrompt({ cwd, cardPath: config.card, chatDir, storyDir: storyDir!, userRules, chatMemoryIndex, cardAgents: materials.cardAgents, macro: { charName: card.name, userName: config.userName } });
+
+			const memoryRecall = agentTurn ? undefined : await this.#recallForBeat(sm.getSessionId(), lastUserText);
+
+			const fragments = this.#deps.getPromptFragments
+				? await this.#deps.getPromptFragments({ materials, state, lastUserText, history })
+				: [];
+			const extraSystemFragments = fragments.filter((f) => f.placement === "system" && f.text.trim()).map((f) => f.text);
+
+			systemPrompt = buildStageSystemPrompt({
+				card,
+				config,
+				constantLore: constantLoreOf({ ...materials, entries: effectiveEntries }),
+				userRules,
+				chatMemoryIndex,
+				cardAgents: effectiveCardAgents,
+				...(extraSystemFragments.length > 0 ? { extraSystemFragments } : {}),
+				tools: tools.length > 0,
+				mcpTools: mcpTools.map((t) => ({ name: t.name, description: t.description })),
+			});
+			const rosterIndex = formatRosterIndex(state);
+			const injection = buildStageInjection({
+				state,
+				activatedLore: activated,
+				card,
+				config,
+				languageMismatch,
+				cardAgentsActive: effectiveCardAgents.trim().length > 0,
+				panelIndex,
+				loreIndex: formatLoreIndex(effectiveEntries),
+				rosterIndex,
+				...(memoryRecall ? { memoryRecall } : {}),
+				passiveLore: (this.#deps.getThinking?.() ?? "off") === "off",
+				...(directorNote?.trim() ? { directorNote } : {}),
+			});
+
+			const residentSummary = undefined;
+			agentStateBlock = (): string => buildAgentStateBlock({ state, rosterIndex, summary, residentSummary, files: listStoryFiles(storyDir!) });
+
+			const endsWithUser = history[history.length - 1]?.role === "user";
+			const past = endsWithUser ? history.slice(0, -1) : history;
+			const tailText = endsWithUser ? `${injection}\n\n${history[history.length - 1].text}` : injection;
+
+			const timeline = applyHistoryInjections(past, tailText, fragments, { tailHasUserMessage: endsWithUser });
+			messages = [
+				...(summary || residentSummary
+					? [
+							{
+								role: "user",
+								content: [
+									{
+										type: "text",
+										text: `【前情提要】以下是更早剧情的接力摘要，是既定事实：\n\n${[summary, residentSummary]
+											.filter(Boolean)
+											.join("\n\n")}`,
+									},
+								],
+								timestamp: 0,
+							},
+						]
+					: []),
+				...timeline.map((m) => (m.role === "user" ? asUser(m.text, m.isTail ? nowTs : 0) : asAssistant(m.text, m.isTail ? nowTs : 0))),
+			];
+		}
 
 		const { apiKey, headers } = await this.#deps.getAuth(model);
 		if (this.#abort?.signal.aborted) {
@@ -1183,8 +1217,6 @@ export class StageEngine {
 			sm.flush();
 			return { aborted: true };
 		}
-		// 采样参数（刀2 D1）：config.samplers（预设转译迁来的家）优先，遗留预设文件兜底
-		const samplers = config.samplers ?? materials.presetDoc?.samplers;
 		let final: AssistantMsgLike | null = null;
 		let errored: string | undefined;
 		let text = "";
@@ -1334,9 +1366,15 @@ export class StageEngine {
 			// 二选一会把那部分连内容一起扔掉（8/05 实锤：模型宣告要出「正文+状态栏+咪咪点评」，
 			// draft_write 只交了正文，屏上流式见过三样、落树只剩一样）。故此处**合并**：
 			// 稿件为主体，text 里**格式特征**的尾巴补回（纯文本闲聊不进正文）。
-			const merged = mergeFinalText(ws.draft, ws.draft.trim() ? loopTail : ws.mode === "write" ? text : "");
+			const merged = purePresetMode
+				? text.trim()
+				: mergeFinalText(ws.draft, ws.draft.trim() ? loopTail : ws.mode === "write" ? text : "");
 			// The existing format-tail compatibility path may add material, but never rewrites the artifact itself.
-			const finalText = ws.draft ? ws.draft + (merged.startsWith(ws.draft.trim()) ? merged.slice(ws.draft.trim().length) : "") : merged;
+			const finalText = purePresetMode
+				? merged
+				: ws.draft
+					? ws.draft + (merged.startsWith(ws.draft.trim()) ? merged.slice(ws.draft.trim().length) : "")
+					: merged;
 			const finalSegments = finalTimeline(ws, finalText).map((s) => s.kind === "text" ? { ...s, draft: true } : s);
 			if (finalText !== ws.draft) reviseDraft(ws, finalText, "finalize");
 			ws.timeline = finalSegments;
@@ -1422,7 +1460,7 @@ export class StageEngine {
 			// 记账（第三步）：world_state_update 已撤出模型视野，账本整体归封笔后的场记旁路。
 			// 触发是结构信号（本拍有正文＝封笔），扮演者无感；场记读「已写出的正文＋当前账本」
 			// 出 patch，判断在模型、落账由 harness 死板执行（叶守卫在 runScribeTurn 内）。
-			if (entryId && !aborted && finalText) {
+			if (!purePresetMode && entryId && !aborted && finalText) {
 				await this.#scribe({ model, auth: { apiKey, headers }, materials, sm, ev, state, userText: lastUserText, assistantText: finalText });
 			}
 			this.#pendingPanelData = {};
@@ -1430,7 +1468,7 @@ export class StageEngine {
 			// 世界线存档（M-D7）：模型本拍调过 worldline_store 才有值。
 			// **必须排在场记之后**——rp-state 刚落在叶上，回退到此点账本才对得齐
 			// （面板快照在 panel_write 时已自落，无需再补）。分线与否由宿主按此刻树形算。
-			if (this.#pendingSave && this.#deps.storeSave && entryId && !aborted && finalText) {
+			if (!purePresetMode && this.#pendingSave && this.#deps.storeSave && entryId && !aborted && finalText) {
 				const want = this.#pendingSave;
 				try {
 					const saved = this.#deps.storeSave(sm.getSessionId(), want);
@@ -1451,7 +1489,7 @@ export class StageEngine {
 			// M4 长局压缩：攒够拍数就把早期剧情摘要成 rp-summary（装配时回读为【前情提要】）。
 			// 放在谢幕前的最后一步——记账已落，摘要能读到最新账本；叶守卫在 runCompaction 内。
 			// 压缩失败/未到期都只是跳过，下一拍会再判一次。
-			if (entryId && !aborted && finalText) {
+			if (!purePresetMode && entryId && !aborted && finalText) {
 				await this.#compact(model, { apiKey, headers }, config.compactEveryNTurns ?? 30);
 			}
 			return { aborted, entryId };
@@ -1471,6 +1509,7 @@ export class StageEngine {
 
 		const hooks: StageHooks = {
 			get systemPrompt() { return agentTurn ? agentPrompt : systemPrompt; },
+			replaceSystemPrompt: purePresetMode,
 			get toolNames() { return mode === "agent" ? agentNames : rpNames; },
 			context: (piMessages) => {
 				// 历史/状态/预设/记忆只有这一份出口；本拍新增的工具过程仍由 pi 持有。
@@ -1607,10 +1646,12 @@ export class StageEngine {
 								}
 								if (!ws.explicitWrites) runWriteTool(ws, wsDeps, "draft_seal", {}, true);
 							}
-						if (!ws.draft.trim() && text.trim() && ws.mode === "write") {
-							const result = runWriteTool(ws, wsDeps, "draft_write", { content: text }, true);
+							if (!ws.draft.trim() && text.trim() && ws.mode === "write") {
+								const result = runWriteTool(ws, wsDeps, "draft_write", { content: text }, true);
 								ws.strayText = "";
-								ev.onActivity?.(result.ok ? "直出正文已代收为 draft_write" : "直出正文代收失败");
+								if (!purePresetMode) {
+									ev.onActivity?.(result.ok ? "直出正文已代收为 draft_write" : "直出正文代收失败");
+								}
 							}
 						}
 					}

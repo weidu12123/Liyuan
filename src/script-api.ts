@@ -29,6 +29,8 @@ import {
 } from "./preset-doc.ts";
 import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import { createEjsContext, evalEjsTemplate, getEjsSyntaxErrorInfo } from "./ejs-engine.ts";
+import { loadStageMaterials } from "./stage/materials.ts";
+import { assemblePureTavern } from "./stage/pure-tavern.ts";
 import type { LorebookEntry, RpConfig, WorldState } from "./types.ts";
 
 export type ScriptCompletionStatus = "accepted" | "completed" | "committed" | "refreshed";
@@ -234,6 +236,7 @@ export const SCRIPT_API_CAPABILITIES = [
 	"preset.list",
 	"preset.get",
 	"preset.update",
+	"preset.preview",
 	"project.files.list",
 	"project.files.read",
 	"project.files.write",
@@ -296,32 +299,33 @@ function scriptDataFilePath(
 	scope: ScriptDataScope,
 	scriptId: string,
 	presetName?: string,
+	ensureDir = true,
 ): string {
 	if (scope === "global") {
 		const dir = join(cwd, ".liyuan-state", "script-data", "global");
-		mkdirSync(dir, { recursive: true });
+		if (ensureDir) mkdirSync(dir, { recursive: true });
 		return join(dir, "_global.json");
 	}
 	if (scope === "extension") {
 		const dir = join(cwd, ".liyuan-state", "script-data", "extension");
-		mkdirSync(dir, { recursive: true });
+		if (ensureDir) mkdirSync(dir, { recursive: true });
 		return join(dir, `${sanitizeScopeId(scriptId, "default")}.json`);
 	}
 	if (scope === "preset") {
 		const dir = join(cwd, ".liyuan-state", "script-data", "preset");
-		mkdirSync(dir, { recursive: true });
+		if (ensureDir) mkdirSync(dir, { recursive: true });
 		const nameKey = presetName ? basename(presetName).replace(/\.json$/i, "") : "default";
 		return join(dir, `${sanitizeScopeId(nameKey, "default")}.json`);
 	}
 	if (scope === "character") {
 		const dir = join(cwd, ".liyuan-state", "script-data", "character");
-		mkdirSync(dir, { recursive: true });
+		if (ensureDir) mkdirSync(dir, { recursive: true });
 		return join(dir, `${sanitizeScopeId(target.card || scriptId, "card")}.json`);
 	}
 	const baseDir = chatDir
 		? join(chatDir, CHAT_SCRIPT_DATA_DIR)
 		: join(cwd, ".liyuan-state", "script-data", sanitizeScopeId(target.sessionId, "session"));
-	mkdirSync(baseDir, { recursive: true });
+	if (ensureDir) mkdirSync(baseDir, { recursive: true });
 	const fileKey =
 		scope === "chat"
 			? "_chat"
@@ -329,6 +333,44 @@ function scriptDataFilePath(
 				? "_messages"
 				: sanitizeScopeId(scriptId, "default");
 	return join(baseDir, `${fileKey}.json`);
+}
+
+export function readScriptScopeVarsSync(
+	cwd: string,
+	chatDir: string | null,
+	sessionId: string,
+	card: string,
+	scope: "global" | "chat" | "character" | "preset",
+	presetName?: string,
+): Record<string, unknown> {
+	const target: ScriptTargetDescriptor = { sessionId, chatDir, card, mode: "roleplay", streaming: false };
+	const file = scriptDataFilePath(cwd, chatDir, target, scope, scope, presetName, false);
+	return readScriptScopeData(file, scope).data;
+}
+
+export function writeScriptScopeVarUpdatesSync(
+	cwd: string,
+	chatDir: string | null,
+	sessionId: string,
+	card: string,
+	scope: "global" | "chat",
+	updates: Record<string, string>,
+	presetName?: string,
+): void {
+	const entries = Object.entries(updates);
+	if (entries.length === 0) return;
+	const target: ScriptTargetDescriptor = { sessionId, chatDir, card, mode: "roleplay", streaming: false };
+	const file = scriptDataFilePath(cwd, chatDir, target, scope, scope, presetName, true);
+	const cur = readScriptScopeData(file, scope);
+	const nextData = { ...cur.data };
+	let changed = false;
+	for (const [k, v] of entries) {
+		if (nextData[k] !== v) {
+			nextData[k] = v;
+			changed = true;
+		}
+	}
+	if (changed) writeScriptDataFile(file, nextData, cur.version);
 }
 
 /** 读取脚本作用域数据：对 global/preset 在主文件尚未生成时兼容旧版 default.json */
@@ -2086,6 +2128,91 @@ export class ScriptApiService {
 							...snapRest,
 							added: updated.added,
 							...(params.includeRaw === true ? { raw: updated.snapshot.raw } : {}),
+						},
+					};
+				}
+
+				case "preset.preview": {
+					const materials = loadStageMaterials(this.#host.cwd);
+					const presetHost = this.#host.getPresetHost?.() ?? createDefaultPresetHost(this.#host.cwd, () => this.#host.getConfig());
+					const requestedName = typeof params.name === "string" && params.name.trim() ? params.name.trim() : undefined;
+					let previewPresetDoc = materials.presetDoc;
+					if (requestedName && requestedName !== "in_use") {
+						const snap = presetHost.get(requestedName);
+						if (!snap) {
+							return {
+								ok: false,
+								action,
+								requestId,
+								target: this.#host.getTarget(),
+								error: { code: "not_found", message: `未找到预设：${requestedName}` },
+							};
+						}
+						previewPresetDoc = loadPresetDoc(snap.raw, snap.name);
+					}
+					const target = this.#host.getTarget();
+					const chatDir = target.chatDir ?? this.#host.getCurrentChatDir();
+					const userText = typeof params.userText === "string" ? params.userText : "";
+					const macroCtx = { charName: materials.card.name, userName: materials.config.userName };
+					const baseHistory: Array<{ role: "user" | "assistant"; text: string }> = [];
+					for (const m of this.#host.getMessages()) {
+						if (m.role === "system") continue;
+						const role = m.role === "user" ? "user" : "assistant";
+						let text = (m.text || m.mes || "").trim();
+						if (materials.promptRules.length > 0 && text) {
+							text = applyCardSkin(text, materials.promptRules, macroCtx).trim();
+						}
+						if (!text) continue;
+						const prev = baseHistory[baseHistory.length - 1];
+						if (prev && prev.role === role) prev.text = `${prev.text}\n\n${text}`;
+						else baseHistory.push({ role, text });
+					}
+					if (userText.trim()) {
+						const prev = baseHistory[baseHistory.length - 1];
+						if (prev && prev.role === "user") prev.text = `${prev.text}\n\n${userText.trim()}`;
+						else baseHistory.push({ role: "user", text: userText.trim() });
+					}
+					const presetName = previewPresetDoc?.name;
+					const chatVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "chat", presetName);
+					const globalVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "global", presetName);
+					const characterVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "character", presetName);
+					const presetVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "preset", presetName);
+					const preview = await assemblePureTavern({
+						card: materials.card,
+						presetDoc: previewPresetDoc,
+						loreEntries: materials.pureLoreEntries ?? materials.entries,
+						allLoreEntries: materials.allLoreEntries ?? materials.entries,
+						userName: materials.config.userName,
+						userPersona: materials.config.userPersona,
+						history: baseHistory,
+						userText: userText.trim(),
+						scanDepth: materials.config.scanDepth,
+						maxLoreInjections: materials.config.maxLoreInjections,
+						chatId: target.sessionId,
+						chatVars,
+						globalVars,
+						characterVars,
+						presetVars,
+						worldInfoRegexRules: materials.worldInfoRegexRules,
+						userInputRegexRules: materials.userInputRegexRules,
+					});
+					return {
+						ok: true,
+						action,
+						requestId,
+						status: "completed",
+						target,
+						result: {
+							presetMode: materials.config.presetMode ?? "liyuan",
+							preset: previewPresetDoc?.name ?? null,
+							systemPrompt: preview.systemPrompt,
+							messages: preview.messages,
+							samplers: preview.samplers ?? null,
+							markers: preview.markers,
+							activatedLore: preview.activatedLore,
+							droppedPrefills: preview.droppedPrefills,
+							unsupportedMacros: preview.unsupportedMacros,
+							report: preview.report,
 						},
 					};
 				}

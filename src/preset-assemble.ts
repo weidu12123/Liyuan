@@ -93,6 +93,11 @@ export interface AssembleResult {
 	unsupported: string[];
 	/** 装配结束时的变量表快照 */
 	vars: Map<string, string>;
+	/** 装配结束时的全局变量表快照 */
+	globalVars: Map<string, string>;
+	/** 本次装配修改过的局部与全局变量键 */
+	dirtyLocal: string[];
+	dirtyGlobal: string[];
 	/**
 	 * 用到 `{{lastusermessage}}` 的块 identifier。
 	 * 这是"拼一次即静态"的唯一破口：命中则该次装配结果与本轮用户原话绑定，调用方自行决定
@@ -114,16 +119,29 @@ export interface AssemblyEntry {
 	injectionPosition: number;
 	injectionDepth: number;
 	injectionOrder: number;
+	/** 禁止被卡级字段覆盖（ST prompts[].forbid_overrides） */
+	forbidOverrides?: boolean;
 	/** order 里点了名、prompts 里没有定义 */
 	missing?: boolean;
 }
 
-interface AssembleOptions {
+export interface AssembleOptions {
 	materials?: MarkerMaterials;
 	charName?: string;
 	userName?: string;
 	/** 本轮用户原话（`{{lastusermessage}}`）；不给＝空串 */
 	userText?: string;
+	/** 最新一条对话文本（`{{lastmessage}}`） */
+	lastMessage?: string;
+	/** 最新一条角色消息文本（`{{lastcharmessage}}`） */
+	lastCharMessage?: string;
+	/** 持久聊天局部/全局脚本变量初始表 */
+	chatVars?: Map<string, string> | Record<string, unknown>;
+	globalVars?: Map<string, string> | Record<string, unknown>;
+	/** 世界书 position=7 (outlet) 值映射 */
+	outlets?: Map<string, string> | Record<string, unknown>;
+	/** 卡字段对 main / jailbreak 块的覆盖内容（仅在启用且 forbid_overrides !== true 时生效） */
+	overrides?: { main?: string; jailbreak?: string };
 }
 
 const asRole = (v: unknown): PieceRole => (v === "user" || v === "assistant" ? v : "system");
@@ -211,6 +229,7 @@ export function stEntries(raw: Record<string, unknown>): AssemblyEntry[] {
 			injectionPosition: asNumber(def.injection_position, 0),
 			injectionDepth: asNumber(def.injection_depth, 0),
 			injectionOrder: asNumber(def.injection_order, 0),
+			...(def.forbid_overrides === true ? { forbidOverrides: true } : {}),
 		};
 	});
 }
@@ -265,6 +284,11 @@ export function assemble(entries: AssemblyEntry[], opts: AssembleOptions = {}): 
 		charName: opts.charName ?? "",
 		userName: opts.userName ?? "",
 		userText: opts.userText,
+		lastMessage: opts.lastMessage,
+		lastCharMessage: opts.lastCharMessage,
+		vars: opts.chatVars,
+		globalVars: opts.globalVars,
+		outlets: opts.outlets,
 	});
 
 	const before: AssembledPiece[] = [];
@@ -306,20 +330,34 @@ export function assemble(entries: AssemblyEntry[], opts: AssembleOptions = {}): 
 				chars: text.length,
 			});
 			if (!filled) continue;
-			(afterHistory ? after : before).push({
+			const markerPiece: AssembledPiece = {
 				source: "marker",
 				id: e.identifier,
 				name: e.name,
-				role: "system",
+				role: e.role,
 				text,
-			});
+			};
+			if (e.injectionPosition === 1) {
+				depth.push({ ...markerPiece, depth: e.injectionDepth, order: e.injectionOrder });
+			} else {
+				(afterHistory ? after : before).push(markerPiece);
+			}
 			continue;
 		}
 
-		if (LAST_USER_MESSAGE.test(e.content)) usesLastUserMessage.push(e.identifier);
+		let rawContent = e.content;
+		if (!e.forbidOverrides) {
+			if (e.identifier === "main" && opts.overrides?.main?.trim()) {
+				rawContent = opts.overrides.main;
+			} else if (e.identifier === "jailbreak" && opts.overrides?.jailbreak?.trim()) {
+				rawContent = opts.overrides.jailbreak;
+			}
+		}
+
+		if (LAST_USER_MESSAGE.test(rawContent)) usesLastUserMessage.push(e.identifier);
 
 		// 求值必须发生在丢弃判断之前：setvar 块自己不吐字，但值要留给后面的 getvar
-		const evaled = evalPresetMacros(e.content, env);
+		const evaled = evalPresetMacros(rawContent, env);
 		for (const name of evaled.unsupported) unsupported.add(name);
 		const text = evaled.text;
 
@@ -366,6 +404,9 @@ export function assemble(entries: AssemblyEntry[], opts: AssembleOptions = {}): 
 		markers,
 		unsupported: [...unsupported],
 		vars: env.vars,
+		globalVars: env.globalVars,
+		dirtyLocal: [...(env.dirtyLocal ?? [])],
+		dirtyGlobal: [...(env.dirtyGlobal ?? [])],
 		usesLastUserMessage,
 		report,
 	};

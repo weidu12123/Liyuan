@@ -575,12 +575,16 @@ export function applyHistoryInjections(
 	past: Array<{ role: "user" | "assistant"; text: string }>,
 	tailText: string,
 	fragments: PromptFragment[] = [],
-	opts: { tailHasUserMessage?: boolean } = {},
+	opts: { tailHasUserMessage?: boolean; preserveAssistantPrefill?: boolean } = {},
 ): HistoryInjectionMessage[] {
 	const depthFrags = fragments.filter((f) => f.placement === "depth" && f.text.trim().length > 0);
 	const afterFrags = fragments.filter((f) => f.placement === "after" && f.text.trim().length > 0);
+	const hasTailText = tailText.trim().length > 0;
 	if (depthFrags.length === 0 && afterFrags.length === 0) {
-		return [...past.map((m) => ({ role: m.role, text: m.text })), { role: "user", text: tailText, isTail: true }];
+		return [
+			...past.map((m) => ({ role: m.role, text: m.text })),
+			...(hasTailText ? [{ role: "user" as const, text: tailText, isTail: true }] : []),
+		];
 	}
 
 	const tailCountsAsDepthSlot = opts.tailHasUserMessage !== false;
@@ -654,16 +658,18 @@ export function applyHistoryInjections(
 
 	// 末端序列：tailText -> depth=0 注入 -> after 片段，统一执行预填丢弃与同角色合并
 	const tailRuns: Array<HistoryInjectionMessage> = [
-		{ role: "user", text: tailText, isTail: true },
+		...(hasTailText ? [{ role: "user" as const, text: tailText, isTail: true }] : []),
 		...renderDepthGroup(depthZero),
 		...afterFrags.map((f) => ({
 			role: f.role === "assistant" ? ("assistant" as const) : ("user" as const),
 			text: f.text,
 		})),
 	];
-	// 末尾连续 assistant 预填整块丢弃（tailRuns[0] 恒为 user，循环不会掏空）
-	while (tailRuns.length > 0 && tailRuns[tailRuns.length - 1]!.role === "assistant") {
-		tailRuns.pop();
+	// 末尾连续 assistant 预填整块丢弃（纯酒馆透传浏览器模式传 preserveAssistantPrefill=true 时保留给脚本自行处理）
+	if (!opts.preserveAssistantPrefill) {
+		while (tailRuns.length > 0 && tailRuns[tailRuns.length - 1]!.role === "assistant") {
+			tailRuns.pop();
+		}
 	}
 	const tailMerged: HistoryInjectionMessage[] = [];
 	for (const run of tailRuns) {

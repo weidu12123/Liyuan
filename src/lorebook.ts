@@ -95,6 +95,40 @@ export function normalizeEntries(entries: unknown): LorebookEntry[] {
 		const uid = typeof e.uid === "number" ? e.uid : typeof e.id === "number" ? e.id : i;
 		const content = typeof e.content === "string" ? e.content.replace(/\r\n/g, "\n") : "";
 		const comment = typeof e.comment === "string" && e.comment ? e.comment : typeof e.name === "string" ? e.name : "";
+		const ext =
+			e.extensions && typeof e.extensions === "object" && !Array.isArray(e.extensions)
+				? (e.extensions as Record<string, unknown>)
+				: undefined;
+		const rawPos = ext?.position ?? e.position;
+		const position =
+			typeof e.position === "number" && Number.isFinite(e.position)
+				? e.position
+				: typeof ext?.position === "number" && Number.isFinite(ext.position)
+					? ext.position
+					: rawPos === "before_char"
+						? 0
+						: rawPos === "after_char"
+							? 1
+							: undefined;
+		const rawDepth = e.depth ?? ext?.depth;
+		const depth = typeof rawDepth === "number" && Number.isFinite(rawDepth) ? rawDepth : undefined;
+		const rawRole = e.role ?? ext?.role;
+		const role: LorebookEntry["role"] =
+			rawRole === 0 || rawRole === "system"
+				? "system"
+				: rawRole === 1 || rawRole === "user"
+					? "user"
+					: rawRole === 2 || rawRole === "assistant"
+						? "assistant"
+						: undefined;
+		const rawOutlet =
+			typeof e.outletName === "string"
+				? e.outletName
+				: typeof ext?.outlet_name === "string"
+					? ext.outlet_name
+					: typeof ext?.outletName === "string"
+						? ext.outletName
+						: "";
 		return {
 			uid,
 			keys,
@@ -105,6 +139,10 @@ export function normalizeEntries(entries: unknown): LorebookEntry[] {
 			enabled,
 			selective: e.selective === true,
 			order,
+			...(position !== undefined ? { position } : {}),
+			...(depth !== undefined ? { depth } : {}),
+			...(role !== undefined ? { role } : {}),
+			...(rawOutlet ? { outletName: rawOutlet } : {}),
 		};
 	});
 }

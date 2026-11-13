@@ -531,6 +531,39 @@ test("ScriptApiService：世界书、项目文件、宏与正则纯计算", asyn
 		assert.ok(ejsOut.text.includes("青云门镇派剑法。"));
 		const afterState = await h.api.invoke({ action: "state.read" });
 		assert.equal(((afterState.result as { state: WorldState }).state.mvu as Record<string, unknown>)?.剑意, 99);
+
+		// 刀2：跨不同 scriptId 读写同一全局作用域 + text.macros 读取持久变量与持久化回写
+		const wGlobal = await h.api.invoke({
+			action: "data.write",
+			scriptId: "script-alpha",
+			params: { scope: "global", key: "sleep_var_zishu_define", value: "1500字" },
+		});
+		assert.equal(wGlobal.ok, true);
+		const rGlobal = await h.api.invoke({
+			action: "data.read",
+			scriptId: "script-beta",
+			params: { scope: "global", key: "sleep_var_zishu_define" },
+		});
+		assert.equal((rGlobal.result as { data: unknown }).data, "1500字", "global 作用域跨 scriptId 共享同一文件");
+
+		const macroLinked = await h.api.invoke({
+			action: "text.macros",
+			scriptId: "script-gamma",
+			params: {
+				text: "要求:{{getglobalvar::sleep_var_zishu_define}}|末句:{{lastmessage}}|角:{{lastcharmessage}}{{setvar::persistedLocal::1}}{{setglobalvar::persistedGlobal::ok}}",
+				persist: true,
+			},
+		});
+		assert.equal(macroLinked.ok, true);
+		assert.equal(macroLinked.status, "committed");
+		const mlOut = macroLinked.result as { text: string; persisted?: boolean };
+		assert.equal(mlOut.persisted, true);
+		assert.ok(mlOut.text.startsWith("要求:1500字|末句:"));
+
+		const readPersistedChat = await h.api.invoke({ action: "data.read", params: { scope: "chat", key: "persistedLocal" } });
+		assert.equal((readPersistedChat.result as { data: unknown }).data, "1");
+		const readPersistedGlobal = await h.api.invoke({ action: "data.read", params: { scope: "global", key: "persistedGlobal" } });
+		assert.equal((readPersistedGlobal.result as { data: unknown }).data, "ok");
 	} finally {
 		h.cleanup();
 	}
@@ -670,23 +703,39 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 		const cliAgent = mkdtempSync(join(tmpdir(), "liyuan-cli-agent-"));
 		try {
 			mkdirSync(join(cliRoot, "assets", "cards"), { recursive: true });
+			mkdirSync(join(cliRoot, "assets", "presets"), { recursive: true });
 			writeFileSync(
 				join(cliRoot, "assets", "cards", "default_Sera.json"),
 				JSON.stringify({ data: { name: "Sera", description: "测试角色", first_mes: "你好，{{user}}。" } }),
 				"utf8",
 			);
 			writeFileSync(
+				join(cliRoot, "assets", "presets", "test_preset.json"),
+				JSON.stringify({
+					temperature: 0.77,
+					prompts: [
+						{ identifier: "b1", name: "文风块", role: "system", content: "旧文风", enabled: false, injection_position: 0 },
+						{ identifier: "chatHistory", name: "Chat History", marker: true },
+					],
+					prompt_order: [
+						{ character_id: 100001, order: [{ identifier: "b1", enabled: false }, { identifier: "chatHistory", enabled: true }] },
+					],
+				}),
+				"utf8",
+			);
+			writeFileSync(
 				join(cliRoot, "liyuan.config.json"),
-				JSON.stringify({ card: "assets/cards/default_Sera.json", userName: "旅人" }),
+				JSON.stringify({ card: "assets/cards/default_Sera.json", preset: "assets/presets/test_preset.json", userName: "旅人" }),
 				"utf8",
 			);
 
+			const repoRoot = process.cwd();
 			const cliOutput = await new Promise<string>((resolve, reject) => {
-				const child = spawn(process.execPath, ["server/main.ts", "--cli"], {
-					cwd: process.cwd(),
+				const child = spawn(process.execPath, [join(repoRoot, "server/main.ts"), "--cli"], {
+					cwd: cliRoot,
 					env: {
 						...process.env,
-						LIYUAN_PRODUCT_ROOT: cliRoot,
+						LIYUAN_PRODUCT_ROOT: repoRoot,
 						LIYUAN_CODING_AGENT_DIR: cliAgent,
 					},
 					stdio: ["pipe", "pipe", "pipe"],
@@ -704,6 +753,10 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 				child.stdin.write("/script context.read\n");
 				child.stdin.write('/script data.write {"scope":"script","scriptId":"cli-test","data":{"score":42}}\n');
 				child.stdin.write('/script data.read {"scope":"script","scriptId":"cli-test"}\n');
+				child.stdin.write("/script preset.list\n");
+				child.stdin.write('/script preset.get {"includeRaw":true}\n');
+				child.stdin.write('/script preset.update {"patch":{"blocks":[{"id":"b1","enabled":true,"content":"新文风"}]}}\n');
+				child.stdin.write("/script preset.get\n");
 				child.stdin.write("/exit\n");
 				child.stdin.end();
 			});
@@ -711,6 +764,10 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 			assert.ok(cliOutput.includes('"action":"context.read"'), "CLI 应返回 context.read 回执");
 			assert.ok(cliOutput.includes('"action":"data.write"'), "CLI 应返回 data.write 回执");
 			assert.ok(cliOutput.includes('"score":42'), "CLI 应读回写入的脚本私有数据");
+			assert.ok(cliOutput.includes('"action":"preset.list"') && cliOutput.includes("test_preset"), "CLI 应返回 preset.list");
+			assert.ok(cliOutput.includes('"action":"preset.get"') && cliOutput.includes("旧文风"), "CLI 应读到初始预设原文");
+			assert.ok(cliOutput.includes('"action":"preset.update"') && cliOutput.includes('"status":"refreshed"'), "CLI 应更新草稿并完成热刷新");
+			assert.ok(cliOutput.includes('"dirty":true') && cliOutput.includes("新文风"), "CLI 再次读取应拿到草稿中已开启的新内容");
 		} finally {
 			rmSync(cliRoot, { recursive: true, force: true });
 			rmSync(cliAgent, { recursive: true, force: true });

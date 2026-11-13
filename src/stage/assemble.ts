@@ -280,6 +280,8 @@ interface StageSystemOptions {
 	 * 卡常驻内容只此一份，不双份。空 ⇒ 走今天的投影（遗留预设的 marker 归位照旧）。
 	 */
 	cardAgents?: string;
+	/** 可选附加系统片段（如运行时扩展注入的前置片段，置于用户规矩之前） */
+	extraSystemFragments?: string[];
 	/** false = 不声明工具协议（M1 前过渡形态；M3 起默认开） */
 	tools?: boolean;
 	/**
@@ -296,6 +298,7 @@ export function buildStageSystemPrompt({
 	userRules,
 	chatMemoryIndex,
 	cardAgents,
+	extraSystemFragments,
 	tools,
 	mcpTools,
 }: StageSystemOptions): string {
@@ -303,6 +306,12 @@ export function buildStageSystemPrompt({
 	const m = (s: string) => applyMacros(s, macro);
 	const sections: string[] = [];
 	const agentsText = cardAgents && cardAgents.trim() ? cardAgents.trim() : "";
+
+	if (extraSystemFragments && extraSystemFragments.length > 0) {
+		for (const frag of extraSystemFragments) {
+			if (frag && frag.trim()) sections.push(frag.trim());
+		}
+	}
 
 	// 用户规矩（三级：全局 → 卡级 → 项目级）与项目记忆总索引（MEMORY.md）
 	for (const text of [userRules?.global, userRules?.card, userRules?.chat]) {
@@ -536,6 +545,138 @@ export function buildStageInjection({
 	}
 
 	return blocks.join("\n\n");
+}
+
+export type PromptFragmentPlacement = "system" | "after" | "depth";
+
+export interface PromptFragment {
+	id: string;
+	placement: PromptFragmentPlacement;
+	role: "system" | "user" | "assistant";
+	text: string;
+	depth?: number;
+	order?: number;
+}
+
+export interface HistoryInjectionMessage {
+	role: "user" | "assistant";
+	text: string;
+	isTail?: boolean;
+}
+
+/**
+ * 将 `depth` 与 `after` 通用片段注入正序对话序列：
+ * - `depth = 0` 落在当拍末尾消息 `tailText` 之后、`after` 片段之前；
+ * - `depth >= 1` 按倒数偏移插入历史流（当 `tailText` 承载当拍用户消息时，depth=1 插在它正前方）；
+ * - 同深度组按 `order` 升序，同 `(depth, order)` 内按 `assistant → user → system` 排列（同角色 `\n` 合并）；
+ * - 非开头 `system` 降级映射为 `user`；末端连续 `assistant` 预填整块丢弃；相邻新注入同角色以 `\n\n` 合并。
+ */
+export function applyHistoryInjections(
+	past: Array<{ role: "user" | "assistant"; text: string }>,
+	tailText: string,
+	fragments: PromptFragment[] = [],
+	opts: { tailHasUserMessage?: boolean } = {},
+): HistoryInjectionMessage[] {
+	const depthFrags = fragments.filter((f) => f.placement === "depth" && f.text.trim().length > 0);
+	const afterFrags = fragments.filter((f) => f.placement === "after" && f.text.trim().length > 0);
+	if (depthFrags.length === 0 && afterFrags.length === 0) {
+		return [...past.map((m) => ({ role: m.role, text: m.text })), { role: "user", text: tailText, isTail: true }];
+	}
+
+	const tailCountsAsDepthSlot = opts.tailHasUserMessage !== false;
+
+	const renderDepthGroup = (items: PromptFragment[]): Array<{ role: "user" | "assistant"; text: string }> => {
+		const orderMap = new Map<number, PromptFragment[]>();
+		for (const item of items) {
+			const ord = typeof item.order === "number" && Number.isFinite(item.order) ? item.order : 100;
+			const bucket = orderMap.get(ord) ?? [];
+			bucket.push(item);
+			orderMap.set(ord, bucket);
+		}
+		const sortedOrders = [...orderMap.keys()].sort((a, b) => a - b);
+		const out: Array<{ role: "user" | "assistant"; text: string }> = [];
+		// 净翻转 1 次后的同 (depth, order) 角色次序
+		const roleSequence: Array<"assistant" | "user" | "system"> = ["assistant", "user", "system"];
+		for (const ord of sortedOrders) {
+			const group = orderMap.get(ord)!;
+			for (const rawRole of roleSequence) {
+				const joined = group
+					.filter((x) => x.role === rawRole)
+					.map((x) => x.text.trim())
+					.filter(Boolean)
+					.join("\n");
+				if (!joined) continue;
+				const mappedRole: "user" | "assistant" = rawRole === "assistant" ? "assistant" : "user";
+				const prev = out[out.length - 1];
+				if (prev && prev.role === mappedRole) prev.text = `${prev.text}\n\n${joined}`;
+				else out.push({ role: mappedRole, text: joined });
+			}
+		}
+		return out;
+	};
+
+	// 按 depth 聚合：depth=0 放至尾部组，depth>=1 插入 past 对应槽位（同一槽位内 depth 大者在更前方）
+	const depthZero: PromptFragment[] = [];
+	const pastBuckets = new Map<number, Map<number, PromptFragment[]>>();
+	for (const f of depthFrags) {
+		const d = Math.max(0, Math.trunc(f.depth ?? 0));
+		if (d === 0) {
+			depthZero.push(f);
+			continue;
+		}
+		const offsetFromPastEnd = tailCountsAsDepthSlot ? d - 1 : d;
+		const slot = Math.max(0, past.length - offsetFromPastEnd);
+		const byDepth = pastBuckets.get(slot) ?? new Map<number, PromptFragment[]>();
+		const list = byDepth.get(d) ?? [];
+		list.push(f);
+		byDepth.set(d, list);
+		pastBuckets.set(slot, byDepth);
+	}
+
+	const result: HistoryInjectionMessage[] = [];
+	const pushSlot = (slot: number) => {
+		const byDepth = pastBuckets.get(slot);
+		if (!byDepth) return;
+		// 同一钳位槽位内，depth 越大离生成点越远（排在更前）
+		const depths = [...byDepth.keys()].sort((a, b) => b - a);
+		for (const d of depths) {
+			for (const msg of renderDepthGroup(byDepth.get(d)!)) {
+				result.push(msg);
+			}
+		}
+	};
+
+	for (let i = 0; i < past.length; i++) {
+		pushSlot(i);
+		result.push({ role: past[i]!.role, text: past[i]!.text });
+	}
+	pushSlot(past.length);
+
+	// 末端序列：tailText -> depth=0 注入 -> after 片段，统一执行预填丢弃与同角色合并
+	const tailRuns: Array<HistoryInjectionMessage> = [
+		{ role: "user", text: tailText, isTail: true },
+		...renderDepthGroup(depthZero),
+		...afterFrags.map((f) => ({
+			role: f.role === "assistant" ? ("assistant" as const) : ("user" as const),
+			text: f.text,
+		})),
+	];
+	// 末尾连续 assistant 预填整块丢弃（tailRuns[0] 恒为 user，循环不会掏空）
+	while (tailRuns.length > 0 && tailRuns[tailRuns.length - 1]!.role === "assistant") {
+		tailRuns.pop();
+	}
+	const tailMerged: HistoryInjectionMessage[] = [];
+	for (const run of tailRuns) {
+		const prev = tailMerged[tailMerged.length - 1];
+		if (prev && prev.role === run.role) {
+			prev.text = `${prev.text}\n\n${run.text}`;
+			if (run.isTail) prev.isTail = true;
+		} else {
+			tailMerged.push({ ...run });
+		}
+	}
+	result.push(...tailMerged);
+	return result;
 }
 
 /**

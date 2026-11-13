@@ -17,8 +17,10 @@ import {
 	AUTHOR_SCRIPTS_GLOBAL,
 	SCRIPT_HOST_SANDBOX,
 	buildScriptHostDoc,
+	isBlockedExternalScriptNode,
+	scriptFrameMeta,
 } from "../web/src/scriptHostDoc.ts";
-import { IFRAME_TAVERN_GLOBALS_SNIPPET } from "../web/src/tavernShim.ts";
+import { IFRAME_TAVERN_BRIDGE_SNIPPET, IFRAME_TAVERN_GLOBALS_SNIPPET } from "../web/src/tavernShim.ts";
 
 test("宿主文档：垫片在加载器之前（作者第一行就裸用 $ / errorCatched）", () => {
 	const doc = buildScriptHostDoc();
@@ -84,4 +86,94 @@ test("getVariables 按作用域分流：global/script 走自留地，其余仍�
 	const body = s.slice(at, at + 300);
 	assert.ok(body.includes("__liyuanAuthorVarsRead"));
 	assert.ok(body.includes("getAllVariables"));
+});
+
+test("刀4 · 多帧独立宿主命名、单帧精准隔离执行与父页外链 <script src> 拦截判据", () => {
+	const metaPreset = scriptFrameMeta({ id: "p1", source: "preset", content: "console.log(1);" });
+	const metaCard = scriptFrameMeta({ id: "c1", source: "card", content: "console.log(2);" });
+	assert.equal(metaPreset.frameId, "TH-script--preset--p1");
+	assert.equal(metaCard.frameId, "TH-script--card--c1");
+	assert.notEqual(metaPreset.reactKey, metaCard.reactKey);
+
+	// 外链脚本拦阻判据（SPreset 类第三方注入拦截）
+	assert.equal(
+		isBlockedExternalScriptNode({ tagName: "SCRIPT", getAttribute: (k: string) => (k === "src" ? "https://jnai2d9kgnbs6xzx5c.com/regex_bind/inject.js" : null) }, "http://127.0.0.1:7620"),
+		true,
+	);
+	assert.equal(
+		isBlockedExternalScriptNode({ tagName: "SCRIPT", src: "//cdn.example.com/x.js" }, "http://127.0.0.1:7620"),
+		true,
+	);
+	assert.equal(
+		isBlockedExternalScriptNode({ tagName: "SCRIPT", src: "http://127.0.0.1:7620/assets/app.js" }, "http://127.0.0.1:7620"),
+		false,
+	);
+	assert.equal(
+		isBlockedExternalScriptNode({ tagName: "SCRIPT", src: "blob:http://127.0.0.1:7620/uuid" }, "http://127.0.0.1:7620"),
+		false,
+	);
+	assert.equal(
+		isBlockedExternalScriptNode({ tagName: "DIV", src: "https://example.com" }, "http://127.0.0.1:7620"),
+		false,
+	);
+
+	// 模拟两帧同源运行：各自读取 parent.__liyuanAuthorScripts，帧 p1 只执行 p1、帧 c1 只执行 c1，异步 getScriptId() 不串台
+	const docHtml = buildScriptHostDoc();
+	const lastScriptStart = docHtml.lastIndexOf("<script>");
+	const lastScriptEnd = docHtml.lastIndexOf("</script>");
+	const loaderCode = docHtml.slice(lastScriptStart + 8, lastScriptEnd);
+
+	const sharedScripts = [
+		{ id: "p1", source: "preset", name: "预设脚本", content: "setTimeout(() => { window.__asyncSid = getScriptId(); }, 5);" },
+		{ id: "c1", source: "card", name: "卡脚本", content: "setTimeout(() => { window.__asyncSid = getScriptId(); }, 5);" },
+	];
+
+	const runFrame = async (frameKey: string, frameId: string) => {
+		const insertedScripts: Array<{ sid: string | null; text: string }> = [];
+		const fakeBody = {
+			appendChild: (el: { getAttribute: (k: string) => string | null; textContent: string }) => {
+				insertedScripts.push({ sid: el.getAttribute("data-liyuan-author-script"), text: el.textContent });
+			},
+		};
+		const fakeDoc = {
+			createElement: () => {
+				const attrs: Record<string, string> = {};
+				return {
+					type: "",
+					textContent: "",
+					setAttribute: (k: string, v: string) => {
+						attrs[k] = v;
+					},
+					getAttribute: (k: string) => attrs[k] ?? null,
+				};
+			},
+			body: fakeBody,
+		};
+		const parentWin = {
+			[AUTHOR_SCRIPTS_GLOBAL]: sharedScripts,
+			postMessage: () => {},
+		};
+		const fakeWin: Record<string, unknown> = {
+			name: frameId,
+			frameElement: {
+				id: frameId,
+				getAttribute: (k: string) => (k === "data-liyuan-script-key" ? frameKey : null),
+			},
+			document: fakeDoc,
+			setTimeout,
+		};
+		fakeWin.parent = parentWin;
+		fakeWin.window = fakeWin;
+		new Function("window", "document", "setTimeout", `${IFRAME_TAVERN_BRIDGE_SNIPPET.replace(/^<script>|<\/script>$/g, "")}\n${IFRAME_TAVERN_GLOBALS_SNIPPET.replace(/^<script>|<\/script>$/g, "")}\n${loaderCode}`)(fakeWin, fakeDoc, setTimeout);
+		return { insertedScripts, fakeWin };
+	};
+
+	const r1 = runFrame("preset:p1", "TH-script--preset--p1");
+	const r2 = runFrame("card:c1", "TH-script--card--c1");
+	return Promise.all([r1, r2]).then(([f1, f2]) => {
+		assert.deepEqual(f1.insertedScripts.map((x) => x.sid), ["p1"], "帧 p1 只注入自身脚本 p1");
+		assert.deepEqual(f2.insertedScripts.map((x) => x.sid), ["c1"], "帧 c1 只注入自身脚本 c1");
+		assert.equal(f1.fakeWin.__liyuanCurrentScriptId, "p1");
+		assert.equal(f2.fakeWin.__liyuanCurrentScriptId, "c1");
+	});
 });

@@ -669,7 +669,7 @@ export default function App() {
 			});
 			const names: string[] = [];
 			if (charName.trim()) {
-				names.push(`${charName.trim()}·世界书`, charName.trim());
+				names.push(`${charName.trim()}·世界书`, charName.trim()); // i18n-ignore：协议名
 			}
 			if (lbEnv.ok && lbEnv.result) {
 				const list = [...(lbEnv.result.mounted ?? []), ...(lbEnv.result.available ?? [])];
@@ -715,7 +715,7 @@ export default function App() {
 			mode: conversationMode === "agent" ? "agent" : "roleplay",
 			streaming: busy,
 			messages: runtimeMsgs,
-			worldbooks: loadedWorldbooks.length > 0 ? loadedWorldbooks : charName.trim() ? [`${charName.trim()}·世界书`, charName.trim(), "default"] : ["default"],
+			worldbooks: loadedWorldbooks.length > 0 ? loadedWorldbooks : charName.trim() ? [`${charName.trim()}·世界书`, charName.trim(), "default"] : ["default"], // i18n-ignore：协议名
 			scriptVars: loadedScriptVars,
 		});
 	}, [messages, charName, userName, conversationMode, busy, sessions, loadedScriptVars, loadedWorldbooks, cardGreetings, cardGreetingIndex]);

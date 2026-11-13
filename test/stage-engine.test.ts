@@ -1803,3 +1803,54 @@ test("pi（agent 写作模式）：content_filter 截断与半截报错断点续
 	}
 });
 
+test("刀1 · getPromptFragments 经 StageEngine 真实送模链路精确注入 system / depth / after 并剥除预填", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		let turn = 0;
+		let capturedSys = "";
+		let capturedMsgs: Array<{ role: string; text: string }> = [];
+		const engine = await makePiEngine({
+			...piDeps(cwd, sm, reg.getModel("faux-rp")),
+			getPromptFragments: () =>
+				turn === 2
+					? [
+							{ id: "s1", placement: "system", role: "system", text: "KNIFE1_SYS_FRAG" },
+							{ id: "d1", placement: "depth", role: "system", text: "KNIFE1_DEPTH1_FRAG", depth: 1, order: 10 },
+							{ id: "a1", placement: "after", role: "system", text: "KNIFE1_AFTER_FRAG" },
+							{ id: "pf", placement: "after", role: "assistant", text: "KNIFE1_PREFILL_SHOULD_DROP" },
+						]
+					: [],
+		});
+		turn = 1;
+		reg.setResponses([fauxAssistantMessage("第一拍助手回复。"), fauxScribeEmpty()]);
+		await engine.performTurn("第一拍用户输入。");
+
+		turn = 2;
+		reg.setResponses([
+			(ctx) => {
+				capturedSys = String(ctx.systemPrompt ?? "");
+				capturedMsgs = (ctx.messages as Array<{ role: string; content: Array<{ text?: string }> }>).map((m) => ({
+					role: m.role,
+					text: m.content.map((c) => c.text ?? "").join(""),
+				}));
+				return fauxAssistantMessage("第二拍助手回复。");
+			},
+			fauxScribeEmpty(),
+		]);
+		await engine.performTurn("第二拍用户输入。");
+
+		const roleIdx = capturedSys.indexOf("# 你扮演的角色");
+		const fragIdx = capturedSys.indexOf("KNIFE1_SYS_FRAG");
+		assert.ok(fragIdx > 0 && roleIdx > fragIdx, "system 片段进入 stage systemPrompt 最前沿（位于角色段之前）");
+		const d1Idx = capturedMsgs.findIndex((m) => m.text.includes("KNIFE1_DEPTH1_FRAG"));
+		const u2Idx = capturedMsgs.findIndex((m) => m.text.includes("第二拍用户输入"));
+		assert.ok(d1Idx >= 0 && u2Idx > d1Idx, "depth=1 片段落于第二拍用户输入之前");
+		assert.ok(capturedMsgs[u2Idx]!.text.includes("KNIFE1_AFTER_FRAG"), "after 片段落于末端");
+		assert.equal(capturedMsgs.some((m) => m.text.includes("KNIFE1_PREFILL_SHOULD_DROP")), false, "末尾 assistant 预填已剥除");
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+

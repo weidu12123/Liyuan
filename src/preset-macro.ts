@@ -15,10 +15,19 @@
 
 export interface MacroEnv {
 	vars: Map<string, string>;
+	globalVars: Map<string, string>;
 	charName: string;
 	userName: string;
 	/** 本轮用户原文（{{lastusermessage}}）；戏外/缺省为 undefined → 空串 */
 	userText?: string;
+	/** 当前聊天最新一条消息正文（{{lastmessage}}） */
+	lastMessage?: string;
+	/** 当前聊天最新一条角色回复正文（{{lastcharmessage}}） */
+	lastCharMessage?: string;
+	/** 本轮求值发生过写入的局部键 */
+	dirtyLocal?: Set<string>;
+	/** 本轮求值发生过写入的全局键 */
+	dirtyGlobal?: Set<string>;
 }
 
 interface MacroEvalResult {
@@ -27,8 +36,74 @@ interface MacroEvalResult {
 	unsupported: string[];
 }
 
-export function createMacroEnv(init: { charName: string; userName: string; userText?: string }): MacroEnv {
-	return { vars: new Map(), charName: init.charName, userName: init.userName, userText: init.userText };
+function toMacroMap(src?: Map<string, string> | Record<string, unknown>): Map<string, string> {
+	const map = new Map<string, string>();
+	if (!src) return map;
+	if (src instanceof Map) {
+		for (const [k, v] of src.entries()) map.set(String(k), String(v ?? ""));
+		return map;
+	}
+	for (const [k, v] of Object.entries(src)) {
+		if (v === undefined) continue;
+		map.set(k, typeof v === "object" && v !== null ? JSON.stringify(v) : String(v));
+	}
+	return map;
+}
+
+export function createMacroEnv(init: {
+	charName: string;
+	userName: string;
+	userText?: string;
+	lastMessage?: string;
+	lastCharMessage?: string;
+	vars?: Map<string, string> | Record<string, unknown>;
+	globalVars?: Map<string, string> | Record<string, unknown>;
+}): MacroEnv {
+	return {
+		vars: toMacroMap(init.vars),
+		globalVars: toMacroMap(init.globalVars),
+		charName: init.charName,
+		userName: init.userName,
+		userText: init.userText,
+		lastMessage: init.lastMessage,
+		lastCharMessage: init.lastCharMessage,
+		dirtyLocal: new Set(),
+		dirtyGlobal: new Set(),
+	};
+}
+
+function addVarValue(map: Map<string, string>, key: string, value: string, dirty?: Set<string>): void {
+	const k = key.trim();
+	if (!k) return;
+	const cur = map.get(k);
+	const valTrim = value.trim();
+	const valNum = Number(valTrim);
+	if (cur === undefined) {
+		const next = valTrim !== "" && Number.isFinite(valNum) ? String(valNum) : value;
+		map.set(k, next);
+		dirty?.add(k);
+		return;
+	}
+	const curTrim = cur.trim();
+	const curNum = Number(curTrim);
+	if (curTrim !== "" && valTrim !== "" && Number.isFinite(curNum) && Number.isFinite(valNum)) {
+		map.set(k, String(curNum + valNum));
+	} else {
+		map.set(k, cur + value);
+	}
+	dirty?.add(k);
+}
+
+function stepVarValue(map: Map<string, string>, key: string, delta: 1 | -1, dirty?: Set<string>): string {
+	const k = key.trim();
+	if (!k) return "";
+	const cur = map.get(k);
+	const curTrim = cur?.trim() ?? "";
+	const n = curTrim !== "" && Number.isFinite(Number(curTrim)) ? Number(curTrim) : 0;
+	const next = String(n + delta);
+	map.set(k, next);
+	dirty?.add(k);
+	return next;
 }
 
 const MAX_PASSES = 16;
@@ -62,26 +137,82 @@ function evalToken(token: string, env: MacroEnv, unsupported: Set<string>): stri
 
 	switch (name) {
 		case "char":
+		case "charifnotgroup":
 			return env.charName;
 		case "user":
 			return env.userName;
 		case "lastusermessage":
 			return env.userText ?? "";
+		case "lastmessage":
+			return env.lastMessage ?? "";
+		case "lastcharmessage":
+			return env.lastCharMessage ?? "";
+		case "space": {
+			const n = Math.max(1, Math.min(200, Math.trunc(Number(rest.trim()) || 1)));
+			return " ".repeat(n);
+		}
+		case "newline": {
+			const n = Math.max(1, Math.min(50, Math.trunc(Number(rest.trim()) || 1)));
+			return "\n".repeat(n);
+		}
+		case "noop":
+			return "";
 		case "setvar": {
 			const [key, ...valueParts] = rest.split("::");
-			if (key !== undefined && key.trim()) env.vars.set(key.trim(), valueParts.join("::"));
+			if (key !== undefined && key.trim()) {
+				const k = key.trim();
+				env.vars.set(k, valueParts.join("::"));
+				env.dirtyLocal?.add(k);
+			}
 			return "";
 		}
 		case "addvar": {
 			const [key, ...valueParts] = rest.split("::");
 			if (key !== undefined && key.trim()) {
-				const k = key.trim();
-				env.vars.set(k, (env.vars.get(k) ?? "") + valueParts.join("::"));
+				addVarValue(env.vars, key, valueParts.join("::"), env.dirtyLocal);
 			}
 			return "";
 		}
+		case "incvar":
+			return stepVarValue(env.vars, rest.split("::")[0] ?? "", 1, env.dirtyLocal);
+		case "decvar":
+			return stepVarValue(env.vars, rest.split("::")[0] ?? "", -1, env.dirtyLocal);
 		case "getvar":
 			return env.vars.get(rest.split("::")[0]?.trim() ?? "") ?? "";
+		case "hasvar":
+		case "varexists":
+			return env.vars.has(rest.split("::")[0]?.trim() ?? "") ? "true" : "false";
+		case "deletevar":
+		case "flushvar": {
+			const k = rest.split("::")[0]?.trim() ?? "";
+			if (k) {
+				env.vars.delete(k);
+				env.dirtyLocal?.add(k);
+			}
+			return "";
+		}
+		case "setglobalvar": {
+			const [key, ...valueParts] = rest.split("::");
+			if (key !== undefined && key.trim()) {
+				const k = key.trim();
+				env.globalVars.set(k, valueParts.join("::"));
+				env.dirtyGlobal?.add(k);
+			}
+			return "";
+		}
+		case "addglobalvar": {
+			const [key, ...valueParts] = rest.split("::");
+			if (key !== undefined && key.trim()) {
+				addVarValue(env.globalVars, key, valueParts.join("::"), env.dirtyGlobal);
+			}
+			return "";
+		}
+		case "incglobalvar":
+			return stepVarValue(env.globalVars, rest.split("::")[0] ?? "", 1, env.dirtyGlobal);
+		case "decglobalvar":
+			return stepVarValue(env.globalVars, rest.split("::")[0] ?? "", -1, env.dirtyGlobal);
+		case "getglobalvar":
+			return env.globalVars.get(rest.split("::")[0]?.trim() ?? "") ?? "";
 		case "random": {
 			const args = rest.includes("::") ? rest.split("::") : rest.split(",");
 			// 内容寻址钉死（M-C，TAXONOMY §4.5）：同参数恒选同项。破限信件体的几十个

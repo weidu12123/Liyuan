@@ -126,3 +126,47 @@ test("闭环：改开关 → 重读 → 重拼，装配结果跟着变", () => {
 	const second = assemble(loadPresetDoc(next, "x").entries);
 	assert.deepEqual(second.after.map((p) => p.id), ["b"], "开了 b 就该出现在历史后");
 });
+
+test("刀3 · patchPresetRaw 支持全量 order 重排、role/depth/order 修改与 extensionsPatch 无损合并", () => {
+	const rawWithExt = {
+		...stRaw(),
+		extensions: {
+			SPreset: { keepMe: 123 },
+			tavern_helper: { scripts: [{ id: "s1", content: "x" }], variables: { oldKey: "keep" } },
+		},
+	};
+	const doc = loadPresetDoc(rawWithExt, "x");
+	const next = patchPresetRaw(doc, {
+		order: [
+			{ identifier: "b", enabled: true },
+			{ identifier: "chatHistory", enabled: true },
+			{ identifier: "a", enabled: true },
+			{ identifier: "d", enabled: true },
+		],
+		blocks: [
+			{ id: "a", role: "assistant", injectionPosition: 1, injectionDepth: 2, injectionOrder: 888 },
+		],
+		prompts: [
+			{ identifier: "b", name: "乙改名" },
+		],
+		extensionsPatch: {
+			tavern_helper: { variables: { newKey: "added" } },
+		},
+	});
+	const nextDoc = loadPresetDoc(next, "x");
+	assert.deepEqual(nextDoc.entries.map((e) => e.identifier), ["b", "chatHistory", "a", "d"], "prompt_order 已重排");
+	const bBlock = presetDocBlock(nextDoc, "b");
+	assert.equal(bBlock?.name, "乙改名");
+	assert.equal(bBlock?.content, "乙正文", "未点名字段原样保留");
+	const aBlock = presetDocBlock(nextDoc, "a");
+	assert.equal(aBlock?.role, "assistant");
+	assert.equal(aBlock?.depth, 2);
+	const rawPrompts = (next as { prompts: Array<Record<string, unknown>> }).prompts;
+	assert.equal(rawPrompts.find((p) => p.identifier === "a")?.injection_order, 888);
+	const ext = (next as { extensions: Record<string, unknown> }).extensions;
+	assert.deepEqual((ext.SPreset as Record<string, unknown>)?.keepMe, 123, "未知第三方扩展原样保留");
+	const th = ext.tavern_helper as { scripts: unknown[]; variables: Record<string, unknown> };
+	assert.equal(th.scripts.length, 1, "既有 scripts 数组保留");
+	assert.deepEqual(th.variables, { oldKey: "keep", newKey: "added" }, "extensionsPatch 深合并保留旧变量");
+	assert.deepEqual((next as { 不认识的键?: unknown }).不认识的键, { 保持: "原样" });
+});

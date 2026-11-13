@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import {
+	applyHistoryInjections,
 	buildStageInjection,
 	buildStageSystemPrompt,
 	detectsLanguageMismatch,
 	rebuildHistory,
 	stateFromBranch,
 	type BranchEntryLike,
+	type PromptFragment,
 } from "../src/stage/assemble.ts";
 import type { DisplayRule } from "../src/cardfront.ts";
 import { constantLoreOf, loadStageMaterials } from "../src/stage/materials.ts";
@@ -314,4 +316,67 @@ test("无预设＝真的无预设：config.preset 空 → presetDoc 为 null", (
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
+});
+
+// ---------------- 第 2 步刀 1：通用消息流分层注入 ----------------
+
+test("刀1 · applyHistoryInjections：空片段保持原序列；depth=0/1/2/超界与同深度 order 升序、角色次序与预填丢弃全对", () => {
+	const past = [
+		{ role: "assistant" as const, text: "开场白" },
+		{ role: "user" as const, text: "用户1" },
+		{ role: "assistant" as const, text: "助手1" },
+	];
+	const tailText = "【世界状态】正常\n\n用户2（本拍输入）";
+
+	// 1. 空片段：零变化
+	const base = applyHistoryInjections(past, tailText, []);
+	assert.equal(base.length, 4);
+	assert.equal(base[3]!.text, tailText);
+	assert.equal(base[3]!.isTail, true);
+
+	// 2. 完整 depth / order / role / after / prefill 组合
+	const fragments: PromptFragment[] = [
+		{ id: "sys", placement: "system", role: "system", text: "前置系统片段" },
+		{ id: "d5", placement: "depth", role: "system", text: "超界depth5", depth: 5, order: 10 },
+		{ id: "d2", placement: "depth", role: "user", text: "插在助手1之前(depth2)", depth: 2, order: 100 },
+		{ id: "d1-hi", placement: "depth", role: "system", text: "depth1大order", depth: 1, order: 114514 },
+		{ id: "d1-lo-sys", placement: "depth", role: "system", text: "depth1小order-sys", depth: 1, order: 100 },
+		{ id: "d1-lo-asst", placement: "depth", role: "assistant", text: "depth1小order-asst", depth: 1, order: 100 },
+		{ id: "d0", placement: "depth", role: "system", text: "depth0贴末尾", depth: 0, order: 999 },
+		{ id: "a-sys", placement: "after", role: "system", text: "after系统块降级user" },
+		{ id: "a-asst", placement: "after", role: "assistant", text: "after末尾assistant预填" },
+		{ id: "a-empty", placement: "after", role: "user", text: "   " },
+	];
+
+	// 验证 extraSystemFragments 进入 systemPrompt
+	const sp = buildStageSystemPrompt({
+		card,
+		config,
+		constantLore: [],
+		extraSystemFragments: fragments.filter((f) => f.placement === "system").map((f) => f.text),
+		tools: false,
+	});
+	assert.ok(sp.startsWith("前置系统片段"), "system 片段置入系统提示词前沿");
+
+	const out = applyHistoryInjections(past, tailText, fragments, { tailHasUserMessage: true });
+	// 期望顺序：
+	// [0] 超界 depth5 (user) -> [1] 开场白 (asst) -> [2] 用户1 (user) -> [3] 插在助手1之前(depth2) (user)
+	// -> [4] 助手1 (asst) -> [5] depth1小order-asst (asst)
+	// -> [6] 同深度同role合并(user): depth1小order-sys + depth1大order
+	// -> [7] 合并后的尾部 user（tailText + depth0贴末尾 + after系统块降级user）；末尾 assistant 预填已丢弃
+	assert.equal(out.length, 8);
+	assert.deepEqual(
+		out.map((m) => [m.role, m.text]),
+		[
+			["user", "超界depth5"],
+			["assistant", "开场白"],
+			["user", "用户1"],
+			["user", "插在助手1之前(depth2)"],
+			["assistant", "助手1"],
+			["assistant", "depth1小order-asst"],
+			["user", "depth1小order-sys\n\ndepth1大order"],
+			["user", `${tailText}\n\ndepth0贴末尾\n\nafter系统块降级user`],
+		],
+	);
+	assert.equal(out.some((m) => m.text.includes("after末尾assistant预填")), false, "末尾 assistant 预填已剥除");
 });

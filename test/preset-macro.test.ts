@@ -103,3 +103,41 @@ test("实战混合：双人成行式块求值", () => {
 	assert.ok(!r.text.includes("{{getvar"), "清单内宏照旧求值（未设变量得空）");
 	assert.deepEqual(r.unsupported, ["unknownmacro"]);
 });
+
+test("刀2 · 扩展标准宏（global/inc/dec/has/delete/lastmessage/lastcharmessage/charifnotgroup/space/newline/noop）", () => {
+	const e = env({
+		vars: { count: "5", keep: "yes" },
+		globalVars: { g_zishu: "1500字", g_num: "10" },
+		lastMessage: "最新一句",
+		lastCharMessage: "角色最近一句",
+	});
+	const r = evalPresetMacros(
+		[
+			"{{charIfNotGroup}}|{{lastMessage}}|{{lastCharMessage}}",
+			"g={{getglobalvar::g_zishu}}",
+			"{{addglobalvar::g_num::5}}gn={{getglobalvar::g_num}}",
+			"{{setglobalvar::g_flag::ok}}{{getglobalvar::g_flag}}",
+			"inc={{incvar::count}}/dec={{decvar::count}}/ginc={{incglobalvar::g_num}}/gdec={{decglobalvar::g_num}}",
+			"has={{hasvar::keep}}|{{varexists::missing}}",
+			"{{deletevar::keep}}afterDel={{hasvar::keep}}",
+			"{{addvar::numNew::3}}numNew={{getvar::numNew}}",
+			"A{{space::3}}B{{newline::2}}C{{noop}}",
+		].join("|"),
+		e,
+	);
+	assert.equal(
+		r.text,
+		[
+			"阿远|最新一句|角色最近一句",
+			"g=1500字",
+			"gn=15",
+			"ok",
+			"inc=6/dec=5/ginc=16/gdec=15",
+			"has=true|false",
+			"afterDel=false",
+			"numNew=3",
+			"A   B\n\nC",
+		].join("|"),
+	);
+	assert.deepEqual(r.unsupported, []);
+});

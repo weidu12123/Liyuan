@@ -37,6 +37,7 @@ import { classifyTag, scanTaggedBlocks } from "../postprocess.ts";
 import { formatRosterIndex, formatState, saveState } from "../state.ts";
 import type { LorebookEntry, WorldState } from "../types.ts";
 import {
+	applyHistoryInjections,
 	buildStageInjection,
 	buildStageSystemPrompt,
 	detectsLanguageMismatch,
@@ -44,6 +45,7 @@ import {
 	rebuildHistory,
 	stateFromBranch,
 	type BranchEntryLike,
+	type PromptFragment,
 } from "./assemble.ts";
 import {
 	constantLoreOf,
@@ -309,6 +311,13 @@ export interface StageEngineDeps {
 	 * 未注入 = 台上无 worldline_list。写侧（store/back）不上台，理由见 src/tools/worldline.ts 文件头。
 	 */
 	loadWorldline?: (sessionId: string) => WorldlineViewLite;
+	/** 可选通用消息片段提供器（向 system / after / depth 注入结构化片段；未注入则零附加片段） */
+	getPromptFragments?: (ctx: {
+		materials: StageMaterials;
+		state: WorldState;
+		lastUserText: string;
+		history: Array<{ role: "user" | "assistant"; text: string }>;
+	}) => Promise<PromptFragment[]> | PromptFragment[];
 	/**
 	 * 钉一个存档点（`worldline_store`，M-D7）。**封笔后调用**——引擎在场记之后执行，
 	 * 那时 rp-state 刚落、面板快照也已随写入落在分支上，回退到此点状态才对得齐。
@@ -1081,6 +1090,11 @@ export class StageEngine {
 		// 几百秒，扮演不能陪着干等；拿不到就当没有，这一拍不出该块。
 		const memoryRecall = agentTurn ? undefined : await this.#recallForBeat(sm.getSessionId(), lastUserText);
 
+		const fragments = this.#deps.getPromptFragments
+			? await this.#deps.getPromptFragments({ materials, state, lastUserText, history })
+			: [];
+		const extraSystemFragments = fragments.filter((f) => f.placement === "system" && f.text.trim()).map((f) => f.text);
+
 		const systemPrompt = buildStageSystemPrompt({
 			card,
 			config,
@@ -1088,6 +1102,7 @@ export class StageEngine {
 			userRules,
 			chatMemoryIndex,
 			cardAgents: effectiveCardAgents,
+			...(extraSystemFragments.length > 0 ? { extraSystemFragments } : {}),
 			tools: tools.length > 0,
 			// MCP 外设索引进 system（不进每拍注入）：会话内字节稳定，不破前缀缓存。
 			// 与旧 director.ts 同一位置——工具清单里有 mcp__ 工具，这里说明它们是什么。
@@ -1137,6 +1152,8 @@ export class StageEngine {
 			timestamp,
 		});
 
+		const timeline = applyHistoryInjections(past, tailText, fragments, { tailHasUserMessage: endsWithUser });
+		const nowTs = Date.now();
 		const messages: unknown[] = [
 			// M4 前情提要：被 rp-summary 覆盖的早期剧情在此回读（历史里那段已整体不存在）。
 			// 以 user 角色打头，措辞与 system「消息流约定」里的【前情提要】对上。
@@ -1157,8 +1174,7 @@ export class StageEngine {
 						},
 					]
 				: []),
-			...past.map((m) => (m.role === "user" ? asUser(m.text) : asAssistant(m.text))),
-			asUser(tailText, Date.now()),
+			...timeline.map((m) => (m.role === "user" ? asUser(m.text, m.isTail ? nowTs : 0) : asAssistant(m.text, m.isTail ? nowTs : 0))),
 		];
 
 		const { apiKey, headers } = await this.#deps.getAuth(model);

@@ -121,6 +121,7 @@ import {
 import {
 	createCardFile,
 	createLorebookWithEntry,
+	createScriptPresetHost,
 	currentCardPath,
 	deleteLoreEntryAnywhere,
 	handleApiRequest,
@@ -3376,6 +3377,7 @@ const scriptApi = new ScriptApiService({
 	},
 	getCurrentChatDir: () => chatDirOfSessionDir(session.sessionManager.getSessionDir()),
 	getLoreHost: () => scriptLoreHost,
+	getPresetHost: () => createScriptPresetHost(cwd, () => restHost.softRefreshConfig()),
 	getPanels: () => currentPanels(),
 	savePanel: (input) => restHost.savePanel(input),
 	importPanels: (list) => restHost.importPanels(list),

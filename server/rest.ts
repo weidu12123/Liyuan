@@ -159,6 +159,7 @@ import type { CardPreviewReport } from "./card-preview.ts";
 import type { ScreenshotReport } from "./screenshot.ts";
 import { readDeclaration, removeDeclaration, writeDeclarationFromDetection } from "../src/lorebook-declare.ts";
 import { loadStageMaterials } from "../src/stage/materials.ts";
+import type { ScriptPresetHost, ScriptPresetSnapshot } from "../src/script-api.ts";
 import {
 	allocateServerId,
 	discoverMcpCatalog,
@@ -1108,6 +1109,58 @@ function selectPresetFile(cwd: string, file: string | null): boolean {
 	}
 	writeJsonWithBackup(configPath(cwd), config);
 	return true;
+}
+
+/** 供 ScriptApiService 复用的预设宿主：与面板同源读取/写草稿/保存，并触发配置热刷新 */
+export function createScriptPresetHost(cwd: string, refresh: () => Promise<void>): ScriptPresetHost {
+	const toSnap = (file: string | null, doc: PresetDoc, dirty: boolean): ScriptPresetSnapshot => ({
+		file,
+		name: doc.name,
+		kind: doc.kind,
+		dirty,
+		samplers: doc.samplers,
+		blocks: presetDocView(doc, { full: true }),
+		raw: doc.raw,
+	});
+	const get = (name?: string): ScriptPresetSnapshot | null => {
+		const cfg = loadConfig(cwd);
+		const wanted = typeof name === "string" ? name.trim() : "";
+		if (!wanted || wanted === "in_use") {
+			const eff = loadEffectivePreset(cwd);
+			if (!eff.doc) return null;
+			return toSnap(eff.path, eff.doc, eff.fromOverride);
+		}
+		const all = listPresetFiles(cwd);
+		const hit = all.find(
+			(p) => p.file === wanted || p.name === wanted || presetNameFromFile(p.file) === presetNameFromFile(wanted),
+		);
+		if (!hit) return null;
+		const abs = resolvePath(cwd, hit.file);
+		if (!existsSync(abs)) return null;
+		try {
+			const doc = readPresetDoc(cwd, hit.file);
+			return toSnap(hit.file, doc, cfg.preset === hit.file && existsSync(presetOverridePath(cwd)));
+		} catch {
+			return null;
+		}
+	};
+	return {
+		list: () => ({
+			active: loadConfig(cwd).preset ?? null,
+			presets: listPresetFiles(cwd),
+		}),
+		get,
+		update: async ({ target, patch }) => {
+			const res = writePresetDraft(cwd, patch);
+			if (target === "save") {
+				savePresetDraft(cwd, true);
+			}
+			await refresh();
+			const snap = get("in_use");
+			if (!snap) throw new Error(t("当前未配置预设文件"));
+			return { snapshot: snap, added: res.added, refreshed: true };
+		},
+	};
 }
 
 // ---------- 卡目录历史（预设）条目残留清理（第 1 步停用静态转译后保底剥除） ----------

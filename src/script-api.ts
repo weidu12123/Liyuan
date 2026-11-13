@@ -9,7 +9,7 @@
  *    绝不用输入回显、固定 ID 0 或假成功掩盖真实状态。
  */
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { loadCardFile, readCardRawJson, applyMacros } from "./card.ts";
 import { applyCardSkin } from "./cardSkin.ts";
@@ -19,6 +19,14 @@ import {
 	isInternalChatWorkspacePath,
 	listChatMarkdownAssets,
 } from "./cardspace.ts";
+import {
+	loadPresetDoc,
+	patchPresetRaw,
+	presetDocView,
+	type PresetBlockView,
+	type PresetDoc,
+	type PresetPatch,
+} from "./preset-doc.ts";
 import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import { createEjsContext, evalEjsTemplate, getEjsSyntaxErrorInfo } from "./ejs-engine.ts";
 import type { LorebookEntry, RpConfig, WorldState } from "./types.ts";
@@ -175,7 +183,28 @@ export interface ScriptApiHost {
 		current: { provider: string; id: string; name?: string; thinkingLevel?: string } | null;
 		models: Array<{ provider: string; id: string; name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }>;
 	};
+	getPresetHost?(): ScriptPresetHost;
 	notify(level: "info" | "warning" | "error", text: string): void;
+}
+
+export interface ScriptPresetSnapshot {
+	file: string | null;
+	name: string;
+	kind: "st" | "rp";
+	dirty: boolean;
+	samplers: Record<string, number>;
+	blocks: PresetBlockView[];
+	raw: Record<string, unknown>;
+}
+
+export interface ScriptPresetHost {
+	list(): { active: string | null; presets: Array<{ file: string; name: string }> };
+	get(name?: string): ScriptPresetSnapshot | null;
+	update(input: { target: "draft" | "save"; patch: PresetPatch }): Promise<{
+		snapshot: ScriptPresetSnapshot;
+		added: string[];
+		refreshed: boolean;
+	}>;
 }
 
 export const SCRIPT_API_CAPABILITIES = [
@@ -202,6 +231,9 @@ export const SCRIPT_API_CAPABILITIES = [
 	"lorebooks.updateEntry",
 	"lorebooks.removeEntry",
 	"lorebooks.mount",
+	"preset.list",
+	"preset.get",
+	"preset.update",
 	"project.files.list",
 	"project.files.read",
 	"project.files.write",
@@ -263,11 +295,12 @@ function scriptDataFilePath(
 	target: ScriptTargetDescriptor,
 	scope: ScriptDataScope,
 	scriptId: string,
+	presetName?: string,
 ): string {
 	if (scope === "global") {
 		const dir = join(cwd, ".liyuan-state", "script-data", "global");
 		mkdirSync(dir, { recursive: true });
-		return join(dir, `${sanitizeScopeId(scriptId, "_global")}.json`);
+		return join(dir, "_global.json");
 	}
 	if (scope === "extension") {
 		const dir = join(cwd, ".liyuan-state", "script-data", "extension");
@@ -277,7 +310,8 @@ function scriptDataFilePath(
 	if (scope === "preset") {
 		const dir = join(cwd, ".liyuan-state", "script-data", "preset");
 		mkdirSync(dir, { recursive: true });
-		return join(dir, `${sanitizeScopeId(scriptId, "default")}.json`);
+		const nameKey = presetName ? basename(presetName).replace(/\.json$/i, "") : "default";
+		return join(dir, `${sanitizeScopeId(nameKey, "default")}.json`);
 	}
 	if (scope === "character") {
 		const dir = join(cwd, ".liyuan-state", "script-data", "character");
@@ -295,6 +329,17 @@ function scriptDataFilePath(
 				? "_messages"
 				: sanitizeScopeId(scriptId, "default");
 	return join(baseDir, `${fileKey}.json`);
+}
+
+/** 读取脚本作用域数据：对 global/preset 在主文件尚未生成时兼容旧版 default.json */
+function readScriptScopeData(file: string, scope: ScriptDataScope): { version: number; updatedAt: number; data: Record<string, unknown> } {
+	if (!existsSync(file) && (scope === "global" || scope === "preset")) {
+		const legacyFile = join(dirname(file), "default.json");
+		if (legacyFile !== file && existsSync(legacyFile)) {
+			return readScriptDataFile(legacyFile);
+		}
+	}
+	return readScriptDataFile(file);
 }
 
 function readScriptDataFile(file: string): { version: number; updatedAt: number; data: Record<string, unknown> } {
@@ -331,6 +376,111 @@ function writeScriptDataFile(file: string, nextData: Record<string, unknown>, pr
 	mkdirSync(dirname(file), { recursive: true });
 	writeFileSync(file, `${JSON.stringify(next, null, "\t")}\n`, "utf8");
 	return next;
+}
+
+function createDefaultPresetHost(cwd: string, getConfig: () => RpConfig): ScriptPresetHost {
+	const nameFrom = (file: string): string => {
+		const base = file.replace(/\\/g, "/").split("/").pop() ?? file;
+		return base.replace(/\.json$/i, "") || "preset";
+	};
+	const overrideFile = () => join(cwd, ".liyuan", "preset-override.json");
+	const presetsRoot = () => join(cwd, "assets", "presets");
+	const list = () => {
+		const cfg = getConfig();
+		const out: Array<{ file: string; name: string }> = [];
+		const legacy = join(cwd, "liyuan-preset.json");
+		if (existsSync(legacy)) {
+			try {
+				JSON.parse(readFileSync(legacy, "utf8"));
+				out.push({ file: "liyuan-preset.json", name: nameFrom("liyuan-preset.json") });
+			} catch {
+				/* ignore */
+			}
+		}
+		const dir = presetsRoot();
+		if (existsSync(dir)) {
+			for (const f of readdirSync(dir)) {
+				if (!f.endsWith(".json")) continue;
+				try {
+					JSON.parse(readFileSync(join(dir, f), "utf8"));
+					out.push({ file: `assets/presets/${f}`, name: nameFrom(f) });
+				} catch {
+					/* ignore */
+				}
+			}
+		}
+		return { active: cfg.preset ?? null, presets: out };
+	};
+	const toSnap = (file: string | null, doc: PresetDoc, dirty: boolean): ScriptPresetSnapshot => ({
+		file,
+		name: doc.name,
+		kind: doc.kind,
+		dirty,
+		samplers: doc.samplers,
+		blocks: presetDocView(doc, { full: true }),
+		raw: doc.raw,
+	});
+	const get = (name?: string): ScriptPresetSnapshot | null => {
+		const cfg = getConfig();
+		const wanted = typeof name === "string" ? name.trim() : "";
+		if (!wanted || wanted === "in_use") {
+			if (!cfg.preset) return null;
+			const ovr = overrideFile();
+			if (existsSync(ovr)) {
+				try {
+					const doc = loadPresetDoc(JSON.parse(readFileSync(ovr, "utf8")), nameFrom(cfg.preset));
+					return toSnap(cfg.preset, doc, true);
+				} catch {
+					/* fall through */
+				}
+			}
+			const abs = isAbsolute(cfg.preset) ? cfg.preset : join(cwd, cfg.preset);
+			if (!existsSync(abs)) return null;
+			try {
+				const doc = loadPresetDoc(JSON.parse(readFileSync(abs, "utf8")), nameFrom(cfg.preset));
+				return toSnap(cfg.preset, doc, false);
+			} catch {
+				return null;
+			}
+		}
+		const all = list().presets;
+		const hit = all.find((p) => p.file === wanted || p.name === wanted || nameFrom(p.file) === nameFrom(wanted));
+		if (!hit) return null;
+		const abs = join(cwd, hit.file);
+		if (!existsSync(abs)) return null;
+		try {
+			const doc = loadPresetDoc(JSON.parse(readFileSync(abs, "utf8")), hit.name);
+			return toSnap(hit.file, doc, cfg.preset === hit.file && existsSync(overrideFile()));
+		} catch {
+			return null;
+		}
+	};
+	const update = async ({ target, patch }: { target: "draft" | "save"; patch: PresetPatch }) => {
+		const cfg = getConfig();
+		if (!cfg.preset) throw new Error("当前未配置预设文件");
+		const cur = get("in_use");
+		if (!cur) throw new Error(`预设文件不存在：${cfg.preset}`);
+		const curDoc = loadPresetDoc(cur.raw, cur.name);
+		const beforeIds = new Set(cur.blocks.map((b) => b.id));
+		const nextRaw = patchPresetRaw(curDoc, patch);
+		const nextDoc = loadPresetDoc(nextRaw, cur.name);
+		const added = presetDocView(nextDoc)
+			.map((b) => b.id)
+			.filter((id) => !beforeIds.has(id));
+		const ovr = overrideFile();
+		if (target === "save") {
+			const abs = isAbsolute(cfg.preset) ? cfg.preset : join(cwd, cfg.preset);
+			if (!insideRealPath(cwd, abs)) throw new Error("非法预设路径");
+			mkdirSync(dirname(abs), { recursive: true });
+			writeFileSync(abs, `${JSON.stringify(nextRaw, null, "\t")}\n`, "utf8");
+			if (existsSync(ovr)) unlinkSync(ovr);
+			return { snapshot: toSnap(cfg.preset, nextDoc, false), added, refreshed: false };
+		}
+		mkdirSync(dirname(ovr), { recursive: true });
+		writeFileSync(ovr, `${JSON.stringify(nextRaw, null, "\t")}\n`, "utf8");
+		return { snapshot: toSnap(cfg.preset, nextDoc, true), added, refreshed: false };
+	};
+	return { list, get, update };
 }
 
 export class ScriptApiService {
@@ -669,8 +819,11 @@ export class ScriptApiService {
 						typeof params.extension_id === "string" && params.extension_id.trim()
 							? params.extension_id.trim()
 							: scriptId;
-					const file = scriptDataFilePath(this.#host.cwd, this.#host.getCurrentChatDir(), target, scope, effId);
-					const stored = readScriptDataFile(file);
+					const presetName = typeof params.presetName === "string" && params.presetName.trim()
+						? params.presetName.trim()
+						: this.#host.getConfig().preset;
+					const file = scriptDataFilePath(this.#host.cwd, this.#host.getCurrentChatDir(), target, scope, effId, presetName);
+					const stored = readScriptScopeData(file, scope);
 					const key = typeof params.key === "string" && params.key.trim() ? params.key.trim() : undefined;
 					let outData: unknown = key !== undefined ? stored.data[key] : stored.data;
 					if (scope === "message" && key === undefined && Object.keys(stored.data).length === 0) {
@@ -701,8 +854,11 @@ export class ScriptApiService {
 						typeof params.extension_id === "string" && params.extension_id.trim()
 							? params.extension_id.trim()
 							: scriptId;
-					const file = scriptDataFilePath(this.#host.cwd, this.#host.getCurrentChatDir(), target, scope, effId);
-					const cur = readScriptDataFile(file);
+					const presetName = typeof params.presetName === "string" && params.presetName.trim()
+						? params.presetName.trim()
+						: this.#host.getConfig().preset;
+					const file = scriptDataFilePath(this.#host.cwd, this.#host.getCurrentChatDir(), target, scope, effId, presetName);
+					const cur = readScriptScopeData(file, scope);
 					if (typeof params.expectedVersion === "number" && params.expectedVersion !== cur.version) {
 						return {
 							ok: false,
@@ -756,8 +912,11 @@ export class ScriptApiService {
 						typeof params.extension_id === "string" && params.extension_id.trim()
 							? params.extension_id.trim()
 							: scriptId;
-					const file = scriptDataFilePath(this.#host.cwd, this.#host.getCurrentChatDir(), target, scope, effId);
-					const cur = readScriptDataFile(file);
+					const presetName = typeof params.presetName === "string" && params.presetName.trim()
+						? params.presetName.trim()
+						: this.#host.getConfig().preset;
+					const file = scriptDataFilePath(this.#host.cwd, this.#host.getCurrentChatDir(), target, scope, effId, presetName);
+					const cur = readScriptScopeData(file, scope);
 					const key = typeof params.key === "string" && params.key.trim() ? params.key.trim() : undefined;
 					if (key) {
 						const nextData = { ...cur.data };
@@ -1634,29 +1793,68 @@ export class ScriptApiService {
 				case "text.macros": {
 					const rawText = typeof params.text === "string" ? params.text : "";
 					const target = this.#host.getTarget();
+					const chatDir = this.#host.getCurrentChatDir();
 					const msgs = this.#host.getMessages();
+					const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1]?.text : undefined;
 					const lastUser = [...msgs].reverse().find((m) => m.role === "user")?.text;
+					const lastChar = [...msgs].reverse().find((m) => m.role !== "user")?.text;
+					const chatFile = scriptDataFilePath(this.#host.cwd, chatDir, target, "chat", scriptId);
+					const globalFile = scriptDataFilePath(this.#host.cwd, chatDir, target, "global", scriptId);
+					const storedChat = readScriptScopeData(chatFile, "chat");
+					const storedGlobal = readScriptScopeData(globalFile, "global");
 					const env = createMacroEnv({
 						charName: typeof params.charName === "string" ? params.charName : target.charName,
 						userName: typeof params.userName === "string" ? params.userName : target.userName,
 						userText: typeof params.userText === "string" ? params.userText : lastUser,
+						lastMessage: typeof params.lastMessage === "string" ? params.lastMessage : lastMsg,
+						lastCharMessage: typeof params.lastCharMessage === "string" ? params.lastCharMessage : lastChar,
+						vars: storedChat.data,
+						globalVars: storedGlobal.data,
 					});
 					if (params.vars && typeof params.vars === "object" && !Array.isArray(params.vars)) {
 						for (const [k, v] of Object.entries(params.vars as Record<string, unknown>)) {
-							env.vars.set(k, String(v ?? ""));
+							env.vars.set(k, typeof v === "object" && v !== null ? JSON.stringify(v) : String(v ?? ""));
+						}
+					}
+					if (params.globalVars && typeof params.globalVars === "object" && !Array.isArray(params.globalVars)) {
+						for (const [k, v] of Object.entries(params.globalVars as Record<string, unknown>)) {
+							env.globalVars.set(k, typeof v === "object" && v !== null ? JSON.stringify(v) : String(v ?? ""));
 						}
 					}
 					const evaluated = evalPresetMacros(applyMacros(rawText, { charName: env.charName, userName: env.userName }), env);
+					let persisted = false;
+					if (params.persist === true) {
+						if (env.dirtyLocal && env.dirtyLocal.size > 0) {
+							const nextChat = { ...storedChat.data };
+							for (const k of env.dirtyLocal) {
+								if (env.vars.has(k)) nextChat[k] = env.vars.get(k);
+								else delete nextChat[k];
+							}
+							writeScriptDataFile(chatFile, nextChat, storedChat.version);
+							persisted = true;
+						}
+						if (env.dirtyGlobal && env.dirtyGlobal.size > 0) {
+							const nextGlobal = { ...storedGlobal.data };
+							for (const k of env.dirtyGlobal) {
+								if (env.globalVars.has(k)) nextGlobal[k] = env.globalVars.get(k);
+								else delete nextGlobal[k];
+							}
+							writeScriptDataFile(globalFile, nextGlobal, storedGlobal.version);
+							persisted = true;
+						}
+					}
 					return {
 						ok: true,
 						action,
 						requestId,
-						status: "completed",
+						status: persisted ? "committed" : "completed",
 						target,
 						result: {
 							text: evaluated.text,
 							unsupported: evaluated.unsupported,
 							vars: Object.fromEntries(env.vars.entries()),
+							globalVars: Object.fromEntries(env.globalVars.entries()),
+							...(params.persist === true ? { persisted } : {}),
 						},
 					};
 				}
@@ -1715,9 +1913,9 @@ export class ScriptApiService {
 					}
 					const state = this.#host.getState();
 					const chatDir = this.#host.getCurrentChatDir();
-					const chatVars = readScriptDataFile(scriptDataFilePath(this.#host.cwd, chatDir, target, "chat", scriptId)).data;
-					const globalVars = readScriptDataFile(scriptDataFilePath(this.#host.cwd, chatDir, target, "global", scriptId)).data;
-					const characterVars = readScriptDataFile(scriptDataFilePath(this.#host.cwd, chatDir, target, "character", scriptId)).data;
+					const chatVars = readScriptScopeData(scriptDataFilePath(this.#host.cwd, chatDir, target, "chat", scriptId), "chat").data;
+					const globalVars = readScriptScopeData(scriptDataFilePath(this.#host.cwd, chatDir, target, "global", scriptId), "global").data;
+					const characterVars = readScriptScopeData(scriptDataFilePath(this.#host.cwd, chatDir, target, "character", scriptId), "character").data;
 
 					let allLoreEntries: LorebookEntry[] = [];
 					try {
@@ -1792,6 +1990,103 @@ export class ScriptApiService {
 						status: "completed",
 						target: this.#host.getTarget(),
 						result: { notified: !!text, level, text },
+					};
+				}
+
+				case "preset.list": {
+					const presetHost = this.#host.getPresetHost?.() ?? createDefaultPresetHost(this.#host.cwd, () => this.#host.getConfig());
+					return {
+						ok: true,
+						action,
+						requestId,
+						status: "completed",
+						target: this.#host.getTarget(),
+						result: presetHost.list(),
+					};
+				}
+
+				case "preset.get": {
+					const presetHost = this.#host.getPresetHost?.() ?? createDefaultPresetHost(this.#host.cwd, () => this.#host.getConfig());
+					const name = typeof params.name === "string" ? params.name : undefined;
+					const includeRaw = params.includeRaw === true;
+					const snap = presetHost.get(name);
+					if (!snap) {
+						return {
+							ok: false,
+							action,
+							requestId,
+							target: this.#host.getTarget(),
+							error: {
+								code: "not_found",
+								message: name && name !== "in_use" ? `未找到预设：${name}` : "当前未配置预设或预设文件不存在",
+							},
+						};
+					}
+					const { raw, ...rest } = snap;
+					return {
+						ok: true,
+						action,
+						requestId,
+						status: "completed",
+						target: this.#host.getTarget(),
+						result: includeRaw ? { ...rest, raw } : rest,
+					};
+				}
+
+				case "preset.update": {
+					if (this.#host.getTarget().streaming) {
+						return {
+							ok: false,
+							action,
+							requestId,
+							target: this.#host.getTarget(),
+							error: { code: "busy", message: "正在生成回复，请等待完成或先停止后再修改预设" },
+						};
+					}
+					const patchRaw =
+						params.patch && typeof params.patch === "object" && !Array.isArray(params.patch)
+							? (params.patch as PresetPatch)
+							: (params as PresetPatch);
+					const hasPatchContent =
+						Array.isArray(patchRaw.blocks) ||
+						Array.isArray(patchRaw.add) ||
+						Array.isArray(patchRaw.order) ||
+						Array.isArray(patchRaw.prompts) ||
+						(patchRaw.samplers && typeof patchRaw.samplers === "object") ||
+						(patchRaw.extensionsPatch && typeof patchRaw.extensionsPatch === "object");
+					if (!hasPatchContent) {
+						return {
+							ok: false,
+							action,
+							requestId,
+							target: this.#host.getTarget(),
+							error: { code: "invalid_input", message: "preset.update 至少需提供 blocks / order / prompts / samplers / add / extensionsPatch 之一" },
+						};
+					}
+					const presetHost = this.#host.getPresetHost?.() ?? createDefaultPresetHost(this.#host.cwd, () => this.#host.getConfig());
+					if (!presetHost.get("in_use")) {
+						return {
+							ok: false,
+							action,
+							requestId,
+							target: this.#host.getTarget(),
+							error: { code: "not_found", message: "当前未配置活动预设" },
+						};
+					}
+					const targetMode = params.target === "save" ? "save" : "draft";
+					const updated = await presetHost.update({ target: targetMode, patch: patchRaw });
+					const { raw: _raw, ...snapRest } = updated.snapshot;
+					return {
+						ok: true,
+						action,
+						requestId,
+						status: updated.refreshed ? "refreshed" : "committed",
+						target: this.#host.getTarget(),
+						result: {
+							...snapRest,
+							added: updated.added,
+							...(params.includeRaw === true ? { raw: updated.snapshot.raw } : {}),
+						},
 					};
 				}
 

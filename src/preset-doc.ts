@@ -56,6 +56,10 @@ export interface PresetBlockPatch {
 	enabled?: boolean;
 	name?: string;
 	content?: string;
+	role?: PieceRole;
+	injectionPosition?: 0 | 1;
+	injectionDepth?: number;
+	injectionOrder?: number;
 	/** 从预设里整块移除（prompts 与 prompt_order 同时摘掉）——8/12 用户点名保留的能力 */
 	remove?: boolean;
 }
@@ -65,6 +69,12 @@ export interface PresetPatch {
 	blocks?: PresetBlockPatch[];
 	/** 新增块（8/23：预设**创作**——此前只能改已有块，作者用梨园写预设时加不了新块） */
 	add?: NewPresetBlock[];
+	/** 整体重排选中 prompt_order 的条目顺序与启停 */
+	order?: Array<{ identifier: string; enabled: boolean }>;
+	/** 按 identifier 增量合并 prompts[] 原始定义字段（保留未点名属性） */
+	prompts?: Array<Record<string, unknown>>;
+	/** 增量深合并至 raw.extensions，完整保留未知第三方扩展字段 */
+	extensionsPatch?: Record<string, unknown>;
 }
 
 /**
@@ -199,9 +209,21 @@ export function presetDocView(doc: PresetDoc, opts: { full?: boolean } = {}): Pr
 	return out;
 }
 
+const isPlainObj = (v: unknown): v is Record<string, unknown> =>
+	!!v && typeof v === "object" && !Array.isArray(v);
+
+function mergePlainObject(target: unknown, patch: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = isPlainObj(target) ? { ...target } : {};
+	for (const [k, v] of Object.entries(patch)) {
+		if (v === undefined) continue;
+		out[k] = isPlainObj(v) && isPlainObj(out[k]) ? mergePlainObject(out[k], v) : structuredClone(v);
+	}
+	return out;
+}
+
 /**
  * 把补丁写回**原文**，返回新的原始 JSON（不改入参）。
- * 只动被点名的字段：开关落 `prompt_order[].enabled`，名字/内容落 `prompts[]`，其余原样。
+ * 只动被点名的字段：开关落 `prompt_order[].enabled`，名字/内容/属性落 `prompts[]`，其余原样。
  */
 export function patchPresetRaw(doc: PresetDoc, patch: PresetPatch): Record<string, unknown> {
 	const next = structuredClone(doc.raw) as Record<string, unknown>;
@@ -209,8 +231,44 @@ export function patchPresetRaw(doc: PresetDoc, patch: PresetPatch): Record<strin
 	const removed = new Set((patch.blocks ?? []).filter((p) => p.remove).map((p) => p.id));
 
 	if (doc.kind === "st") {
-		// 开关：写进装配时选中的那一份 order（选序规则与 stEntries 同源）
-		const orderIdx = pickPromptOrderIndex(next);
+		if (Array.isArray(patch.prompts) && patch.prompts.length > 0) {
+			const list = (Array.isArray(next.prompts) ? next.prompts : []) as Record<string, unknown>[];
+			const promptMap = new Map<string, Record<string, unknown>>();
+			for (const def of list) {
+				if (typeof def.identifier === "string") promptMap.set(def.identifier, def);
+			}
+			for (const inc of patch.prompts) {
+				if (!inc || typeof inc !== "object") continue;
+				const id = typeof inc.identifier === "string" ? inc.identifier : "";
+				if (!id) continue;
+				const existing = promptMap.get(id);
+				if (existing) {
+					Object.assign(existing, structuredClone(inc));
+				} else {
+					const created = structuredClone(inc);
+					list.push(created);
+					promptMap.set(id, created);
+				}
+			}
+			next.prompts = list;
+		}
+
+		// 开关与顺序：写进装配时选中的那一份 order（选序规则与 stEntries 同源）
+		let orderIdx = pickPromptOrderIndex(next);
+		if (Array.isArray(patch.order)) {
+			const normalizedOrder = patch.order
+				.filter((o) => o && typeof o.identifier === "string" && o.identifier.length > 0)
+				.map((o) => ({ identifier: o.identifier, enabled: o.enabled !== false }));
+			if (orderIdx >= 0) {
+				(next.prompt_order as Record<string, unknown>[])[orderIdx]!.order = normalizedOrder;
+			} else {
+				const po = Array.isArray(next.prompt_order) ? (next.prompt_order as Record<string, unknown>[]) : [];
+				po.push({ character_id: 100001, order: normalizedOrder });
+				next.prompt_order = po;
+				orderIdx = po.length - 1;
+			}
+		}
+
 		if (orderIdx >= 0) {
 			const chosen = (next.prompt_order as Record<string, unknown>[])[orderIdx];
 			const order = (chosen?.order ?? []) as Record<string, unknown>[];
@@ -228,6 +286,14 @@ export function patchPresetRaw(doc: PresetDoc, patch: PresetPatch): Record<strin
 			if (!p) continue;
 			if (typeof p.name === "string" && p.name.trim()) def.name = p.name.trim();
 			if (typeof p.content === "string") def.content = p.content;
+			if (p.role === "system" || p.role === "user" || p.role === "assistant") def.role = p.role;
+			if (p.injectionPosition === 0 || p.injectionPosition === 1) def.injection_position = p.injectionPosition;
+			if (typeof p.injectionDepth === "number" && Number.isFinite(p.injectionDepth)) {
+				def.injection_depth = Math.max(0, Math.trunc(p.injectionDepth));
+			}
+			if (typeof p.injectionOrder === "number" && Number.isFinite(p.injectionOrder)) {
+				def.injection_order = Math.trunc(p.injectionOrder);
+			}
 			// 没有 prompt_order 时，开关只能落在 prompts[].enabled 上
 			if (orderIdx < 0 && typeof p.enabled === "boolean") def.enabled = p.enabled;
 		}
@@ -241,6 +307,9 @@ export function patchPresetRaw(doc: PresetDoc, patch: PresetPatch): Record<strin
 			}
 		}
 		if (patch.add?.length) addStBlocks(next, patch.add);
+		if (isPlainObj(patch.extensionsPatch)) {
+			next.extensions = mergePlainObject(next.extensions, patch.extensionsPatch);
+		}
 		return next;
 	}
 
@@ -252,6 +321,11 @@ export function patchPresetRaw(doc: PresetDoc, patch: PresetPatch): Record<strin
 		if (typeof p.enabled === "boolean") b.enabled = p.enabled;
 		if (typeof p.name === "string" && p.name.trim()) b.name = p.name.trim();
 		if (typeof p.content === "string") b.content = p.content;
+		if (p.role === "system" || p.role === "user" || p.role === "assistant") b.role = p.role;
+		if (p.injectionPosition === 0) delete b.depth;
+		else if (typeof p.injectionDepth === "number" && Number.isFinite(p.injectionDepth)) {
+			b.depth = Math.max(0, Math.trunc(p.injectionDepth));
+		}
 	}
 	let out = removed.size > 0 ? blocks.filter((b) => !(typeof b.id === "string" && removed.has(b.id))) : blocks;
 	for (const b of patch.add ?? []) {
@@ -273,6 +347,9 @@ export function patchPresetRaw(doc: PresetDoc, patch: PresetPatch): Record<strin
 			if (typeof v === "number" && Number.isFinite(v)) s[k] = v;
 		}
 		next.samplers = s;
+	}
+	if (isPlainObj(patch.extensionsPatch)) {
+		next.extensions = mergePlainObject(next.extensions, patch.extensionsPatch);
 	}
 	return next;
 }

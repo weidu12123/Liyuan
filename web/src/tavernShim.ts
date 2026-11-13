@@ -640,6 +640,12 @@ export function installParentTavernShim(): void {
 			removeEntry: (fingerprint: string, opts?: LiyuanScriptCallOptions) => invoke("lorebooks.removeEntry", { fingerprint }, opts),
 			mount: (path: string, mounted = true, opts?: LiyuanScriptCallOptions) => invoke("lorebooks.mount", { path, mounted }, opts),
 		},
+		preset: {
+			list: (opts?: LiyuanScriptCallOptions) => invoke("preset.list", {}, opts),
+			get: (params?: { name?: string; includeRaw?: boolean } | string, opts?: LiyuanScriptCallOptions) =>
+				invoke("preset.get", typeof params === "string" ? { name: params } : (params ?? {}), opts),
+			update: (params: Record<string, unknown>, opts?: LiyuanScriptCallOptions) => invoke("preset.update", params, opts),
+		},
 		project: {
 			files: {
 				list: (opts?: LiyuanScriptCallOptions) => invoke("project.files.list", {}, opts),

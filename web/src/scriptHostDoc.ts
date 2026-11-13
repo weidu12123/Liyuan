@@ -26,6 +26,52 @@
 
 import { IMPORT_MAP_SNIPPET, MVU_BUNDLE_DATA_URI, MVU_ZOD_DATA_URI, SCRIPT_FRAME_CSP } from "./frameDoc.ts";
 import { IFRAME_TAVERN_BRIDGE_SNIPPET, IFRAME_TAVERN_GLOBALS_SNIPPET } from "./tavernShim.ts";
+import { authorScriptHash } from "../../src/authorScripts.ts";
+import type { AuthorScript } from "./wire.ts";
+
+/** 生成每条脚本的独立帧元数据（兼容酒馆助手 TH-script--<source>--<id> 命名协议） */
+export function scriptFrameMeta(s: Pick<AuthorScript, "id" | "source" | "content">): {
+	key: string;
+	reactKey: string;
+	frameId: string;
+} {
+	const key = `${s.source}:${s.id}`;
+	return {
+		key,
+		reactKey: `${key}:${authorScriptHash(s.content)}`,
+		frameId: `TH-script--${s.source}--${s.id}`,
+	};
+}
+
+/**
+ * 判别待挂载至父页的节点是否为非同源外部 `<script src>`。
+ * 用于同步拦截第三方脚本向父页 head/body 注入外部 URL 脚本。
+ */
+export function isBlockedExternalScriptNode(node: unknown, allowedOrigin?: string): boolean {
+	if (!node || typeof node !== "object") return false;
+	const el = node as {
+		tagName?: unknown;
+		nodeName?: unknown;
+		src?: unknown;
+		getAttribute?: (name: string) => string | null;
+	};
+	const tag = String(el.tagName ?? el.nodeName ?? "").toUpperCase();
+	if (tag !== "SCRIPT") return false;
+	if (el.getAttribute?.("data-liyuan-allow") === "1") return false;
+	const rawSrc = (el.getAttribute?.("src") ?? (typeof el.src === "string" ? el.src : "")).trim();
+	if (!rawSrc) return false;
+	if (/^(?:data|blob):/i.test(rawSrc)) return false;
+	if (!/^(?:https?:)?\/\//i.test(rawSrc)) return false;
+	if (allowedOrigin) {
+		try {
+			const resolved = new URL(rawSrc, allowedOrigin);
+			if (resolved.origin === allowedOrigin) return false;
+		} catch {
+			return true;
+		}
+	}
+	return true;
+}
 
 /** 父页挂载点：宿主帧同源直读这个全局取脚本（挂 window 而非模块变量，跨帧才看得见） */
 export const AUTHOR_SCRIPTS_GLOBAL = "__liyuanAuthorScripts";
@@ -45,7 +91,29 @@ try{
       .replace(/\\x60https:\\/\\/\\$\\{[^}]+\\}\\/gh\\/MagicalAstrogy\\/MagVarUpdate(?:@[^/\\x60]+)?\\/artifact\\/bundle\\.js\\x60/g,JSON.stringify(MVU_URI))
       .replace(/https?:\\/\\/(?:testingcf|cdn|fastly|gcore)\\.jsdelivr\\.net\\/gh\\/StageDog\\/tavern_resource(?:@[^/'"]+)?\\/dist\\/util\\/mvu_zod\\.js/g,MVU_ZOD_URI);
   }
-  function run(list){
+  function selectOwnScripts(list){
+    if(!Array.isArray(list)||!list.length)return [];
+    var fe=null;
+    try{fe=g.frameElement;}catch(e0){}
+    var fKey=(fe&&typeof fe.getAttribute==="function"&&fe.getAttribute("data-liyuan-script-key"))||"";
+    var fId=(fe&&fe.id)||g.name||"";
+    if(fKey||(fId&&fId.indexOf("TH-script--")===0)){
+      var matched=[];
+      for(var k=0;k<list.length;k++){
+        var it=list[k]||{};
+        var src=String(it.source||"card");
+        var id=String(it.id||("card-"+k));
+        if((fKey&&src+":"+id===fKey)||("TH-script--"+src+"--"+id===fId)){
+          matched.push(it);
+          break;
+        }
+      }
+      return matched;
+    }
+    return list;
+  }
+  function run(allList){
+    var list=selectOwnScripts(allList);
     var ok=0,bad=0,mods=0;
     if(!g.__liyuanScriptRegistry)g.__liyuanScriptRegistry={};
     for(var i=0;i<list.length;i++){
@@ -77,7 +145,7 @@ try{
     }
     try{
       var pw=parentWin();
-      if(pw)pw.postMessage({liyuanScriptHostBooted:{ok:ok,failed:bad,total:list.length,modules:mods}},"*");
+      if(pw)pw.postMessage({liyuanScriptHostBooted:{ok:ok,failed:bad,total:list.length,modules:mods,scriptId:g.__liyuanCurrentScriptId||""}},"*");
     }catch(e2){}
   }
   // 父页在渲染期就挂好了清单，正常一次就读到。轮询只是兜底（并发渲染/提交时序的意外），

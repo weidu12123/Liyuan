@@ -3,9 +3,12 @@ import test from "node:test";
 import {
 	openaiToAnthropicBody,
 	openaiToGeminiBody,
+	openaiToResponsesBody,
 	resolveUpstreamRequest,
+	squashSystemMessagesInArray,
 	translateAnthropicSseEvent,
 	translateGeminiSseData,
+	translateResponsesSseEvent,
 } from "../src/stage/pure-proxy.ts";
 
 test("pure-proxy：OpenAI 兼容渠道 100% 原样透传脚本自定义字段与鉴权头", () => {
@@ -109,3 +112,74 @@ test("pure-proxy：Google Gemini 官网协议双向转换与 functionCall SSE �
 	});
 	assert.ok(gemChunk && gemChunk.includes('"name":"soliumbra_reply"') && gemChunk.includes('"finish_reason":"stop"'));
 });
+
+test("pure-proxy：支持 custom_exclude_body / custom_include_headers / squash_system_messages / 无工具预填安全门与 openai-responses", () => {
+	const squashed = squashSystemMessagesInArray([
+		{ role: "system", content: "S1" },
+		{ role: "system", content: "S2" },
+		{ role: "user", content: "U1" },
+		{ role: "system", content: "S3" },
+	]);
+	assert.equal(squashed.length, 3);
+	assert.equal(squashed[0]!.content, "S1\n\nS2");
+
+	// 无工具时保留 partial，有工具时自动剥除 partial
+	const noToolReq = resolveUpstreamRequest(
+		{ id: "deepseek-chat", api: "openai-completions", baseUrl: "https://api.deepseek.com/beta" },
+		{ apiKey: "k" },
+		{
+			squash_system_messages: true,
+			custom_include_headers: "x-fox-header: abc",
+			custom_exclude_body: "presence_penalty",
+			presence_penalty: 0.5,
+			messages: [
+				{ role: "system", content: "A" },
+				{ role: "system", content: "B" },
+				{ role: "user", content: "hi" },
+				{ role: "assistant", content: "OUTPUT:", partial: true },
+			],
+		},
+	);
+	assert.equal(noToolReq.headers["x-fox-header"], "abc");
+	assert.equal(noToolReq.body.presence_penalty, undefined);
+	assert.equal((noToolReq.body.messages as Array<{ content: string }>).length, 3);
+	assert.equal((noToolReq.body.messages as Array<{ partial?: boolean }>)[2]!.partial, true);
+
+	const withToolReq = resolveUpstreamRequest(
+		{ id: "deepseek-chat", api: "openai-completions", baseUrl: "https://api.deepseek.com/beta" },
+		{ apiKey: "k" },
+		{
+			tools: [{ type: "function", function: { name: "lorebook_search", parameters: {} } }],
+			messages: [
+				{ role: "user", content: "hi" },
+				{ role: "assistant", content: "OUTPUT:", partial: true },
+			],
+		},
+	);
+	assert.equal((withToolReq.body.messages as Array<{ partial?: boolean }>)[1]!.partial, undefined, "有工具时禁止打 partial 预填");
+
+	// openai-responses 双向转换
+	const respReq = resolveUpstreamRequest(
+		{ id: "gpt-5", api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+		{ apiKey: "sk-resp" },
+		{
+			messages: [
+				{ role: "system", content: "系统指令" },
+				{ role: "user", content: "你好" },
+			],
+			max_tokens: 2048,
+		},
+	);
+	assert.equal(respReq.protocol, "openai-responses");
+	assert.equal(respReq.url, "https://api.openai.com/v1/responses");
+	assert.equal(respReq.body.instructions, "系统指令");
+	assert.equal(respReq.body.max_output_tokens, 2048);
+
+	const deltaChunk = translateResponsesSseEvent("response.output_text.delta", {
+		type: "response.output_text.delta",
+		delta: "回答片段",
+	});
+	assert.ok(deltaChunk && deltaChunk.includes('"content":"回答片段"'));
+	void openaiToResponsesBody;
+});
+

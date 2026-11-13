@@ -19,7 +19,7 @@ import type { PresetDoc } from "../preset-doc.ts";
 import { createMacroEnv, evalPresetMacros } from "../preset-macro.ts";
 import { extractSPresetConfig } from "../spreset-config.ts";
 import type { CharacterCard, LorebookEntry } from "../types.ts";
-import { buildLiyuanOutputOverrideFragment, type PromptFragment } from "./assemble.ts";
+import { buildLiyuanExplorePhaseOverrideFragment, buildLiyuanOutputOverrideFragment, type PromptFragment } from "./assemble.ts";
 
 const LAST_USER_SENTINEL = "__LIYUAN_LAST_USER_SENTINEL__";
 
@@ -54,6 +54,13 @@ export interface LiyuanPresetDynamicInput {
 	initialVars?: Record<string, unknown>;
 	/** 运行期浏览器/插件临时片段（如 injectPrompts / setExtensionPrompt） */
 	extensionPrompts?: PromptFragment[];
+	/**
+	 * 投影档位：
+	 * - "standard"（默认）：剥假工具暗号并附【梨园引擎输出协议】；
+	 * - "explore"（两段 Phase 1）：剥假工具暗号并附【前置探索阶段协议】引导先查后调 enter_writing_phase；
+	 * - "compose"（两段 Phase 2）：保留原装假工具暗号（交由浏览器中转脚本消费），且不再附梨园覆盖块。
+	 */
+	projectionMode?: "standard" | "explore" | "compose";
 }
 
 export interface LiyuanPresetDynamicResult {
@@ -144,50 +151,60 @@ function visibleProse(text: string): string {
 function sanitizeSinglePiece(
 	rawText: string,
 	hints: DynamicProtocolHints,
+	opts: { skipFakeToolStrip?: boolean; realUserText?: string } = {},
 ): { text: string; skippedReason?: "delimiter" | "fake-tool-only" | "last-user-only" | "empty-shell" } {
 	let text = rawText.trim();
 	if (!text) return { text: "", skippedReason: "empty-shell" };
 
-	// 1. 脚本动态声明的搬运定界符整块跳过
-	for (const d of hints.delimiters) {
-		if (text === d || visibleProse(text) === d) {
-			return { text: "", skippedReason: "delimiter" };
-		}
-		if (text.includes(d)) {
-			text = text.replaceAll(d, "").trim();
-		}
+	const skipFakeToolStrip = opts.skipFakeToolStrip === true;
+	if (skipFakeToolStrip && hints.isSPreset && opts.realUserText && text.includes("<<<|catgodml|")) {
+		text = text.replace(/<<<\|catgodml\|([^>]*)>>>/g, (whole, body: string) =>
+			body.includes(LAST_USER_SENTINEL) ? `<<<|catgodml|${body.replaceAll(LAST_USER_SENTINEL, opts.realUserText!)}>>>` : whole,
+		);
 	}
 
-	// 2. SPreset 协议控制标记清理
-	let touchedFakeTool = false;
-	if (hints.isSPreset) {
-		if (text.includes("<<<|catgodml|")) {
-			text = text.replace(/<<<\|catgodml\|[\s\S]*?>>>/g, "");
-			touchedFakeTool = true;
+	if (!skipFakeToolStrip) {
+		// 1. 脚本动态声明的搬运定界符整块跳过
+		for (const d of hints.delimiters) {
+			if (text === d || visibleProse(text) === d) {
+				return { text: "", skippedReason: "delimiter" };
+			}
+			if (text.includes(d)) {
+				text = text.replaceAll(d, "").trim();
+			}
 		}
-		if (/<\|sep\|>|<\|merge\|>|<run_tool_replacement>/i.test(text)) {
-			// 在 SPreset <run_tool_replacement> 协议句内去除关于 reply 工具的诱导子句，保留思考要求
+
+		// 2. SPreset 协议控制标记清理
+		let touchedFakeTool = false;
+		if (hints.isSPreset) {
+			if (text.includes("<<<|catgodml|")) {
+				text = text.replace(/<<<\|catgodml\|[\s\S]*?>>>/g, "");
+				touchedFakeTool = true;
+			}
+			if (/<\|sep\|>|<\|merge\|>|<run_tool_replacement>/i.test(text)) {
+				// 在 SPreset <run_tool_replacement> 协议句内去除关于 reply 工具的诱导子句，保留思考要求
+				text = text
+					.replace(/<\|sep\|>|<\|merge\|>|<run_tool_replacement>/gi, "")
+					.replace(/[^。\n；;]*?\breply\s*工具[^，,。\n；;]*[，,。]?/gi, "")
+					.trim();
+				touchedFakeTool = true;
+			}
+		}
+
+		// 3. 剥除显式点名假工具（如 soliumbra_reply / wave_context_reference / publish_story）的整句
+		for (const toolName of hints.fakeToolNames) {
+			if (!text.includes(toolName)) continue;
+			touchedFakeTool = true;
+			const reTool = escapeReg(toolName);
 			text = text
-				.replace(/<\|sep\|>|<\|merge\|>|<run_tool_replacement>/gi, "")
-				.replace(/[^。\n；;]*?\breply\s*工具[^，,。\n；;]*[，,。]?/gi, "")
+				.replace(new RegExp(`[^。！？\\n]*?(?:\`?${reTool}\`?)[^。！？\\n]*[。！？\\n]?`, "gi"), "")
 				.trim();
-			touchedFakeTool = true;
 		}
-	}
-
-	// 3. 剥除显式点名假工具（如 soliumbra_reply / wave_context_reference / publish_story）的整句
-	for (const toolName of hints.fakeToolNames) {
-		if (!text.includes(toolName)) continue;
-		touchedFakeTool = true;
-		const reTool = escapeReg(toolName);
-		text = text
-			.replace(new RegExp(`[^。！？\\n]*?(?:\`?${reTool}\`?)[^。！？\\n]*[。！？\\n]?`, "gi"), "")
-			.trim();
-	}
-	if (touchedFakeTool) {
-		text = stripEmptyTagPairs(text).trim();
-		if (!visibleProse(text)) {
-			return { text: "", skippedReason: "fake-tool-only" };
+		if (touchedFakeTool) {
+			text = stripEmptyTagPairs(text).trim();
+			if (!visibleProse(text)) {
+				return { text: "", skippedReason: "fake-tool-only" };
+			}
 		}
 	}
 
@@ -410,6 +427,9 @@ export async function assembleLiyuanPresetDynamic(input: LiyuanPresetDynamicInpu
 	const depthFrags: PromptFragment[] = [];
 	let afterHistory = false;
 
+	const projectionMode = input.projectionMode ?? "standard";
+	const skipFakeToolStrip = projectionMode === "compose";
+
 	for (const e of entries) {
 		if (!e.enabled || e.missing || e.identifier === "SPresetSettings") continue;
 		totalEnabled++;
@@ -437,7 +457,7 @@ export async function assembleLiyuanPresetDynamic(input: LiyuanPresetDynamicInpu
 
 		if (!text.trim()) continue;
 
-		const sanitized = sanitizeSinglePiece(text, hints);
+		const sanitized = sanitizeSinglePiece(text, hints, { skipFakeToolStrip, realUserText: input.userText });
 		if (!sanitized.text) {
 			if (sanitized.skippedReason === "last-user-only") skippedLastUserOnly++;
 			else if (sanitized.skippedReason === "fake-tool-only" || sanitized.skippedReason === "delimiter") strippedFakeToolBlocks++;
@@ -512,9 +532,27 @@ export async function assembleLiyuanPresetDynamic(input: LiyuanPresetDynamicInpu
 		fragments.push(ef);
 	}
 
-	// 只要本次投出了任何预设或扩展片段，就在 after 最末尾追加梨园最高优先级覆盖协议
-	if (fragments.length > 0) {
-		fragments.push(buildLiyuanOutputOverrideFragment());
+	if (projectionMode === "compose") {
+		const topPrefill = typeof presetDoc.raw.assistant_prefill === "string" ? presetDoc.raw.assistant_prefill.trim() : "";
+		const lastAfter = afterPieces[afterPieces.length - 1];
+		if (topPrefill && lastAfter?.role !== "assistant") {
+			fragments.push({
+				id: "preset-assistant-prefill",
+				placement: "after",
+				role: "assistant",
+				text: topPrefill,
+				order: 800_000_000,
+			});
+		}
+	}
+
+	// standard / explore 附带对应梨园覆盖协议；compose 交由浏览器全破限脚本接管，不再强压覆盖块
+	if (fragments.length > 0 && projectionMode !== "compose") {
+		fragments.push(
+			projectionMode === "explore"
+				? buildLiyuanExplorePhaseOverrideFragment()
+				: buildLiyuanOutputOverrideFragment(),
+		);
 	}
 
 	const dirtyLocal: Record<string, string> = {};

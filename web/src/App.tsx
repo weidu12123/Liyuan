@@ -48,6 +48,7 @@ import {
 	tavern_events,
 } from "./tavernShim.ts";
 import { runPureTavernBrowserTurn } from "./pureTavernRunner.ts";
+import { abortLiyuanBrowserRelay, runLiyuanBrowserRelay } from "./liyuanRelay.ts";
 import { collectRuntimeInjectedPrompts, syncCardRuntimeContext, syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
 import { setAtHome, shouldShowHomeOnBoot, touchVisit } from "./visit.ts";
 import { getTheme, setTheme } from "./theme.ts";
@@ -1523,6 +1524,12 @@ export default function App() {
 					if (frame.level !== "info") {
 						setWarnings((ws) => [{ ts: Date.now(), level: frame.level as "warning" | "error", text: frame.text }, ...ws].slice(0, 30));
 					}
+					break;
+				case "relay_request":
+					void runLiyuanBrowserRelay(frame);
+					break;
+				case "relay_abort":
+					abortLiyuanBrowserRelay(frame.relayId);
 					break;
 				case "error":
 					pushToast("error", frame.text);

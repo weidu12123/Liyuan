@@ -155,6 +155,8 @@ export interface RpConfig {
 	preset?: string;
 	/** 预设运行模式："liyuan"=梨园融合；"pure"=第 3 步纯酒馆复现（旁路梨园自有提示词/工具/场记，每轮按酒馆规则从零动态拼接） */
 	presetMode?: "liyuan" | "pure";
+	/** 梨园模式下预设请求级破限中转开关："auto"=按预设自动画像分流（默认，无脚本无预填时直连零影响）；"off"=强制直连；"always"=强制两段中转 */
+	breakthroughRelay?: "auto" | "off" | "always";
 	/** 本机工具总开关：开则 bash/读写等回到工具底座；本机开发默认开，分发默认关 */
 	backendControl?: boolean;
 	/** 决策门禁档位（PLAN-PHASE4 柱 1）：ask=关键剧情决策点停笔询问用户；silent=不问，等同旧行为。默认 silent */

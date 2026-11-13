@@ -23,7 +23,7 @@ export interface ProxyAuthInfo {
 }
 
 export interface PreparedUpstreamFetch {
-	protocol: "openai-passthrough" | "anthropic" | "google";
+	protocol: "openai-passthrough" | "openai-responses" | "anthropic" | "google";
 	url: string;
 	headers: Record<string, string>;
 	body: Record<string, unknown>;
@@ -43,8 +43,9 @@ function cleanHeaders(raw: Array<Record<string, string | null | undefined> | und
 	return out;
 }
 
-function parseCustomIncludeBody(raw: unknown): Record<string, unknown> {
-	if (!raw || typeof raw !== "string" || !raw.trim()) return {};
+function parseCustomKeyValMap(raw: unknown): Record<string, unknown> {
+	if (raw && typeof raw === "object" && !Array.isArray(raw)) return { ...(raw as Record<string, unknown>) };
+	if (typeof raw !== "string" || !raw.trim()) return {};
 	const t = raw.trim();
 	if (t.startsWith("{")) {
 		try {
@@ -63,6 +64,63 @@ function parseCustomIncludeBody(raw: unknown): Record<string, unknown> {
 		else if (valRaw === "false") out[m[1]!] = false;
 		else if (/^-?\d+(?:\.\d+)?$/.test(valRaw)) out[m[1]!] = Number(valRaw);
 		else out[m[1]!] = valRaw.replace(/^['"]|['"]$/g, "");
+	}
+	return out;
+}
+
+function parseExcludeKeys(raw: unknown): string[] {
+	if (Array.isArray(raw)) return raw.map((x) => String(x || "").trim()).filter(Boolean);
+	if (typeof raw !== "string" || !raw.trim()) return [];
+	const t = raw.trim();
+	if (t.startsWith("[")) {
+		try {
+			const arr = JSON.parse(t);
+			if (Array.isArray(arr)) return arr.map((x) => String(x || "").trim()).filter(Boolean);
+		} catch {
+			/* fallback to lines */
+		}
+	}
+	return t
+		.split(/\r?\n/)
+		.map((line) => line.replace(/^\s*-\s*/, "").replace(/:\s*.*$/, "").trim())
+		.filter(Boolean);
+}
+
+function deletePath(obj: Record<string, unknown>, pathExpr: string): void {
+	const parts = pathExpr.split(".").map((p) => p.trim()).filter(Boolean);
+	if (parts.length === 0) return;
+	let cur: unknown = obj;
+	for (let i = 0; i < parts.length - 1; i++) {
+		if (!cur || typeof cur !== "object" || Array.isArray(cur)) return;
+		cur = (cur as Record<string, unknown>)[parts[i]!];
+	}
+	if (cur && typeof cur === "object" && !Array.isArray(cur)) {
+		delete (cur as Record<string, unknown>)[parts[parts.length - 1]!];
+	}
+}
+
+/** 合并相邻连续的 system 消息（复刻酒馆 squash_system_messages 语义） */
+export function squashSystemMessagesInArray<T extends Record<string, unknown>>(messages: T[]): T[] {
+	const out: T[] = [];
+	for (const m of messages) {
+		const prev = out[out.length - 1];
+		if (m && prev && m.role === "system" && prev.role === "system") {
+			const merged = [contentToText(prev.content).trim(), contentToText(m.content).trim()].filter(Boolean).join("\n\n");
+			out[out.length - 1] = { ...prev, content: merged };
+		} else {
+			out.push({ ...m });
+		}
+	}
+	return out;
+}
+
+function sanitizeTrailingPrefillFlags(messages: Array<Record<string, unknown>>, hasAnyTools: boolean): Array<Record<string, unknown>> {
+	if (messages.length === 0) return messages;
+	const out = messages.map((m) => ({ ...m }));
+	const last = out[out.length - 1]!;
+	if (hasAnyTools && last.role === "assistant") {
+		delete last.partial;
+		delete last.prefix;
 	}
 	return out;
 }
@@ -277,20 +335,115 @@ export function openaiToGeminiBody(payload: Record<string, unknown>): Record<str
 	return body;
 }
 
+export function openaiToResponsesBody(payload: Record<string, unknown>, modelId: string): Record<string, unknown> {
+	if (Array.isArray(payload.input)) {
+		return {
+			...payload,
+			model: typeof payload.model === "string" && payload.model.trim() ? payload.model : modelId,
+			stream: payload.stream !== false,
+		};
+	}
+	const msgs = Array.isArray(payload.messages) ? (payload.messages as Array<Record<string, unknown>>) : [];
+	const sysParts: string[] = [];
+	const input: unknown[] = [];
+	for (const m of msgs) {
+		const role = String(m.role ?? "user");
+		if (role === "system") {
+			const t = contentToText(m.content).trim();
+			if (t) sysParts.push(t);
+			continue;
+		}
+		if (role === "tool") {
+			input.push({
+				type: "function_call_output",
+				call_id: String(m.tool_call_id ?? "call_0"),
+				output: contentToText(m.content),
+			});
+			continue;
+		}
+		if (role === "assistant" || role === "model") {
+			const txt = contentToText(m.content);
+			if (txt) input.push({ role: "assistant", content: txt });
+			if (Array.isArray(m.tool_calls)) {
+				for (const tc of m.tool_calls as Array<Record<string, unknown>>) {
+					const fn = (tc.function as Record<string, unknown> | undefined) ?? tc;
+					input.push({
+						type: "function_call",
+						call_id: String(tc.id ?? "call_0"),
+						name: String(fn.name ?? "tool"),
+						arguments: typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {}),
+					});
+				}
+			}
+			continue;
+		}
+		input.push({ role: "user", content: contentToText(m.content) });
+	}
+	const out: Record<string, unknown> = {
+		model: typeof payload.model === "string" && payload.model.trim() ? payload.model : modelId,
+		input,
+		stream: payload.stream !== false,
+	};
+	if (sysParts.length > 0) out.instructions = sysParts.join("\n\n");
+	if (typeof payload.temperature === "number") out.temperature = payload.temperature;
+	if (typeof payload.top_p === "number") out.top_p = payload.top_p;
+	if (typeof payload.max_tokens === "number") out.max_output_tokens = payload.max_tokens;
+	if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+		out.tools = (payload.tools as Array<Record<string, unknown>>).map((t) => {
+			const fn = (t.function as Record<string, unknown> | undefined) ?? t;
+			return {
+				type: "function",
+				name: String(fn.name ?? ""),
+				description: String(fn.description ?? ""),
+				parameters: fn.parameters ?? { type: "object", properties: {} },
+			};
+		});
+		if (payload.tool_choice !== undefined) out.tool_choice = payload.tool_choice;
+	}
+	return out;
+}
+
 export function resolveUpstreamRequest(
 	model: ProxyModelTarget,
 	auth: ProxyAuthInfo,
 	incomingPayload: Record<string, unknown>,
 ): PreparedUpstreamFetch {
 	const payload: Record<string, unknown> = { ...incomingPayload };
-	const extraInclude = parseCustomIncludeBody(payload.custom_include_body);
+	const extraInclude = parseCustomKeyValMap(payload.custom_include_body);
+	const extraHeadersRaw = parseCustomKeyValMap(payload.custom_include_headers);
+	const excludeKeys = parseExcludeKeys(payload.custom_exclude_body);
+	const shouldSquashSys = payload.squash_system_messages === true;
+
 	delete payload.custom_include_body;
+	delete payload.custom_include_headers;
+	delete payload.custom_exclude_body;
+	delete payload.squash_system_messages;
 	delete payload.chat_completion_source;
 	delete payload.type;
 	delete payload.dry_run;
 	delete payload.dryRun;
+
 	for (const [k, v] of Object.entries(extraInclude)) {
 		if (payload[k] === undefined) payload[k] = v;
+	}
+
+	if (Array.isArray(payload.messages)) {
+		let msgs = payload.messages as Array<Record<string, unknown>>;
+		if (shouldSquashSys) {
+			msgs = squashSystemMessagesInArray(msgs);
+		}
+		const hasAnyTools =
+			(Array.isArray(payload.tools) && payload.tools.length > 0) || msgs.some((m) => m.role === "tool");
+		payload.messages = sanitizeTrailingPrefillFlags(msgs, hasAnyTools);
+	}
+
+	for (const keyPath of excludeKeys) {
+		deletePath(payload, keyPath);
+	}
+
+	const customHeaders: Record<string, string> = {};
+	for (const [k, v] of Object.entries(extraHeadersRaw)) {
+		if (v != null) customHeaders[k] = String(v);
 	}
 
 	const isStream = payload.stream !== false;
@@ -303,6 +456,7 @@ export function resolveUpstreamRequest(
 			{ "content-type": "application/json", "anthropic-version": "2023-06-01" },
 			model.headers,
 			auth.headers,
+			customHeaders,
 			auth.apiKey ? { "x-api-key": auth.apiKey } : undefined,
 		]);
 		return {
@@ -322,6 +476,7 @@ export function resolveUpstreamRequest(
 			{ "content-type": "application/json" },
 			model.headers,
 			auth.headers,
+			customHeaders,
 			auth.apiKey ? { "x-goog-api-key": auth.apiKey } : undefined,
 		]);
 		return {
@@ -329,6 +484,26 @@ export function resolveUpstreamRequest(
 			url,
 			headers,
 			body: openaiToGeminiBody(payload),
+			isStream,
+		};
+	}
+
+	if (api === "openai-responses") {
+		const url = /\/responses$/i.test(base) ? base : `${base}/responses`;
+		const headers = cleanHeaders([
+			{ "content-type": "application/json" },
+			model.headers,
+			auth.headers,
+			customHeaders,
+		]);
+		if (auth.apiKey && !headers.authorization && !headers.Authorization) {
+			headers.authorization = `Bearer ${auth.apiKey}`;
+		}
+		return {
+			protocol: "openai-responses",
+			url,
+			headers,
+			body: openaiToResponsesBody(payload, model.id),
 			isStream,
 		};
 	}
@@ -341,6 +516,7 @@ export function resolveUpstreamRequest(
 		{ "content-type": "application/json" },
 		model.headers,
 		auth.headers,
+		customHeaders,
 	]);
 	if (auth.apiKey && !headers.authorization && !headers.Authorization) {
 		headers.authorization = `Bearer ${auth.apiKey}`;
@@ -463,4 +639,46 @@ export function translateGeminiSseData(dataJson: Record<string, unknown>): strin
 		);
 	}
 	return outChunks.length > 0 ? outChunks.join("") : null;
+}
+
+/** 将 OpenAI Responses API SSE 事件转为标准 ChatCompletions SSE 块 */
+export function translateResponsesSseEvent(eventName: string, dataJson: Record<string, unknown>): string | null {
+	const type = String(dataJson.type || eventName || "");
+	if (type === "response.output_text.delta" && typeof dataJson.delta === "string") {
+		return `data: ${JSON.stringify({
+			id: "chatcmpl-responses",
+			object: "chat.completion.chunk",
+			choices: [{ index: 0, delta: { content: dataJson.delta } }],
+		})}\n\n`;
+	}
+	if (type === "response.reasoning_summary_text.delta" && typeof dataJson.delta === "string") {
+		return `data: ${JSON.stringify({
+			id: "chatcmpl-responses",
+			object: "chat.completion.chunk",
+			choices: [{ index: 0, delta: { reasoning_content: dataJson.delta } }],
+		})}\n\n`;
+	}
+	if (type === "response.output_item.added" && dataJson.item && typeof dataJson.item === "object") {
+		const item = dataJson.item as { type?: string; call_id?: string; id?: string; name?: string };
+		if (item.type === "function_call") {
+			const idx = typeof dataJson.output_index === "number" ? dataJson.output_index : 0;
+			return `data: ${JSON.stringify({
+				id: "chatcmpl-responses",
+				object: "chat.completion.chunk",
+				choices: [{ index: 0, delta: { tool_calls: [{ index: idx, id: item.call_id ?? item.id ?? `call_${idx}`, type: "function", function: { name: item.name ?? "", arguments: "" } }] } }],
+			})}\n\n`;
+		}
+	}
+	if (type === "response.function_call_arguments.delta" && typeof dataJson.delta === "string") {
+		const idx = typeof dataJson.output_index === "number" ? dataJson.output_index : 0;
+		return `data: ${JSON.stringify({
+			id: "chatcmpl-responses",
+			object: "chat.completion.chunk",
+			choices: [{ index: 0, delta: { tool_calls: [{ index: idx, function: { arguments: dataJson.delta } }] } }],
+		})}\n\n`;
+	}
+	if (type === "response.completed") {
+		return "data: [DONE]\n\n";
+	}
+	return null;
 }

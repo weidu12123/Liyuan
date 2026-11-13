@@ -69,6 +69,7 @@ import {
 	resolveUpstreamRequest,
 	translateAnthropicSseEvent,
 	translateGeminiSseData,
+	translateResponsesSseEvent,
 } from "../src/stage/pure-proxy.ts";
 import { readScriptScopeVarsSync, writeScriptScopeVarUpdatesSync } from "../src/script-api.ts";
 import {
@@ -405,6 +406,37 @@ let unsubscribe: (() => void) | undefined;
 // ---------- WS 广播 ----------
 
 const clients = new Set<WebSocket>();
+let primaryRelayWs: WebSocket | null = null;
+const pickActiveRelayWs = (): WebSocket | null => {
+	if (primaryRelayWs && clients.has(primaryRelayWs) && primaryRelayWs.readyState === primaryRelayWs.OPEN) {
+		return primaryRelayWs;
+	}
+	for (const sock of clients) {
+		if (sock.readyState === sock.OPEN) {
+			primaryRelayWs = sock;
+			return sock;
+		}
+	}
+	return null;
+};
+
+interface PendingRelayEntry {
+	ws: WebSocket;
+	acked: boolean;
+	ackTimer: ReturnType<typeof setTimeout>;
+	onDelta: (kind: "text" | "thinking", delta: string) => void;
+	resolve: (res: {
+		text: string;
+		thinking: string;
+		stopReason: "stop" | "length" | "toolUse" | "aborted" | "error";
+		toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+		usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number };
+		errorMessage?: string;
+	} | null) => void;
+}
+const pendingRelays = new Map<string, PendingRelayEntry>();
+let relaySeq = 0;
+
 const wsAlive = new WeakMap<WebSocket, boolean>();
 const wsPingTimer = setInterval(() => {
 	for (const sock of clients) {
@@ -2734,7 +2766,9 @@ const httpServer = createServer((req, res) => {
 							const chunk =
 								up.protocol === "anthropic"
 									? translateAnthropicSseEvent(currentEvent || String(dataJson.type || ""), dataJson)
-									: translateGeminiSseData(dataJson);
+									: up.protocol === "openai-responses"
+										? translateResponsesSseEvent(currentEvent || String(dataJson.type || ""), dataJson)
+										: translateGeminiSseData(dataJson);
 							if (chunk && !res.writableEnded) res.write(chunk);
 						} catch {
 							/* ignore partial/non-json */
@@ -2815,6 +2849,55 @@ const httpServer = createServer((req, res) => {
 			).length;
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify({ ok: true, entryId: entryId ?? null, totalMessages }));
+			return;
+		}
+		if (req.method === "POST" && urlPath === "/api/liyuan-relay/ack") {
+			const body = await readJsonBody(req);
+			const relayId = String(body.relayId ?? "");
+			const pending = pendingRelays.get(relayId);
+			if (pending) {
+				pending.acked = true;
+				clearTimeout(pending.ackTimer);
+			}
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end('{"ok":true}');
+			return;
+		}
+		if (req.method === "POST" && urlPath === "/api/liyuan-relay/chunk") {
+			const body = await readJsonBody(req);
+			const relayId = String(body.relayId ?? "");
+			const pending = pendingRelays.get(relayId);
+			if (pending && (body.kind === "text" || body.kind === "thinking") && typeof body.delta === "string") {
+				pending.onDelta(body.kind, body.delta);
+			}
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end('{"ok":true}');
+			return;
+		}
+		if (req.method === "POST" && urlPath === "/api/liyuan-relay/finish") {
+			const body = await readJsonBody(req);
+			const relayId = String(body.relayId ?? "");
+			const pending = pendingRelays.get(relayId);
+			if (pending) {
+				clearTimeout(pending.ackTimer);
+				pendingRelays.delete(relayId);
+				pending.resolve({
+					text: typeof body.text === "string" ? body.text : "",
+					thinking: typeof body.thinking === "string" ? body.thinking : "",
+					stopReason:
+						body.stopReason === "length" ||
+						body.stopReason === "toolUse" ||
+						body.stopReason === "aborted" ||
+						body.stopReason === "error"
+							? body.stopReason
+							: "stop",
+					...(Array.isArray(body.toolCalls) ? { toolCalls: body.toolCalls } : {}),
+					...(body.usage && typeof body.usage === "object" ? { usage: body.usage } : {}),
+					...(typeof body.errorMessage === "string" ? { errorMessage: body.errorMessage } : {}),
+				});
+			}
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end('{"ok":true}');
 			return;
 		}
 		if (await handleApiRequest(req, res, restHost)) return;
@@ -3169,6 +3252,66 @@ stage = new StageEngine({
 	},
 	afterAuthoringTurn: () => restHost.softRefreshConfig(),
 	sideStreamFn: (model, context, options) => session.modelRuntime.streamSimple(model as never, context as never, options as never) as unknown as ReturnType<StageStreamFn>,
+	relayModelTurn: (input) => {
+		const targetWs = pickActiveRelayWs();
+		if (!targetWs) return Promise.resolve(null);
+		const relayId = `relay_${Date.now().toString(36)}_${++relaySeq}`;
+		return new Promise((resolve) => {
+			let settled = false;
+			const finishWith = (val: Parameters<PendingRelayEntry["resolve"]>[0]) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(ackTimer);
+				pendingRelays.delete(relayId);
+				input.signal?.removeEventListener("abort", onAbort);
+				resolve(val);
+			};
+			const ackTimer = setTimeout(() => {
+				// 3 秒未收到浏览器 ack（页面冻结/后台挂起）→ 回退 Node 直连，不悬空卡死
+				const p = pendingRelays.get(relayId);
+				if (p && !p.acked) {
+					try { targetWs.send(JSON.stringify({ type: "relay_abort", relayId } satisfies ServerFrame)); } catch {}
+					finishWith(null);
+				}
+			}, 3000);
+			const onAbort = () => {
+				try { targetWs.send(JSON.stringify({ type: "relay_abort", relayId } satisfies ServerFrame)); } catch {}
+				finishWith({ text: "", thinking: "", stopReason: "aborted" });
+			};
+			if (input.signal?.aborted) {
+				finishWith({ text: "", thinking: "", stopReason: "aborted" });
+				return;
+			}
+			input.signal?.addEventListener("abort", onAbort, { once: true });
+			pendingRelays.set(relayId, {
+				ws: targetWs,
+				acked: false,
+				ackTimer,
+				onDelta: input.onDelta,
+				resolve: finishWith,
+			});
+			try {
+				targetWs.send(
+					JSON.stringify({
+						type: "relay_request",
+						relayId,
+						phase: input.phase,
+						model: {
+							id: input.model.id,
+							provider: input.model.provider,
+							api: typeof input.model.api === "string" ? input.model.api : undefined,
+						},
+						presetMeta: input.presetMeta,
+						messages: input.messages,
+						...(input.tools ? { tools: input.tools } : {}),
+						samplers: input.samplers,
+					} satisfies ServerFrame),
+				);
+			} catch {
+				finishWith(null);
+			}
+		});
+	},
 	events: {
 		onTurnStart: () => { cli?.out(""); broadcast({ type: "agent", state: "start" }); },
 		onDelta: (kind, delta, draft, reset) => {
@@ -4584,6 +4727,7 @@ wss.on("connection", (ws, req) => {
 		return;
 	}
 	clients.add(ws);
+	primaryRelayWs = ws;
 	wsAlive.set(ws, true);
 	ws.on("pong", () => wsAlive.set(ws, true));
 	ws.send(JSON.stringify(helloFrame()));
@@ -4597,6 +4741,7 @@ wss.on("connection", (ws, req) => {
 	for (const request of screenshots.pending()) ws.send(JSON.stringify({ type: "screenshot", ...request }));
 
 	ws.on("message", (data) => {
+		primaryRelayWs = ws;
 		wsAlive.set(ws, true); // 任何入站帧都算活着——前端 20s 应用层 ping 覆盖 pong 迟到的情况
 		void (async () => {
 			let frame: ClientFrame;
@@ -4872,8 +5017,17 @@ wss.on("connection", (ws, req) => {
 		})();
 	});
 
-	ws.on("close", () => clients.delete(ws));
-	ws.on("error", () => clients.delete(ws));
+	const dropWs = () => {
+		clients.delete(ws);
+		if (primaryRelayWs === ws) primaryRelayWs = null;
+		for (const [id, entry] of [...pendingRelays.entries()]) {
+			if (entry.ws === ws) {
+				entry.resolve(entry.acked ? { text: "", thinking: "", stopReason: "aborted", errorMessage: t("浏览器连接已断开") } : null);
+			}
+		}
+	};
+	ws.on("close", dropWs);
+	ws.on("error", dropWs);
 });
 
 // ---------- 启动 ----------

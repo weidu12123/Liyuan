@@ -301,6 +301,24 @@ export function PresetPanel({
 			bumpWatchPanels();
 		});
 
+	/** 切换梨园模式下的破限中转策略 */
+	const switchBreakthroughRelay = (nextRelay: "auto" | "off" | "always") =>
+		run(async () => {
+			if ((files.data?.breakthroughRelay ?? "auto") === nextRelay) return;
+			await apiPut("/api/config", { breakthroughRelay: nextRelay });
+			toast(
+				"info",
+				nextRelay === "off"
+					? t("已关闭破限中转")
+					: nextRelay === "always"
+						? t("已切换为强制两段中转")
+						: t("已切换为自动识别破限中转"),
+			);
+			apiGetCacheClear("/api/presets");
+			files.reload();
+			bumpWatchPanels();
+		});
+
 	// ---------------- 库内任意预设：不装载也能展开拨开关（2026-09-14 用户点名） ----------------
 
 	type BlockRow = PresetBlockView & { content: string };
@@ -834,10 +852,10 @@ export function PresetPanel({
 					<section className="sp-section">
 						<div className="preset-chan-head">
 							<h4>{t("预设运行模式")}</h4>
-							<div className="seg" role="group" aria-label={t("预设运行模式")}>
+							<div className="seg-row" role="group" aria-label={t("预设运行模式")}>
 								<button
 									type="button"
-									className={`seg-btn ${(files.data?.presetMode ?? "liyuan") === "liyuan" ? "active" : ""}`}
+									className={`seg ${(files.data?.presetMode ?? "liyuan") === "liyuan" ? "active" : ""}`}
 									disabled={busy}
 									onClick={() => void switchPresetMode("liyuan")}
 								>
@@ -845,7 +863,7 @@ export function PresetPanel({
 								</button>
 								<button
 									type="button"
-									className={`seg-btn ${files.data?.presetMode === "pure" ? "active" : ""}`}
+									className={`seg ${files.data?.presetMode === "pure" ? "active" : ""}`}
 									disabled={busy}
 									onClick={() => void switchPresetMode("pure")}
 								>
@@ -858,6 +876,48 @@ export function PresetPanel({
 								? t("纯酒馆模式：单发直出与请求级脚本透传，兼容极端破限与假工具预设。")
 								: t("梨园模式：多轮检索、稿纸工件、记忆档案与场记记账，预设动态投影生效。")}
 						</div>
+						{(files.data?.presetMode ?? "liyuan") === "liyuan" && (
+							<>
+								<div className="preset-chan-head" style={{ marginTop: 10 }}>
+									<h4>{t("破限中转")}</h4>
+									<div className="seg-row" role="group" aria-label={t("破限中转")}>
+										<button
+											type="button"
+											className={`seg ${(files.data?.breakthroughRelay ?? "auto") === "auto" ? "active" : ""}`}
+											disabled={busy}
+											onClick={() => void switchBreakthroughRelay("auto")}
+										>
+											{t("自动识别")}
+										</button>
+										<button
+											type="button"
+											className={`seg ${files.data?.breakthroughRelay === "off" ? "active" : ""}`}
+											disabled={busy}
+											onClick={() => void switchBreakthroughRelay("off")}
+										>
+											{t("关闭中转")}
+										</button>
+										<button
+											type="button"
+											className={`seg ${files.data?.breakthroughRelay === "always" ? "active" : ""}`}
+											disabled={busy}
+											onClick={() => void switchBreakthroughRelay("always")}
+										>
+											{t("强制两段")}
+										</button>
+									</div>
+								</div>
+								<div className="sp-hint">
+									{files.data?.breakthroughRelay === "off"
+										? t("破限中转已关闭：无论预设是否含脚本或预填，一律直接调用原生模型。")
+										: files.data?.breakthroughProfile?.mode === "two-phase-bridge"
+											? t("当前识别：两段探索与交稿（先查世界书与决策，再经浏览器保留破限或预填输出正文）。")
+											: files.data?.breakthroughProfile?.mode === "channel-proxy"
+												? t("当前识别：单轮透传中转（保留请求级改包与压平脚本，同时开放全部梨园工具）。")
+												: t("当前识别：普通直连（未检测到破限脚本或预填，保持零额外开销）。")}
+								</div>
+							</>
+						)}
 					</section>
 					<section className="sp-section">
 						<div className="preset-chan-head">

@@ -50,6 +50,8 @@ import {
 	type PromptFragment,
 } from "./assemble.ts";
 import { assembleLiyuanPresetDynamic } from "./preset-dynamic.ts";
+import { detectPresetBreakthroughProfile } from "./preset-profile.ts";
+import { squashSystemMessagesInArray } from "./pure-proxy.ts";
 import {
 	constantLoreOf,
 	loadStageConfig,
@@ -78,6 +80,7 @@ import {
 	parseWorldInfoDecorators,
 } from "../ejs-engine.ts";
 import {
+	ENTER_WRITING_PHASE_TOOL,
 	MAX_ROUNDS,
 	runStageTool,
 	stageTools,
@@ -262,6 +265,32 @@ interface StageAgentSession {
 	setTurnSystemPrompt(prompt: string): void;
 }
 
+export interface BrowserRelayTurnInput {
+	phase: "explore" | "compose";
+	model: StageModelLike;
+	presetMeta: {
+		name: string | null;
+		raw: Record<string, unknown> | null;
+		charName: string;
+		userName: string;
+		squashSystemMessages?: boolean;
+	};
+	messages: Array<Record<string, unknown>>;
+	tools?: Array<Record<string, unknown>>;
+	samplers: Record<string, unknown>;
+	signal?: AbortSignal;
+	onDelta: (kind: "text" | "thinking", delta: string) => void;
+}
+
+export interface BrowserRelayTurnResult {
+	text: string;
+	thinking: string;
+	stopReason: "stop" | "length" | "toolUse" | "aborted" | "error";
+	toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+	usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number };
+	errorMessage?: string;
+}
+
 export interface StageEngineDeps {
 	cwd: string;
 	getSession: () => StageAgentSession;
@@ -387,6 +416,8 @@ export interface StageEngineDeps {
 	screenshot?: (file: string | undefined, signal?: AbortSignal) => Promise<{ png: string; width: number; height: number } | null>;
 	/** 仅供场记/压缩旁路使用；主模型由 pi 调用。 */
 	sideStreamFn: StageStreamFn;
+	/** 浏览器单轮中转桥（刀 3）：返回 null 表示无活跃浏览器或 ACK 超时，自动退回 Node 直连 */
+	relayModelTurn?: (input: BrowserRelayTurnInput) => Promise<BrowserRelayTurnResult | null>;
 	events?: StageEvents;
 }
 
@@ -411,6 +442,204 @@ const textOfAssistant = (m: AssistantMsgLike | null): string => {
 		.map((c) => c.text ?? "")
 		.join("");
 };
+
+function contextToOpenAiMessages(
+	systemPrompt: string | undefined,
+	msgs: unknown[],
+): Array<Record<string, unknown>> {
+	const out: Array<Record<string, unknown>> = [];
+	if (systemPrompt && systemPrompt.trim()) {
+		out.push({ role: "system", content: systemPrompt });
+	}
+	for (const raw of msgs) {
+		if (!raw || typeof raw !== "object") continue;
+		const m = raw as {
+			role?: string;
+			content?: unknown;
+			toolCallId?: string;
+			toolName?: string;
+		};
+		if (m.role === "user") {
+			out.push({ role: "user", content: contextText(m.content) });
+		} else if (m.role === "toolResult") {
+			out.push({
+				role: "tool",
+				tool_call_id: String(m.toolCallId ?? "call_0"),
+				...(m.toolName ? { name: m.toolName } : {}),
+				content: contextText(m.content),
+			});
+		} else if (m.role === "assistant") {
+			const blocks = Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>) : [];
+			const text = blocks.filter((b) => b.type === "text" && typeof b.text === "string").map((b) => String(b.text)).join("");
+			const toolCalls = blocks
+				.filter((b) => b.type === "toolCall")
+				.map((b, idx) => ({
+					id: String(b.id ?? `call_${idx}`),
+					type: "function",
+					function: {
+						name: String(b.name ?? "tool"),
+						arguments: typeof b.arguments === "string" ? b.arguments : JSON.stringify(b.arguments ?? {}),
+					},
+				}));
+			const msg: Record<string, unknown> = { role: "assistant", content: text };
+			if (toolCalls.length > 0) msg.tool_calls = toolCalls;
+			out.push(msg);
+		}
+	}
+	return out;
+}
+
+function createManualAssistantStream(): {
+	stream: ReturnType<StageStreamFn>;
+	push: (ev: StageStreamEvent) => void;
+	finish: (msg: AssistantMsgLike, isError?: boolean) => void;
+} {
+	const queue: StageStreamEvent[] = [];
+	const waiters: Array<(r: IteratorResult<StageStreamEvent>) => void> = [];
+	let closed = false;
+	let resolveFinal!: (m: AssistantMsgLike) => void;
+	const finalPromise = new Promise<AssistantMsgLike>((r) => {
+		resolveFinal = r;
+	});
+
+	const push = (ev: StageStreamEvent) => {
+		if (closed) return;
+		const w = waiters.shift();
+		if (w) w({ value: ev, done: false });
+		else queue.push(ev);
+	};
+
+	const finish = (msg: AssistantMsgLike, isError = false) => {
+		if (closed) return;
+		push({
+			type: isError ? "error" : "done",
+			...(isError ? { error: msg } : { message: msg }),
+		});
+		closed = true;
+		resolveFinal(msg);
+		while (waiters.length > 0) {
+			waiters.shift()!({ value: undefined as never, done: true });
+		}
+	};
+
+	const stream: ReturnType<StageStreamFn> = {
+		[Symbol.asyncIterator]() {
+			return {
+				next() {
+					if (queue.length > 0) {
+						return Promise.resolve({ value: queue.shift()!, done: false });
+					}
+					if (closed) {
+						return Promise.resolve({ value: undefined as never, done: true });
+					}
+					return new Promise<IteratorResult<StageStreamEvent>>((resolve) => waiters.push(resolve));
+				},
+			};
+		},
+		result: () => finalPromise,
+	};
+
+	return { stream, push, finish };
+}
+
+function createBrowserRelayExploreStreamFn(
+	relayModelTurn: NonNullable<StageEngineDeps["relayModelTurn"]>,
+	presetMeta: BrowserRelayTurnInput["presetMeta"],
+	samplers: Record<string, unknown>,
+	fallbackStreamFn: StageStreamFn,
+): StageStreamFn {
+	return (model, context, options) => {
+		const { stream, push, finish } = createManualAssistantStream();
+		const openAiMsgs = contextToOpenAiMessages(context.systemPrompt, context.messages);
+		const rawTools = (context as { tools?: Array<{ name: string; description?: string; parameters?: Record<string, unknown> }> }).tools;
+		const openAiTools = Array.isArray(rawTools) && rawTools.length > 0
+			? rawTools.map((t) => ({
+					type: "function",
+					function: {
+						name: t.name,
+						description: String(t.description ?? ""),
+						parameters: t.parameters ?? { type: "object", properties: {} },
+					},
+				}))
+			: undefined;
+
+		void (async () => {
+			try {
+				let accText = "";
+				let accThinking = "";
+				const res = await relayModelTurn({
+					phase: "explore",
+					model,
+					presetMeta,
+					messages: openAiMsgs,
+					...(openAiTools ? { tools: openAiTools } : {}),
+					samplers,
+					signal: options?.signal as AbortSignal | undefined,
+					onDelta: (kind, delta) => {
+						if (kind === "thinking") {
+							accThinking += delta;
+							push({ type: "thinking_delta", delta });
+						} else {
+							accText += delta;
+							push({ type: "text_delta", delta });
+						}
+					},
+				});
+
+				if (res === null) {
+					const fb = await Promise.resolve(fallbackStreamFn(model, context, options));
+					for await (const ev of fb) {
+						if (ev.type === "done" || ev.type === "error") continue;
+						push(ev);
+					}
+					const fbFinal = await fb.result();
+					finish(fbFinal, fbFinal.stopReason === "error" || fbFinal.stopReason === "aborted");
+					return;
+				}
+
+				const finalText = res.text || accText;
+				const finalThinking = res.thinking || accThinking;
+				const content: Array<{ type: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: Record<string, unknown> }> = [];
+				if (finalThinking) content.push({ type: "thinking", thinking: finalThinking });
+				if (finalText) content.push({ type: "text", text: finalText });
+				if (Array.isArray(res.toolCalls)) {
+					for (const tc of res.toolCalls) {
+						content.push({ type: "toolCall", id: tc.id, name: tc.name, arguments: tc.arguments });
+					}
+				}
+				const assistantMsg: AssistantMsgLike = {
+					role: "assistant",
+					content,
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: res.usage?.input ?? 0,
+						output: res.usage?.output ?? 0,
+						cacheRead: res.usage?.cacheRead ?? 0,
+						cacheWrite: res.usage?.cacheWrite ?? 0,
+						totalTokens: res.usage?.totalTokens ?? 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: res.stopReason,
+					...(res.errorMessage ? { errorMessage: res.errorMessage } : {}),
+					timestamp: Date.now(),
+				};
+				finish(assistantMsg, res.stopReason === "error" || res.stopReason === "aborted");
+			} catch (err) {
+				const msg: AssistantMsgLike = {
+					role: "assistant",
+					content: [],
+					stopReason: "error",
+					errorMessage: err instanceof Error ? err.message : String(err),
+				};
+				finish(msg, true);
+			}
+		})();
+
+		return stream;
+	};
+}
 
 /** 场记输入净化：剥除清空型 promptOnly 规则及思考/注释/选项壳，只留干净剧情正文与状态栏供记账 */
 export function prepareScribeAssistantText(
@@ -1040,6 +1269,13 @@ export class StageEngine {
 			? detectsLanguageMismatch(lastNarrativeText, config.language)
 			: false;
 
+		const presetProfile = purePresetMode || agentTurn ? null : detectPresetBreakthroughProfile(materials.presetDoc, config);
+		const useTwoPhase = Boolean(presetProfile?.mode === "two-phase-bridge" && this.#deps.relayModelTurn);
+		const useChannelRelay = Boolean(presetProfile?.mode === "channel-proxy" && this.#deps.relayModelTurn);
+		let enteredComposePhase = false;
+		let composePhaseNotes = "";
+		let pendingComposePhase = false;
+
 		let systemPrompt = "";
 		let tools: StageTool[] = [];
 		let rpNames: string[] = [];
@@ -1053,6 +1289,22 @@ export class StageEngine {
 		let agentStateBlock = () => "";
 		let messages: unknown[] = [];
 		let samplers = config.samplers ?? materials.presetDoc?.samplers;
+		let composeContextSnapshot: {
+			effectiveEntries: LorebookEntry[];
+			activated: LorebookEntry[];
+			effectiveCardAgents: string;
+			panelIndex?: string;
+			memoryRecall?: string;
+			customFragments: PromptFragment[];
+			chatVars: Record<string, unknown>;
+			globalVars: Record<string, unknown>;
+			characterVars: Record<string, unknown>;
+			presetVars: Record<string, unknown>;
+			endsWithUser: boolean;
+			past: Array<{ role: "user" | "assistant"; text: string }>;
+			summaryText?: string;
+			injection: string;
+		} | null = null;
 
 		const ws = createWorkspace({ sessionId: sm.getSessionId(), parentId: sm.getLeafId(),
 			...(userText === null ? { userId: [...branch].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.id } : {}) });
@@ -1189,10 +1441,14 @@ export class StageEngine {
 			mediaOpts = { tts: this.#deps.ttsAvailable?.() === true };
 			const mediaTools = this.#deps.media ? mediaStageTools(config.language, mediaOpts) : [];
 			const askEnabled = !!this.#deps.askUser;
+			const baseWriteTools = writeTools(config.language).filter((t) => t.name !== "ask" || askEnabled);
+			const filteredWriteTools = useTwoPhase
+				? [...baseWriteTools.filter((t) => !t.name.startsWith("draft_")), ENTER_WRITING_PHASE_TOOL]
+				: baseWriteTools;
 			const rpTools: StageTool[] = [
 				...stageTools(config.language, readDeps),
 				...(skillList.length > 0 ? [skillReadTool(config.language, skillList)] : []),
-				...writeTools(config.language).filter((t) => t.name !== "ask" || askEnabled),
+				...filteredWriteTools,
 				...mediaTools,
 				...mcpTools,
 			];
@@ -1222,13 +1478,21 @@ export class StageEngine {
 				...runtimeFragments,
 			];
 			let fragments: PromptFragment[] = customFragments;
+			let phaseVars = {
+				chatVars: {} as Record<string, unknown>,
+				globalVars: {} as Record<string, unknown>,
+				characterVars: {} as Record<string, unknown>,
+				presetVars: {} as Record<string, unknown>,
+			};
 			if (!agentTurn && materials.presetDoc) {
 				const sessionId = sm.getSessionId();
 				const presetName = materials.presetDoc.name;
-				const chatVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "chat", presetName);
-				const globalVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "global", presetName);
-				const characterVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "character", presetName);
-				const presetVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "preset", presetName);
+				phaseVars = {
+					chatVars: readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "chat", presetName),
+					globalVars: readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "global", presetName),
+					characterVars: readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "character", presetName),
+					presetVars: readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "preset", presetName),
+				};
 				const dyn = await assembleLiyuanPresetDynamic({
 					card,
 					presetDoc: materials.presetDoc,
@@ -1238,11 +1502,9 @@ export class StageEngine {
 					userText: lastUserText,
 					chatId: sessionId,
 					model: model.id,
-					chatVars,
-					globalVars,
-					characterVars,
-					presetVars,
+					...phaseVars,
 					extensionPrompts: customFragments,
+					projectionMode: useTwoPhase ? "explore" : "standard",
 				});
 				fragments = dyn.fragments;
 				writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "chat", dyn.dirtyLocal, presetName);
@@ -1294,6 +1556,21 @@ export class StageEngine {
 				summaryText,
 			});
 			messages = timeline.map((m) => (m.role === "user" ? asUser(m.text, m.isTail ? nowTs : 0) : asAssistant(m.text, m.isTail ? nowTs : 0)));
+			if (useTwoPhase) {
+				composeContextSnapshot = {
+					effectiveEntries,
+					activated,
+					effectiveCardAgents,
+					panelIndex,
+					memoryRecall,
+					customFragments,
+					...phaseVars,
+					endsWithUser,
+					past,
+					summaryText,
+					injection,
+				};
+			}
 		}
 
 		const { apiKey, headers } = await this.#deps.getAuth(model);
@@ -1619,13 +1896,29 @@ export class StageEngine {
 				return projected.messages;
 			},
 			providerPayload: (payload, requestModel = model) => {
-				if (!samplers || !Object.keys(samplers).length || !payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
-				return applyProjectedSamplers(payload as Record<string, unknown>, samplers, {
-					provider: requestModel.provider,
-					modelId: requestModel.id,
-					baseUrl: requestModel.baseUrl,
-					api: typeof requestModel.api === "string" ? requestModel.api : undefined,
-				});
+				if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+				let next = payload as Record<string, unknown>;
+				let mutated = false;
+				if (samplers && Object.keys(samplers).length > 0) {
+					const applied = applyProjectedSamplers(next, samplers, {
+						provider: requestModel.provider,
+						modelId: requestModel.id,
+						baseUrl: requestModel.baseUrl,
+						api: typeof requestModel.api === "string" ? requestModel.api : undefined,
+					});
+					if (applied) {
+						next = applied;
+						mutated = true;
+					}
+				}
+				if (presetProfile?.squashSystemMessages && Array.isArray(next.messages)) {
+					next = {
+						...next,
+						messages: squashSystemMessagesInArray(next.messages as Array<Record<string, unknown>>),
+					};
+					mutated = true;
+				}
+				return mutated ? next : undefined;
 			},
 			update: (event) => {
 				if (agentTurn) {
@@ -1816,6 +2109,17 @@ export class StageEngine {
 					return;
 				}
 				if (finished) return;
+				if (
+					useTwoPhase &&
+					!pendingComposePhase &&
+					!ws.revision &&
+					!userStopped &&
+					!this.#abort?.signal.aborted &&
+					(enteredComposePhase || !text.trim() || Boolean(errored))
+				) {
+					pendingComposePhase = true;
+					return;
+				}
 				finished = true;
 				try {
 					endInfo = await finish();
@@ -1847,6 +2151,18 @@ export class StageEngine {
 						signal,
 					);
 				}
+				if (name === "enter_writing_phase" && useTwoPhase) {
+					enteredComposePhase = true;
+					composePhaseNotes = typeof input.notes === "string" ? input.notes.trim() : "";
+					recordSegment(ws, { kind: "tool", activity: { kind: "tool_start", name, detail: composePhaseNotes || "准备正式交稿" } });
+					recordSegment(ws, { kind: "tool", activity: { kind: "tool_end", name, detail: "进入正式交稿阶段" } });
+					ev.onActivity?.("进入正式交稿阶段");
+					checkpoint(true);
+					return {
+						content: [{ type: "text", text: "已切换至正式交稿阶段，请按预设完整输出本拍正文。" }],
+						terminate: true,
+					};
+				}
 				if (name === "ask" && roundText.trim() && ws.mode === "write") {
 					runWriteTool(ws, wsDeps, ws.draft ? "draft_append" : "draft_write", { content: roundText, version: ws.version }, "capture");
 					tailStart = loopText.length; roundText = "";
@@ -1868,13 +2184,217 @@ export class StageEngine {
 				return result;
 			},
 		};
+		const relayPresetMeta = {
+			name: materials.presetDoc?.name ?? null,
+			raw: (materials.presetDoc?.raw as Record<string, unknown> | undefined) ?? null,
+			charName: card.name,
+			userName: config.userName,
+			squashSystemMessages: presetProfile?.squashSystemMessages,
+		};
+		const agentHolder = session as unknown as { agent?: { streamFunction?: StageStreamFn } };
+		const origStreamFn = agentHolder.agent?.streamFunction;
+		const shouldWrapPhase1Relay = Boolean((useTwoPhase || useChannelRelay) && this.#deps.relayModelTurn && agentHolder.agent && origStreamFn);
+		if (shouldWrapPhase1Relay && agentHolder.agent && origStreamFn && this.#deps.relayModelTurn) {
+			agentHolder.agent.streamFunction = createBrowserRelayExploreStreamFn(
+				this.#deps.relayModelTurn,
+				relayPresetMeta,
+				(samplers as Record<string, unknown> | undefined) ?? {},
+				origStreamFn,
+			);
+		}
+
+		const runComposePhase = async (): Promise<void> => {
+			if (!composeContextSnapshot || !materials.presetDoc) return;
+			const snap = composeContextSnapshot;
+			text = "";
+			roundText = "";
+			loopText = "";
+			loopTail = "";
+			errored = undefined;
+			ws.draft = "";
+			ws.sealed = false;
+			ws.timeline = ws.timeline.filter((s) => s.kind === "tool");
+			ev.onStreamClear?.();
+			checkpoint(true);
+
+			const findingLines: string[] = [];
+			for (const ex of exchanges) {
+				const m = ex as { role?: string; toolName?: string; content?: unknown };
+				if (m.role !== "toolResult" || !m.toolName || m.toolName === "enter_writing_phase") continue;
+				const txt = contextText(m.content).trim();
+				if (txt) findingLines.push(`- 【${m.toolName}】${txt}`);
+			}
+			if (ws.choices && ws.choices.length > 0) {
+				for (const c of ws.choices) {
+					findingLines.push(`- 【用户决策：${c.question}】${c.answer}`);
+				}
+			}
+			if (composePhaseNotes) {
+				findingLines.push(`- 【准备要点】${composePhaseNotes}`);
+			}
+			const findingsBlock =
+				findingLines.length > 0 ? `【本拍已核查设定与决策】\n${findingLines.join("\n")}` : "";
+
+			const composeDyn = await assembleLiyuanPresetDynamic({
+				card,
+				presetDoc: materials.presetDoc,
+				allLoreEntries: materials.allLoreEntries ?? materials.entries,
+				userName: config.userName,
+				history,
+				userText: lastUserText,
+				chatId: sm.getSessionId(),
+				model: model.id,
+				chatVars: snap.chatVars,
+				globalVars: snap.globalVars,
+				characterVars: snap.characterVars,
+				presetVars: snap.presetVars,
+				extensionPrompts: snap.customFragments,
+				projectionMode: "compose",
+			});
+			const composeSysFrags = composeDyn.fragments.filter((f) => f.placement === "system" && f.text.trim()).map((f) => f.text);
+			const composeSystemPrompt = buildStageSystemPrompt({
+				card,
+				config,
+				constantLore: constantLoreOf({ ...materials, entries: snap.effectiveEntries }),
+				rpSystemProtocol: readShippedRpSystemProtocol(),
+				userRules,
+				chatMemoryIndex,
+				cardAgents: snap.effectiveCardAgents,
+				...(composeSysFrags.length > 0 ? { extraSystemFragments: composeSysFrags } : {}),
+				tools: false,
+			});
+			const rawUserMsg = snap.endsWithUser ? history[history.length - 1]!.text : "";
+			const composeTailText = [snap.injection, findingsBlock, rawUserMsg].filter(Boolean).join("\n\n");
+			const composeTimeline = applyHistoryInjections(snap.past, composeTailText, composeDyn.fragments, {
+				tailHasUserMessage: snap.endsWithUser,
+				preserveAssistantPrefill: true,
+				summaryText: snap.summaryText,
+			});
+
+			const openAiComposeMsgs: Array<Record<string, unknown>> = [
+				...(composeSystemPrompt.trim() ? [{ role: "system", content: composeSystemPrompt }] : []),
+				...composeTimeline.map((m) => ({ role: m.role, content: m.text })),
+			];
+
+			let relayRes: BrowserRelayTurnResult | null = null;
+			if (this.#deps.relayModelTurn) {
+				relayRes = await this.#deps.relayModelTurn({
+					phase: "compose",
+					model,
+					presetMeta: relayPresetMeta,
+					messages: openAiComposeMsgs,
+					tools: [],
+					samplers: (samplers as Record<string, unknown> | undefined) ?? {},
+					signal: this.#abort?.signal,
+					onDelta: (kind, delta) => {
+						if (!delta) return;
+						if (kind === "thinking") {
+							recordSegment(ws, { kind: "thinking", text: delta });
+							ev.onDelta?.("thinking", delta);
+						} else {
+							text += delta;
+							recordSegment(ws, { kind: "text", text: delta });
+							ev.onDelta?.("text", delta);
+						}
+					},
+				});
+			}
+
+			if (relayRes === null) {
+				const fallbackTimeline = applyHistoryInjections(snap.past, composeTailText, composeDyn.fragments, {
+					tailHasUserMessage: snap.endsWithUser,
+					preserveAssistantPrefill: false,
+					summaryText: snap.summaryText,
+				});
+				const fallbackMsgs = fallbackTimeline.map((m) =>
+					m.role === "user" ? asUser(m.text, m.isTail ? nowTs : 0) : asAssistant(m.text, m.isTail ? nowTs : 0),
+				);
+				const fallbackFn = origStreamFn ?? this.#deps.sideStreamFn;
+				const s = await Promise.resolve(
+					fallbackFn(
+						model,
+						{ systemPrompt: composeSystemPrompt, messages: fallbackMsgs },
+						{
+							apiKey,
+							headers,
+							signal: this.#abort?.signal,
+							onPayload: (payload: unknown, reqModel?: StageModelLike) => hooks.providerPayload?.(payload, reqModel),
+						},
+					),
+				);
+				let fbText = "";
+				let fbThinking = "";
+				for await (const e of s) {
+					if (e.type === "text_delta" && e.delta) {
+						fbText += e.delta;
+						text += e.delta;
+						recordSegment(ws, { kind: "text", text: e.delta });
+						ev.onDelta?.("text", e.delta);
+					} else if (e.type === "thinking_delta" && e.delta) {
+						fbThinking += e.delta;
+						recordSegment(ws, { kind: "thinking", text: e.delta });
+						ev.onDelta?.("thinking", e.delta);
+					}
+				}
+				const fbFinal = await s.result();
+				const finalTxt = fbText || textOfAssistant(fbFinal);
+				if (!text && finalTxt) {
+					text = finalTxt;
+					recordSegment(ws, { kind: "text", text });
+				}
+				if (fbFinal.stopReason === "error") errored = fbFinal.errorMessage || "provider error";
+				final = fbFinal;
+				if (fbThinking && !final.content.some((c) => c.type === "thinking")) {
+					final = { ...final, content: [{ type: "thinking", thinking: fbThinking }, ...final.content] };
+				}
+			} else {
+				if (!text && relayRes.text) {
+					text = relayRes.text;
+					recordSegment(ws, { kind: "text", text });
+				}
+				if (relayRes.stopReason === "error") errored = relayRes.errorMessage || "provider error";
+				if (relayRes.stopReason === "aborted") userStopped = true;
+				final = {
+					role: "assistant",
+					content: [
+						...(relayRes.thinking ? [{ type: "thinking", thinking: relayRes.thinking }] : []),
+						...(text ? [{ type: "text", text }] : []),
+					],
+					stopReason: relayRes.stopReason === "error" || relayRes.stopReason === "aborted" ? relayRes.stopReason : "stop",
+					...(relayRes.errorMessage ? { errorMessage: relayRes.errorMessage } : {}),
+					usage: {
+						input: relayRes.usage?.input ?? 0,
+						output: relayRes.usage?.output ?? 0,
+						cacheRead: relayRes.usage?.cacheRead ?? 0,
+						cacheWrite: relayRes.usage?.cacheWrite ?? 0,
+						totalTokens: relayRes.usage?.totalTokens ?? 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				};
+			}
+
+			if (text.trim() && ws.mode === "write") {
+				runWriteTool(ws, wsDeps, "draft_write", { content: text }, true);
+				runWriteTool(ws, wsDeps, "draft_seal", {}, true);
+			}
+		};
+
 		const release = connection.activate(hooks, tools);
 		try {
 			await session.prompt(userText ?? lastUserText, { expandPromptTemplates: false, reuseUserMessage: userText === null });
-			if (!finished) await hooks.end(false);
+			if (pendingComposePhase) {
+				await runComposePhase();
+				finished = true;
+				endInfo = await finish();
+			} else if (!finished) {
+				await hooks.end(false);
+			}
 			if (!finished || !endInfo) throw new Error("pi 未完成本拍的 RP 收尾。");
 			return endInfo;
 		} finally {
+			if (shouldWrapPhase1Relay && agentHolder.agent && origStreamFn) {
+				agentHolder.agent.streamFunction = origStreamFn;
+			}
 			release();
 			if (agentTurn) await this.#deps.afterAuthoringTurn?.();
 		}

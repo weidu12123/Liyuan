@@ -30,6 +30,7 @@ import {
 import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import { createEjsContext, evalEjsTemplate, getEjsSyntaxErrorInfo } from "./ejs-engine.ts";
 import { loadStageMaterials } from "./stage/materials.ts";
+import { detectPresetBreakthroughProfile } from "./stage/preset-profile.ts";
 import { assemblePureTavern } from "./stage/pure-tavern.ts";
 import { assembleLiyuanPresetDynamic } from "./stage/preset-dynamic.ts";
 import {
@@ -2243,6 +2244,7 @@ export class ScriptApiService {
 								systemPrompt,
 								messages,
 								samplers: previewPresetDoc?.samplers ?? materials.config.samplers ?? null,
+								breakthroughProfile: detectPresetBreakthroughProfile(previewPresetDoc, materials.config),
 								stats: dyn.stats,
 							},
 						};

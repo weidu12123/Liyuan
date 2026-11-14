@@ -853,12 +853,6 @@ export function installParentTavernShim(): void {
 			}
 		},
 		stopAllGeneration() {
-			const abortPure = (w as unknown as { __liyuanAbortPureGeneration?: () => void }).__liyuanAbortPureGeneration;
-			if (typeof abortPure === "function") {
-				try {
-					abortPure();
-				} catch {}
-			}
 			if (canCallServer()) {
 				void invoke("requests.cancel", { includeMainChat: true });
 				emitCardRuntimeEvent(tavern_events.GENERATION_STOPPED);
@@ -4059,12 +4053,10 @@ try{
       }
     },
     isToolCallingSupported:function(){
-      var c=readRuntimeCtx();
-      return !(c&&c.presetMode==="liyuan");
+      return false;
     },
     canPerformToolCalls:function(){
-      var c=readRuntimeCtx();
-      return !(c&&c.presetMode==="liyuan");
+      return false;
     }
   };
   function buildStContext(){

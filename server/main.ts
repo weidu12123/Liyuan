@@ -62,16 +62,7 @@ import { buildCardPreviewRequest, CardPreviewHub } from "./card-preview.ts";
 import { createBtwRunner, type BtwRunner } from "./btw.ts";
 import { DEFAULT_BTW_PERSONA, resolveBtwPersonaTemplates } from "../src/stage/btw.ts";
 import { ScreenshotHub } from "./screenshot.ts";
-import { stateFromBranch, rebuildHistory, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
-import { loadStageMaterials } from "../src/stage/materials.ts";
-import { assemblePureTavern } from "../src/stage/pure-tavern.ts";
-import {
-	resolveUpstreamRequest,
-	translateAnthropicSseEvent,
-	translateGeminiSseData,
-	translateResponsesSseEvent,
-} from "../src/stage/pure-proxy.ts";
-import { readScriptScopeVarsSync, writeScriptScopeVarUpdatesSync } from "../src/script-api.ts";
+import { stateFromBranch, SUMMARY_ENTRY_TYPE, type BranchEntryLike } from "../src/stage/assemble.ts";
 import {
 	activePanels,
 	closePanel as closePanelInMap,
@@ -406,36 +397,6 @@ let unsubscribe: (() => void) | undefined;
 // ---------- WS 广播 ----------
 
 const clients = new Set<WebSocket>();
-let primaryRelayWs: WebSocket | null = null;
-const pickActiveRelayWs = (): WebSocket | null => {
-	if (primaryRelayWs && clients.has(primaryRelayWs) && primaryRelayWs.readyState === primaryRelayWs.OPEN) {
-		return primaryRelayWs;
-	}
-	for (const sock of clients) {
-		if (sock.readyState === sock.OPEN) {
-			primaryRelayWs = sock;
-			return sock;
-		}
-	}
-	return null;
-};
-
-interface PendingRelayEntry {
-	ws: WebSocket;
-	acked: boolean;
-	ackTimer: ReturnType<typeof setTimeout>;
-	onDelta: (kind: "text" | "thinking", delta: string) => void;
-	resolve: (res: {
-		text: string;
-		thinking: string;
-		stopReason: "stop" | "length" | "toolUse" | "aborted" | "error";
-		toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
-		usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number };
-		errorMessage?: string;
-	} | null) => void;
-}
-const pendingRelays = new Map<string, PendingRelayEntry>();
-let relaySeq = 0;
 
 const wsAlive = new WeakMap<WebSocket, boolean>();
 const wsPingTimer = setInterval(() => {
@@ -1024,7 +985,6 @@ const helloFrame = (): ServerFrame => {
 	return {
 		type: "hello",
 		uiLanguage: cfg.uiLanguage,
-		presetMode: cfg.presetMode ?? "liyuan",
 		sessionId: session.sessionId,
 		charName: names.charName,
 		userName: names.userName,
@@ -2584,326 +2544,6 @@ const httpServer = createServer((req, res) => {
 			res.end(JSON.stringify({ error: t("需要登录") }));
 			return;
 		}
-		if (req.method === "POST" && urlPath === "/api/pure-tavern/prepare") {
-			if (storyStreaming()) {
-				res.writeHead(409, { "content-type": "application/json" });
-				res.end(JSON.stringify({ ok: false, error: t("模型正在写，稍后再改") }));
-				return;
-			}
-			const body = await readJsonBody(req, 32 * 1024 * 1024);
-			const userText = typeof body.userText === "string" ? body.userText.trim() : "";
-			const reroll = body.reroll === true;
-			const editUserText = typeof body.editUserText === "string" ? body.editUserText.trim() : "";
-			const reuseUserMessage = body.reuseUserMessage === true || (reroll && !editUserText);
-			const model = session.model as StageModelLike | undefined;
-			if (!model) {
-				res.writeHead(400, { "content-type": "application/json" });
-				res.end(JSON.stringify({ ok: false, error: t("尚未配置剧情模型——请先在「连接」面板选择模型") }));
-				return;
-			}
-			const materials = loadStageMaterials(cwd);
-			const { config, card } = materials;
-			const sm = session.sessionManager;
-			const rawBranch = sm.getBranch() as Array<{ id?: string; parentId?: string | null } & BranchEntryLike>;
-			let baseBranch: BranchEntryLike[] = rawBranch;
-			let effectivePromptUser = userText;
-			if (reroll) {
-				const uid = lastStoryUserId();
-				const idx = uid ? rawBranch.findIndex((e) => e.id === uid) : -1;
-				if (idx < 0) {
-					res.writeHead(400, { "content-type": "application/json" });
-					res.end(JSON.stringify({ ok: false, error: t("没有可重新生成的剧情轮（需要先有一条用户输入）") }));
-					return;
-				}
-				if (editUserText) {
-					baseBranch = rawBranch.slice(0, idx);
-					effectivePromptUser = editUserText;
-				} else {
-					baseBranch = rawBranch.slice(0, idx + 1);
-					effectivePromptUser = "";
-				}
-			}
-			const branch = [
-				...baseBranch,
-				...(!reuseUserMessage && effectivePromptUser
-					? [{ type: "message", message: { role: "user", content: [{ type: "text", text: effectivePromptUser }], timestamp: Date.now() } }]
-					: []),
-			] as BranchEntryLike[];
-			const { history } = rebuildHistory(branch, materials.promptRules, {
-				charName: card.name,
-				userName: config.userName,
-			});
-			const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
-			const sessionId = sm.getSessionId();
-			const presetName = materials.presetDoc?.name;
-			const chatVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "chat", presetName);
-			const globalVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "global", presetName);
-			const characterVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "character", presetName);
-			const presetVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "preset", presetName);
-			const lastUserMsg =
-				userText ||
-				([...history].reverse().find((m) => m.role === "user")?.text ?? "");
-			const pure = await assemblePureTavern({
-				card,
-				presetDoc: materials.presetDoc,
-				loreEntries: materials.pureLoreEntries ?? materials.entries,
-				allLoreEntries: materials.allLoreEntries ?? materials.entries,
-				userName: config.userName,
-				userPersona: config.userPersona,
-				history,
-				userText: lastUserMsg,
-				scanDepth: config.scanDepth,
-				maxLoreInjections: config.maxLoreInjections,
-				chatId: sessionId,
-				model: model.id,
-				chatVars,
-				globalVars,
-				characterVars,
-				presetVars,
-				worldInfoRegexRules: materials.worldInfoRegexRules,
-				userInputRegexRules: materials.userInputRegexRules,
-			});
-			writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "chat", pure.dirtyLocal, presetName);
-			writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "global", pure.dirtyGlobal, presetName);
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end(
-				JSON.stringify({
-					ok: true,
-					model: { id: model.id, provider: model.provider, api: typeof model.api === "string" ? model.api : undefined },
-					messages: pure.rawOpenAiMessages,
-					samplers: pure.samplers ?? config.samplers ?? {},
-					presetName: presetName ?? null,
-					presetRaw: materials.presetDoc?.raw ?? null,
-					charName: card.name,
-					userName: config.userName,
-				}),
-			);
-			return;
-		}
-		if (req.method === "POST" && urlPath === "/api/backends/chat-completions/generate") {
-			const model = session.model as (StageModelLike & { headers?: Record<string, string> }) | undefined;
-			if (!model) {
-				res.writeHead(400, { "content-type": "application/json" });
-				res.end(JSON.stringify({ error: { message: t("无可用模型") } }));
-				return;
-			}
-			const authResult = await session.modelRuntime.getAuth(model as never);
-			if (!authResult) {
-				res.writeHead(401, { "content-type": "application/json" });
-				res.end(JSON.stringify({ error: { message: t("模型 {model} 没有可用鉴权", { model: `${model.provider}/${model.id}` }) } }));
-				return;
-			}
-			const incomingPayload = await readJsonBody(req, 32 * 1024 * 1024);
-			const up = resolveUpstreamRequest(
-				{
-					id: model.id,
-					provider: model.provider,
-					api: typeof model.api === "string" ? model.api : undefined,
-					baseUrl: model.baseUrl,
-					headers: model.headers,
-				},
-				authResult.auth,
-				incomingPayload,
-			);
-			const ac = new AbortController();
-			req.on("close", () => {
-				if (!res.writableEnded) ac.abort();
-			});
-			const upstreamRes = await fetch(up.url, {
-				method: "POST",
-				headers: up.headers,
-				body: JSON.stringify(up.body),
-				signal: ac.signal,
-			});
-			if (!upstreamRes.ok || !upstreamRes.body) {
-				const errText = await upstreamRes.text().catch(() => "");
-				res.writeHead(upstreamRes.status || 502, {
-					"content-type": upstreamRes.headers.get("content-type") || "application/json",
-				});
-				res.end(errText || JSON.stringify({ error: { message: `Upstream HTTP ${upstreamRes.status}` } }));
-				return;
-			}
-			if (up.protocol === "openai-passthrough" || !up.isStream) {
-				res.writeHead(upstreamRes.status, {
-					"content-type": upstreamRes.headers.get("content-type") || "text/event-stream; charset=utf-8",
-					"cache-control": "no-cache",
-				});
-				const reader = upstreamRes.body.getReader();
-				try {
-					for (;;) {
-						const { done, value } = await reader.read();
-						if (done) break;
-						if (value && value.length > 0 && !res.writableEnded) res.write(Buffer.from(value));
-					}
-				} finally {
-					if (!res.writableEnded) res.end();
-				}
-				return;
-			}
-			res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
-			const reader = upstreamRes.body.getReader();
-			const decoder = new TextDecoder();
-			let buf = "";
-			let currentEvent = "";
-			try {
-				for (;;) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					buf += decoder.decode(value, { stream: true });
-					let nl: number;
-					while ((nl = buf.indexOf("\n")) >= 0) {
-						const line = buf.slice(0, nl).replace(/\r$/, "");
-						buf = buf.slice(nl + 1);
-						if (!line) {
-							currentEvent = "";
-							continue;
-						}
-						if (line.startsWith("event:")) {
-							currentEvent = line.slice(6).trim();
-							continue;
-						}
-						if (!line.startsWith("data:")) continue;
-						const dataStr = line.slice(5).trim();
-						if (!dataStr || dataStr === "[DONE]") continue;
-						try {
-							const dataJson = JSON.parse(dataStr) as Record<string, unknown>;
-							const chunk =
-								up.protocol === "anthropic"
-									? translateAnthropicSseEvent(currentEvent || String(dataJson.type || ""), dataJson)
-									: up.protocol === "openai-responses"
-										? translateResponsesSseEvent(currentEvent || String(dataJson.type || ""), dataJson)
-										: translateGeminiSseData(dataJson);
-							if (chunk && !res.writableEnded) res.write(chunk);
-						} catch {
-							/* ignore partial/non-json */
-						}
-					}
-				}
-				if (!res.writableEnded) res.write("data: [DONE]\n\n");
-			} finally {
-				if (!res.writableEnded) res.end();
-			}
-			return;
-		}
-		if (req.method === "POST" && urlPath === "/api/pure-tavern/commit") {
-			const body = await readJsonBody(req, 32 * 1024 * 1024);
-			const userText = typeof body.userText === "string" ? body.userText.trim() : "";
-			const reroll = body.reroll === true;
-			const editUserText = typeof body.editUserText === "string" ? body.editUserText.trim() : "";
-			const assistantText = typeof body.assistantText === "string" ? body.assistantText : "";
-			const thinking = typeof body.thinking === "string" ? body.thinking : "";
-			const aborted = body.aborted === true;
-			const reuseUserMessage = body.reuseUserMessage === true || (reroll && !editUserText);
-			const notes = Array.isArray(body.notes) ? body.notes.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
-			const modelInfo = body.model && typeof body.model === "object" ? (body.model as { provider?: string; id?: string }) : undefined;
-			const sm = session.sessionManager;
-			if (reroll) {
-				const uid = lastStoryUserId();
-				if (uid) {
-					const rawBranch = sm.getBranch() as Array<{ id?: string; parentId?: string | null }>;
-					const userEntry = rawBranch.find((e) => e.id === uid);
-					if (editUserText && userEntry) {
-						const parent = userEntry.parentId ?? null;
-						if (parent === null) sm.resetLeaf();
-						else session.setLeaf(parent);
-					} else if (sm.getLeafId() !== uid) {
-						session.setLeaf(uid);
-					}
-				}
-			}
-			const commitUserText = editUserText || userText;
-			if (!reuseUserMessage && commitUserText) {
-				sm.appendMessage({
-					role: "user",
-					content: [{ type: "text", text: commitUserText }],
-					timestamp: Date.now(),
-				} as never);
-			}
-			let entryId: string | undefined;
-			if (assistantText.trim() || thinking.trim()) {
-				const content: Array<{ type: string; text?: string; thinking?: string }> = [];
-				if (thinking.trim()) content.push({ type: "thinking", thinking: thinking.trim() });
-				if (assistantText) content.push({ type: "text", text: assistantText });
-				entryId = sm.appendMessage({
-					role: "assistant",
-					content,
-					api: "openai-completions",
-					provider: modelInfo?.provider ?? session.model?.provider ?? "pure",
-					model: modelInfo?.id ?? session.model?.id ?? "pure",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-					stopReason: aborted ? "aborted" : "stop",
-					timestamp: Date.now(),
-					details: {
-						rpPureTavern: true,
-						...(notes.length > 0 ? { rpNotes: notes } : {}),
-					},
-				} as never);
-			}
-			sm.flush();
-			resyncAll();
-			const totalMessages = annotateSwipes(toWireHistory(branchMessages(), names, { skin: null })).filter(
-				(m) => m.channel === "user" || m.channel === "narrative" || m.channel === "greeting",
-			).length;
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify({ ok: true, entryId: entryId ?? null, totalMessages }));
-			return;
-		}
-		if (req.method === "POST" && urlPath === "/api/liyuan-relay/ack") {
-			const body = await readJsonBody(req);
-			const relayId = String(body.relayId ?? "");
-			const pending = pendingRelays.get(relayId);
-			if (pending) {
-				pending.acked = true;
-				clearTimeout(pending.ackTimer);
-			}
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end('{"ok":true}');
-			return;
-		}
-		if (req.method === "POST" && urlPath === "/api/liyuan-relay/chunk") {
-			const body = await readJsonBody(req, 4 * 1024 * 1024);
-			const relayId = String(body.relayId ?? "");
-			const pending = pendingRelays.get(relayId);
-			if (pending && (body.kind === "text" || body.kind === "thinking") && typeof body.delta === "string") {
-				pending.onDelta(body.kind, body.delta);
-			}
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end('{"ok":true}');
-			return;
-		}
-		if (req.method === "POST" && urlPath === "/api/liyuan-relay/finish") {
-			const body = await readJsonBody(req, 32 * 1024 * 1024);
-			const relayId = String(body.relayId ?? "");
-			const pending = pendingRelays.get(relayId);
-			if (pending) {
-				clearTimeout(pending.ackTimer);
-				pendingRelays.delete(relayId);
-				pending.resolve({
-					text: typeof body.text === "string" ? body.text : "",
-					thinking: typeof body.thinking === "string" ? body.thinking : "",
-					stopReason:
-						body.stopReason === "length" ||
-						body.stopReason === "toolUse" ||
-						body.stopReason === "aborted" ||
-						body.stopReason === "error"
-							? body.stopReason
-							: "stop",
-					...(Array.isArray(body.toolCalls) ? { toolCalls: body.toolCalls } : {}),
-					...(body.usage && typeof body.usage === "object" ? { usage: body.usage } : {}),
-					...(typeof body.errorMessage === "string" ? { errorMessage: body.errorMessage } : {}),
-				});
-			}
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end('{"ok":true}');
-			return;
-		}
 		if (await handleApiRequest(req, res, restHost)) return;
 		const url = (req.url ?? "/").split("?")[0];
 		if (url === "/healthz") {
@@ -3256,66 +2896,6 @@ stage = new StageEngine({
 	},
 	afterAuthoringTurn: () => restHost.softRefreshConfig(),
 	sideStreamFn: (model, context, options) => session.modelRuntime.streamSimple(model as never, context as never, options as never) as unknown as ReturnType<StageStreamFn>,
-	relayModelTurn: (input) => {
-		const targetWs = pickActiveRelayWs();
-		if (!targetWs) return Promise.resolve(null);
-		const relayId = `relay_${Date.now().toString(36)}_${++relaySeq}`;
-		return new Promise((resolve) => {
-			let settled = false;
-			const finishWith = (val: Parameters<PendingRelayEntry["resolve"]>[0]) => {
-				if (settled) return;
-				settled = true;
-				clearTimeout(ackTimer);
-				pendingRelays.delete(relayId);
-				input.signal?.removeEventListener("abort", onAbort);
-				resolve(val);
-			};
-			const ackTimer = setTimeout(() => {
-				// 3 秒未收到浏览器 ack（页面冻结/后台挂起）→ 回退 Node 直连，不悬空卡死
-				const p = pendingRelays.get(relayId);
-				if (p && !p.acked) {
-					try { targetWs.send(JSON.stringify({ type: "relay_abort", relayId } satisfies ServerFrame)); } catch {}
-					finishWith(null);
-				}
-			}, 3000);
-			const onAbort = () => {
-				try { targetWs.send(JSON.stringify({ type: "relay_abort", relayId } satisfies ServerFrame)); } catch {}
-				finishWith({ text: "", thinking: "", stopReason: "aborted" });
-			};
-			if (input.signal?.aborted) {
-				finishWith({ text: "", thinking: "", stopReason: "aborted" });
-				return;
-			}
-			input.signal?.addEventListener("abort", onAbort, { once: true });
-			pendingRelays.set(relayId, {
-				ws: targetWs,
-				acked: false,
-				ackTimer,
-				onDelta: input.onDelta,
-				resolve: finishWith,
-			});
-			try {
-				targetWs.send(
-					JSON.stringify({
-						type: "relay_request",
-						relayId,
-						phase: input.phase,
-						model: {
-							id: input.model.id,
-							provider: input.model.provider,
-							api: typeof input.model.api === "string" ? input.model.api : undefined,
-						},
-						presetMeta: input.presetMeta,
-						messages: input.messages,
-						...(input.tools ? { tools: input.tools } : {}),
-						samplers: input.samplers,
-					} satisfies ServerFrame),
-				);
-			} catch {
-				finishWith(null);
-			}
-		});
-	},
 	events: {
 		onTurnStart: () => { cli?.out(""); broadcast({ type: "agent", state: "start" }); },
 		onDelta: (kind, delta, draft, reset) => {
@@ -4731,7 +4311,6 @@ wss.on("connection", (ws, req) => {
 		return;
 	}
 	clients.add(ws);
-	primaryRelayWs = ws;
 	wsAlive.set(ws, true);
 	ws.on("pong", () => wsAlive.set(ws, true));
 	ws.send(JSON.stringify(helloFrame()));
@@ -4745,7 +4324,6 @@ wss.on("connection", (ws, req) => {
 	for (const request of screenshots.pending()) ws.send(JSON.stringify({ type: "screenshot", ...request }));
 
 	ws.on("message", (data) => {
-		primaryRelayWs = ws;
 		wsAlive.set(ws, true); // 任何入站帧都算活着——前端 20s 应用层 ping 覆盖 pong 迟到的情况
 		void (async () => {
 			let frame: ClientFrame;
@@ -5023,12 +4601,6 @@ wss.on("connection", (ws, req) => {
 
 	const dropWs = () => {
 		clients.delete(ws);
-		if (primaryRelayWs === ws) primaryRelayWs = null;
-		for (const [id, entry] of [...pendingRelays.entries()]) {
-			if (entry.ws === ws) {
-				entry.resolve(entry.acked ? { text: "", thinking: "", stopReason: "aborted", errorMessage: t("浏览器连接已断开") } : null);
-			}
-		}
 	};
 	ws.on("close", dropWs);
 	ws.on("error", dropWs);

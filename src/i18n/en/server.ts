@@ -75,7 +75,6 @@ export const server: Record<string, string> = {
 	"还没有角色回复可切换": "No character reply to switch yet",
 	"已经是第一条变体": "Already at the first variant",
 	"无可用模型": "No model available",
-	"浏览器连接已断开": "Browser connection lost",
 	"流未产出最终消息": "The stream produced no final message",
 	"最终消息无文本": "The final message has no text",
 	"扩展错误（{event}）：{error}": "Extension error ({event}): {error}",

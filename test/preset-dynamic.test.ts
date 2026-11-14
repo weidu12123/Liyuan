@@ -171,7 +171,7 @@ test("ScriptApiService.preset.preview 支持 mode='liyuan' 完整返回动态装
 		);
 		writeFileSync(
 			join(cwd, "liyuan.config.json"),
-			JSON.stringify({ card: "assets/cards/c.json", preset: "assets/presets/p.json", presetMode: "liyuan", userName: "沈舟" }),
+			JSON.stringify({ card: "assets/cards/c.json", preset: "assets/presets/p.json", userName: "沈舟" }),
 		);
 
 		const mockHost = {
@@ -180,7 +180,6 @@ test("ScriptApiService.preset.preview 支持 mode='liyuan' 完整返回动态装
 				...DEFAULT_CONFIG,
 				card: "assets/cards/c.json",
 				preset: "assets/presets/p.json",
-				presetMode: "liyuan",
 				userName: "沈舟",
 			}),
 			getTarget: () => ({
@@ -201,16 +200,14 @@ test("ScriptApiService.preset.preview 支持 mode='liyuan' 完整返回动态装
 		const api = new ScriptApiService(mockHost);
 		const resp = await api.invoke({
 			action: "preset.preview",
-			params: { mode: "liyuan", userText: "我推门而入。" },
+			params: { userText: "我推门而入。" },
 		});
 		assert.equal(resp.ok, true);
 		const result = resp.result as {
-			presetMode: string;
 			systemPrompt: string;
 			messages: Array<{ role: string; text: string }>;
 			stats: { skippedMarkers: number };
 		};
-		assert.equal(result.presetMode, "liyuan");
 		assert.equal(result.stats.skippedMarkers, 1);
 		assert.ok(result.systemPrompt.includes("文风要求：简练。"));
 		assert.ok(result.systemPrompt.includes("梨园扮演 Agent 引擎协议"));
@@ -224,7 +221,7 @@ test("ScriptApiService.preset.preview 支持 mode='liyuan' 完整返回动态装
 	}
 });
 
-test("StageEngine 在 presetMode='liyuan' 下自动注入动态预设投影、RP_SYSTEM.md、末端覆盖块并落盘脏变量", async () => {
+test("StageEngine 自动注入动态预设投影、RP_SYSTEM.md、末端覆盖块并落盘脏变量", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "liyuan-engine-dyn-"));
 	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
 	try {
@@ -259,7 +256,7 @@ test("StageEngine 在 presetMode='liyuan' 下自动注入动态预设投影、RP
 		);
 		writeFileSync(
 			join(cwd, "liyuan.config.json"),
-			JSON.stringify({ card: "assets/cards/c.json", preset: "assets/presets/p.json", presetMode: "liyuan", userName: "沈舟" }),
+			JSON.stringify({ card: "assets/cards/c.json", preset: "assets/presets/p.json", userName: "沈舟" }),
 		);
 
 		const sm = SessionManager.inMemory(cwd);

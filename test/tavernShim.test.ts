@@ -1033,55 +1033,52 @@ test("禁用第5块：预设帧只保留只读查询，全面禁止写预设/预
 	// 3. 父页不再挂载通道 C 假列表 #completion_prompt_manager_list
 	assert.equal(miniDoc.getElementById("completion_prompt_manager_list"), null, "已禁用第5块，父页不得再生成通道 C 假列表");
 
-	// 4. 预设帧禁止写/切预设（无论 liyuan 还是 pure 模式）：replacePreset/updatePresetWith/setPreset/saveSettingsDebounced/Liyuan.preset.update/replaceTavernRegexes 全部拦截
+	// 4. 预设帧禁止写/切预设：replacePreset/updatePresetWith/setPreset/saveSettingsDebounced/Liyuan.preset.update/replaceTavernRegexes 全部拦截
 	const postMessages: any[] = [];
 	const prevPostMessage = parentWin.postMessage;
 	parentWin.postMessage = (msg: unknown) => {
 		postMessages.push(msg);
 	};
-	for (const mode of ["liyuan", "pure"] as const) {
-		(parentWin as any).__liyuanRuntimeContext.presetMode = mode;
-		rpcCalls.length = 0;
-		postMessages.length = 0;
+	rpcCalls.length = 0;
+	postMessages.length = 0;
 
-		await win.updatePresetWith("in_use", (p: any) => {
-			const target = p.prompts.find((x: any) => x.id === "deep1");
-			if (target) target.enabled = true;
-			return p;
-		});
-		await win.replacePreset("in_use", { ...pView, prompts: [] });
-		await win.setPreset("in_use", { settings: { temperature: 0.1 } });
-		assert.equal(await win.loadPreset("梦鲸思客V5-1030-exp"), false);
-		assert.equal(await win.createPreset("新预设", pView), false);
-		assert.equal(await win.deletePreset("梦鲸思客V5-1030-exp"), false);
-		assert.equal(await win.renamePreset("TGbreak😺V2.1.6", "新名"), false);
-		await win.replaceTavernRegexes([], { type: "preset" });
+	await win.updatePresetWith("in_use", (p: any) => {
+		const target = p.prompts.find((x: any) => x.id === "deep1");
+		if (target) target.enabled = true;
+		return p;
+	});
+	await win.replacePreset("in_use", { ...pView, prompts: [] });
+	await win.setPreset("in_use", { settings: { temperature: 0.1 } });
+	assert.equal(await win.loadPreset("梦鲸思客V5-1030-exp"), false);
+	assert.equal(await win.createPreset("新预设", pView), false);
+	assert.equal(await win.deletePreset("梦鲸思客V5-1030-exp"), false);
+	assert.equal(await win.renamePreset("TGbreak😺V2.1.6", "新名"), false);
+	await win.replaceTavernRegexes([], { type: "preset" });
 
-		stCtx1.chatCompletionSettings.prompts[1].content = "试图偷偷篡改";
-		stCtx1.saveSettingsDebounced();
-		await stCtx1.saveSettings();
-		await win.builtin.saveSettings();
-		await new Promise((r) => setTimeout(r, 90));
+	stCtx1.chatCompletionSettings.prompts[1].content = "试图偷偷篡改";
+	stCtx1.saveSettingsDebounced();
+	await stCtx1.saveSettings();
+	await win.builtin.saveSettings();
+	await new Promise((r) => setTimeout(r, 90));
 
-		assert.equal(rpcCalls.some((c) => c.action === "preset.update"), false, `${mode} 模式下预设脚本不得触发 preset.update`);
-		assert.equal(win.getPreset("in_use").prompts[1].content, "古风描写", `${mode} 模式下父页真实预设不得被篡改`);
-		assert.equal(win.getTavernRegexes({ type: "preset" }).length, 1, `${mode} 模式下预设正则不得被预设脚本清空`);
+	assert.equal(rpcCalls.some((c) => c.action === "preset.update"), false, "预设脚本不得触发 preset.update");
+	assert.equal(win.getPreset("in_use").prompts[1].content, "古风描写", "父页真实预设不得被篡改");
+	assert.equal(win.getTavernRegexes({ type: "preset" }).length, 1, "预设正则不得被预设脚本清空");
 
-		const rpcRes = await win.Liyuan.preset.update({ blocks: [{ id: "style1", enabled: false }] });
-		assert.equal(rpcRes.ok, false);
-		assert.equal(rpcRes.error?.code, "permission_denied");
+	const rpcRes = await win.Liyuan.preset.update({ blocks: [{ id: "style1", enabled: false }] });
+	assert.equal(rpcRes.ok, false);
+	assert.equal(rpcRes.error?.code, "permission_denied");
 
-		// 5. 预设脚本不得注册按钮到父页，且 callGenericPopup 直接返回取消态不插弹窗 DOM
-		win.replaceScriptButtons([{ name: "非法预设按钮", visible: true }]);
-		win.getButtonEvent("偷渡按钮");
-		assert.deepEqual([...win.getScriptButtons()], []);
-		assert.equal(postMessages.some((m) => m && m.liyuanScriptButtons), false, "预设帧不得向父页推脚本按钮");
+	// 5. 预设脚本不得注册按钮到父页，且 callGenericPopup 直接返回取消态不插弹窗 DOM
+	win.replaceScriptButtons([{ name: "非法预设按钮", visible: true }]);
+	win.getButtonEvent("偷渡按钮");
+	assert.deepEqual([...win.getScriptButtons()], []);
+	assert.equal(postMessages.some((m) => m && m.liyuanScriptButtons), false, "预设帧不得向父页推脚本按钮");
 
-		const popupRes = await stCtx1.callGenericPopup("预设弹窗", stCtx1.POPUP_TYPE.CONFIRM);
-		assert.equal(popupRes, 0);
-		const inputRes = await stCtx1.callGenericPopup("输入", stCtx1.POPUP_TYPE.INPUT, "默认值");
-		assert.equal(inputRes, null);
-	}
+	const popupRes = await stCtx1.callGenericPopup("预设弹窗", stCtx1.POPUP_TYPE.CONFIRM);
+	assert.equal(popupRes, 0);
+	const inputRes = await stCtx1.callGenericPopup("输入", stCtx1.POPUP_TYPE.INPUT, "默认值");
+	assert.equal(inputRes, null);
 	parentWin.postMessage = prevPostMessage;
 
 	// 6. 预设帧不得共享父页 jQuery（与卡帧形成明确隔离）
@@ -1094,18 +1091,13 @@ test("禁用第5块：预设帧只保留只读查询，全面禁止写预设/预
 	assert.strictEqual(cardWinWithJq.$, fakeParentJq, "角色卡帧仍正常共享父页 jQuery");
 });
 
-test("第4步刀3：ToolManager.canPerformToolCalls 在 liyuan 模式下返回 false 防止假工具劫持，在 pure 模式下返回 true", () => {
-	const { win, parentWin } = createIframeSandbox({ iframeName: "TH-script--preset--jimi" });
+test("ToolManager.canPerformToolCalls 与 isToolCallingSupported 固定返回 false 防止假工具劫持（同时保留空壳不抛 TypeError）", () => {
+	const { win } = createIframeSandbox({ iframeName: "TH-script--preset--jimi" });
 	const ctx = win.SillyTavern.getContext();
-	(parentWin as any).__liyuanRuntimeContext.presetMode = "liyuan";
 	assert.equal(ctx.ToolManager.canPerformToolCalls(), false);
 	assert.equal(ctx.ToolManager.isToolCallingSupported(), false);
 	ctx.registerFunctionTool({ name: "publish_story", description: "fake", parameters: { type: "object", properties: {} } });
-	assert.equal(ctx.ToolManager.tools.length, 1, "liyuan 模式下保留空壳不抛 TypeError");
-
-	(parentWin as any).__liyuanRuntimeContext.presetMode = "pure";
-	assert.equal(ctx.ToolManager.canPerformToolCalls(), true);
-	assert.equal(ctx.ToolManager.isToolCallingSupported(), true);
+	assert.equal(ctx.ToolManager.tools.length, 1, "保留空壳不抛 TypeError");
 });
 
 test("第4步刀5：SillyTavern.getContext() 补齐 POPUP_TYPE/POPUP_RESULT/callGenericPopup/generating/onlineStatus/messageFormatting/updateMessageBlock 等实扫缺失接口", async () => {
@@ -1137,7 +1129,7 @@ test("第4步刀5：SillyTavern.getContext() 补齐 POPUP_TYPE/POPUP_RESULT/call
 	assert.equal(win.SillyTavern.getContext().generating, false);
 });
 
-test("第4块收口：预设脚本（TH-script--preset--*）在 liyuan 与 pure 模式下均禁止删改消息、斜杠控流与后台偷跑生成（卡帧保留完整能力）", async () => {
+test("第4块收口：预设脚本（TH-script--preset--*）禁止删改消息、斜杠控流与后台偷跑生成（卡帧保留完整能力）", async () => {
 	const parentCalls: Array<{ action: string; params: Record<string, unknown> }> = [];
 	const parentSlash: string[] = [];
 	const { win, parentWin, rpcCalls } = createIframeSandbox({
@@ -1163,57 +1155,54 @@ test("第4块收口：预设脚本（TH-script--preset--*）在 liyuan 与 pure 
 	};
 	const origText = win.getChatMessages(2)[0].message;
 
-	for (const mode of ["liyuan", "pure"] as const) {
-		(parentWin as any).__liyuanRuntimeContext.presetMode = mode;
-		parentCalls.length = 0;
-		parentSlash.length = 0;
-		rpcCalls.length = 0;
+	parentCalls.length = 0;
+	parentSlash.length = 0;
+	rpcCalls.length = 0;
 
-		// 1. 酒馆助手层：getChatMessages 只读允许；setChatMessages 只放行 data，不许改写正文或发 updateReply
-		assert.equal(win.getChatMessages(2)[0].message, origText);
-		await win.setChatMessages([{ message_id: 2, message: "试图覆盖", data: { safeFlag: 1 } }]);
-		assert.equal(win.getChatMessages(2)[0].message, origText, `${mode} 下预设脚本不得改写消息正文`);
-		assert.ok(rpcCalls.some((c) => c.action === "data.write"), "消息变量 data 写回照常放行");
+	// 1. 酒馆助手层：getChatMessages 只读允许；setChatMessages 只放行 data，不许改写正文或发 updateReply
+	assert.equal(win.getChatMessages(2)[0].message, origText);
+	await win.setChatMessages([{ message_id: 2, message: "试图覆盖", data: { safeFlag: 1 } }]);
+	assert.equal(win.getChatMessages(2)[0].message, origText, "预设脚本不得改写消息正文");
+	assert.ok(rpcCalls.some((c) => c.action === "data.write"), "消息变量 data 写回照常放行");
 
-		// 2. deleteChatMessages / createChatMessages / triggerSlash / SillyTavern.generate / TavernHelper.generate 全部拦截
-		await win.deleteChatMessages([2, -1]);
-		await win.createChatMessages([{ role: "user", message: "私自续发" }]);
-		await win.triggerSlash("/drop");
-		await win.triggerSlash("/hide 2-2");
-		await win.triggerSlash("/send 偷跑|/trigger");
-		assert.equal(await win.TavernHelper.generate({ user_input: "自动补全" }), "");
-		assert.equal(await win.TavernHelper.generateRaw({ ordered_prompts: [] }), "");
-		assert.equal(await win.SillyTavern.getContext().generate("quiet", { quietPrompt: "偷总结" }), "");
-		assert.equal(await win.SillyTavern.getContext().generateQuietPrompt("偷总结"), "");
-		assert.deepEqual(parentSlash, [], `${mode} 下预设控流斜杠不得抵达父页`);
+	// 2. deleteChatMessages / createChatMessages / triggerSlash / SillyTavern.generate / TavernHelper.generate 全部拦截
+	await win.deleteChatMessages([2, -1]);
+	await win.createChatMessages([{ role: "user", message: "私自续发" }]);
+	await win.triggerSlash("/drop");
+	await win.triggerSlash("/hide 2-2");
+	await win.triggerSlash("/send 偷跑|/trigger");
+	assert.equal(await win.TavernHelper.generate({ user_input: "自动补全" }), "");
+	assert.equal(await win.TavernHelper.generateRaw({ ordered_prompts: [] }), "");
+	assert.equal(await win.SillyTavern.getContext().generate("quiet", { quietPrompt: "偷总结" }), "");
+	assert.equal(await win.SillyTavern.getContext().generateQuietPrompt("偷总结"), "");
+	assert.deepEqual(parentSlash, [], "预设控流斜杠不得抵达父页");
 
-		// 3. 梨园 RPC 层（messages.updateReply / dropLast / chat.submit / generation.*）全部拦截
-		const r1 = await win.Liyuan.messages.updateReply("绕过修改");
-		const r2 = await win.Liyuan.messages.dropLast();
-		const r3 = await win.Liyuan.chat.submit("自动发");
-		const r4 = await win.Liyuan.generation.explicit({ prompt: "偷生成" });
-		const r5 = await win.Liyuan.generation.contextual({ prompt: "偷生成" });
-		assert.equal(r1.ok, false);
-		assert.equal(r1.error?.code, "permission_denied");
-		assert.equal(r2.ok, false);
-		assert.equal(r3.ok, false);
-		assert.equal(r4.ok, false);
-		assert.equal(r5.ok, false);
-		assert.equal(
-			parentCalls.some((c) =>
-				[
-					"messages.updateReply",
-					"messages.dropLast",
-					"chat.submit",
-					"generation.explicit",
-					"generation.contextual",
-					"parent.TH.generate",
-					"parent.TH.generateRaw",
-				].includes(c.action),
-			),
-			false,
-		);
-	}
+	// 3. 梨园 RPC 层（messages.updateReply / dropLast / chat.submit / generation.*）全部拦截
+	const r1 = await win.Liyuan.messages.updateReply("绕过修改");
+	const r2 = await win.Liyuan.messages.dropLast();
+	const r3 = await win.Liyuan.chat.submit("自动发");
+	const r4 = await win.Liyuan.generation.explicit({ prompt: "偷生成" });
+	const r5 = await win.Liyuan.generation.contextual({ prompt: "偷生成" });
+	assert.equal(r1.ok, false);
+	assert.equal(r1.error?.code, "permission_denied");
+	assert.equal(r2.ok, false);
+	assert.equal(r3.ok, false);
+	assert.equal(r4.ok, false);
+	assert.equal(r5.ok, false);
+	assert.equal(
+		parentCalls.some((c) =>
+			[
+				"messages.updateReply",
+				"messages.dropLast",
+				"chat.submit",
+				"generation.explicit",
+				"generation.contextual",
+				"parent.TH.generate",
+				"parent.TH.generateRaw",
+			].includes(c.action),
+		),
+		false,
+	);
 
 	// 4. 角色卡脚本帧（TH-script--card--*）仍保有完整消息改写与独立生成能力
 	const cardCalls: Array<{ action: string; params: Record<string, unknown> }> = [];

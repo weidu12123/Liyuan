@@ -182,24 +182,6 @@ export function writeTools(language: string): StageTool[] {
 	];
 }
 
-/**
- * 两段破限中转模式下 Phase 1（探索取证）→ Phase 2（交稿出正文）阶段切换信号工具。
- * 仅在 presetProfile.mode === "two-phase-bridge" 时上架，普通直连预设不上清单。
- */
-export const ENTER_WRITING_PHASE_TOOL: StageTool = {
-	name: "enter_writing_phase",
-	mode: "read",
-	description:
-		"前置世界书/记忆检索与 ask 决策完成（或本拍无需查资料即可动笔）时调用，立即结束准备阶段并切换为正式交稿阶段。调用后将按当前预设完整输出正文，不要在调用本工具前把完整正文提前写出。",
-	parameters: {
-		type: "object",
-		properties: {
-			notes: { type: "string", description: "可选：1~3 句概括已核实的关键设定与本拍走向要点" },
-		},
-		required: [],
-	},
-};
-
 export interface ToolRunResult {
 	/** 回给模型的 toolResult 文本 */
 	text: string;

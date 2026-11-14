@@ -91,7 +91,6 @@ import {
 } from "../src/paths.ts";
 import { createCardSpace, exportChatZip, importChatZip, isInternalChatWorkspacePath, listCardSpaces, listChatMarkdownAssets, listChats, loadCardConfig, renameChat, resolveCardSpace, saveCardConfig } from "../src/cardspace.ts";
 import { scanSkillFiles, stageSkillRoot } from "../src/stage/materials.ts";
-import { detectPresetBreakthroughProfile } from "../src/stage/preset-profile.ts";
 import { deleteStageSkill, saveStageSkill } from "../src/stage/skill-store.ts";
 import type { WorldlineView } from "../src/worldline.ts";
 import type { WireStoryFile } from "./wire.ts";
@@ -497,8 +496,6 @@ const CONFIG_EDITABLE = new Set([
 	"lorebook",
 	"lorebooks",
 	"preset",
-	"presetMode",
-	"breakthroughRelay",
 	"samplers",
 	"disabledLore",
 	"backendControl",
@@ -533,10 +530,6 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 	next.greeting = next.greeting === true;
 	// 决策门禁档位：只认 ask / silent；非法值删除（扩展缺省按 silent）
 	if (next.creationMode !== "ask" && next.creationMode !== "silent") delete next.creationMode;
-	if (next.presetMode !== "liyuan" && next.presetMode !== "pure") delete next.presetMode;
-	if (next.breakthroughRelay !== "auto" && next.breakthroughRelay !== "off" && next.breakthroughRelay !== "always") {
-		delete next.breakthroughRelay;
-	}
 	// 旁路模型：只认 { provider, entry } 形——entry 是连接配置里那条模型条目的名字，
 	// 不是模型 id（同一个 id 可以有多条条目）。非法值删除（缺省=跟随剧情模型）
 	if (next.sideModel !== undefined) {
@@ -3211,17 +3204,8 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 			// ---- 多预设管理（PLAN-PANELS-V2 §2.6） ----
 			case "GET /api/presets": {
 				const config = loadConfig(host.cwd);
-				let effective: PresetDoc | null = null;
-				try {
-					effective = config.preset ? loadEffectivePreset(host.cwd).doc : null;
-				} catch {
-					effective = null;
-				}
 				sendJson(res, 200, {
 					active: config.preset ?? null,
-					presetMode: config.presetMode ?? "liyuan",
-					breakthroughRelay: config.breakthroughRelay ?? "auto",
-					breakthroughProfile: detectPresetBreakthroughProfile(effective, config),
 					presets: listPresetFiles(host.cwd),
 				});
 				return true;

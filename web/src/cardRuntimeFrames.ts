@@ -45,7 +45,6 @@ export interface LiyuanRuntimeContextSnapshot {
 	chatId: string | null;
 	sessionId: string;
 	mode: "roleplay" | "agent";
-	presetMode?: "liyuan" | "pure";
 	model?: string;
 	streaming: boolean;
 	messages: LiyuanRuntimeMessageLite[];
@@ -87,36 +86,6 @@ export function emitCardRuntimeEvent(eventType: string, ...args: unknown[]): voi
 			frame.contentWindow?.postMessage(payload, "*");
 		} catch {
 			/* 帧已卸载 */
-		}
-	}
-}
-
-/** 向父窗口及所有正式卡运行时子帧同步/异步广播事件（同源子帧传递活对象引用，允许脚本原地修改 payload） */
-export async function emitCardRuntimeEventAsync(eventType: string, ...args: unknown[]): Promise<void> {
-	if (typeof window === "undefined") return;
-	const w = window as Window & {
-		eventEmit?: (name: string, ...a: unknown[]) => unknown;
-		__liyuanStickyEvents?: Record<string, unknown[]>;
-	};
-	if (eventType === "app_ready" || eventType === "APP_READY") {
-		if (!w.__liyuanStickyEvents) w.__liyuanStickyEvents = {};
-		w.__liyuanStickyEvents.app_ready = args;
-	}
-	try {
-		await w.eventEmit?.(eventType, ...args);
-	} catch (e) {
-		console.error("[liyuan emitCardRuntimeEventAsync]", eventType, e);
-	}
-	for (const frame of cardRuntimeFrames()) {
-		try {
-			const cw = frame.contentWindow as (Window & { eventEmit?: (name: string, ...a: unknown[]) => unknown }) | null;
-			if (cw && typeof cw.eventEmit === "function") {
-				await cw.eventEmit(eventType, ...args);
-			} else {
-				cw?.postMessage({ liyuanTavernEvent: { type: eventType, args } }, "*");
-			}
-		} catch (e) {
-			console.error("[liyuan emitCardRuntimeEventAsync frame]", eventType, e);
 		}
 	}
 }

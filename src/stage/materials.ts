@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveCardSpace } from "../cardspace.ts";
 
 import { loadCardFile, readCardRawJson } from "../card.ts";
-import { placementPromptRules, promptRules, extractRegexScripts, type DisplayRule } from "../cardfront.ts";
+import { promptRules, extractRegexScripts, type DisplayRule } from "../cardfront.ts";
 import {
 	applyDisabledLore,
 	constantEntries,
@@ -46,8 +46,6 @@ export interface StageMaterials {
 	cardAuthorScripts: ReturnType<typeof extractAuthorScripts>;
 	/** 已挂载世界书 + 补充设定集 overlay，禁用项与外部插件协议条目已剔除 */
 	entries: LorebookEntry[];
-	/** 纯酒馆模式专用全量世界书（卡内嵌书 + 已挂载书，仅应用 disabledLore，未经梨园协议/MVU 剥离） */
-	pureLoreEntries?: LorebookEntry[];
 	/** 全量原始世界书条目池（含 enabled:false 及卡内嵌 character_book 条目，供提示词模板 getwi 按标题拉取） */
 	allLoreEntries?: LorebookEntry[];
 	/** 卡档案原始文本（供提示词模板按节解析 @@if 与 <% ... %>） */
@@ -64,9 +62,6 @@ export interface StageMaterials {
 	cardAgents: string;
 	/** 送模侧作者正则（promptOnly/破坏性，预设+卡）——rebuildHistory 应用，剥「作者不想让模型看」的块 */
 	promptRules: DisplayRule[];
-	/** 世界书送模正则（placement=5）与用户输入送模正则（placement=1） */
-	worldInfoRegexRules?: DisplayRule[];
-	userInputRegexRules?: DisplayRule[];
 }
 
 const resolvePath = (cwd: string, p: string): string => (isAbsolute(p) ? p : join(cwd, p));
@@ -292,7 +287,6 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 	const fileEntries = mergeEntries(...fileGroups);
 	// 用户级停用。
 	const disabledApplied = applyDisabledLore(fileEntries, config.disabledLore);
-	const pureLoreEntries = applyDisabledLore(mergeEntries(...rawFileGroups, card.book ?? []), config.disabledLore);
 	// 归属剥离：MVU 变量更新规则条目已被 src/mvu.ts 认领、读者是场记，主模型不该再收到同一份。
 	// 判据是归属不是签名（铁律三不禁），无树的书一律不动——见 stripMvuRuleEntries 的头注。
 	const mvuFiltered = stripMvuRuleEntries(disabledApplied);
@@ -363,7 +357,6 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		card,
 		cardAuthorScripts,
 		entries,
-		pureLoreEntries,
 		allLoreEntries: mergeEntries(...rawFileGroups, card.book ?? []),
 		cardAgentsRaw,
 		presetDoc,
@@ -375,8 +368,6 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		cardAgents,
 		// 送模侧作者正则：预设 + 卡（与 cardfront 显示侧同源；promptOnly/破坏性规则）
 		promptRules: promptRules(allRegexScripts),
-		worldInfoRegexRules: placementPromptRules(allRegexScripts, 5),
-		userInputRegexRules: placementPromptRules(allRegexScripts, 1),
 	};
 
 	// 指纹在**装载之后**取：装载期间若有人改文件，这次算出的指纹属于旧内容，

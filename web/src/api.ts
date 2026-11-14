@@ -515,21 +515,8 @@ export interface PresetFileInfo {
 	mode?: "declare" | "process";
 }
 
-export interface BreakthroughProfileView {
-	mode: "direct" | "channel-proxy" | "two-phase-bridge";
-	reasons: string[];
-	squashSystemMessages: boolean;
-	hasAssistantPrefill: boolean;
-	hasSPreset: boolean;
-	hasToolSpoofScript: boolean;
-	hasRequestHookScript: boolean;
-}
-
 export interface PresetsResponse {
 	active: string | null;
-	presetMode?: "liyuan" | "pure";
-	breakthroughRelay?: "auto" | "off" | "always";
-	breakthroughProfile?: BreakthroughProfileView;
 	presets: PresetFileInfo[];
 }
 

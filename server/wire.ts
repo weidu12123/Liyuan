@@ -292,8 +292,6 @@ export type ServerFrame =
 			type: "hello";
 			/** 界面语言（config.uiLanguage；没写＝前端按浏览器语言） */
 			uiLanguage?: "zh" | "en";
-			/** 预设运行模式（"liyuan" | "pure"） */
-			presetMode?: "liyuan" | "pure";
 			conversationMode?: ConversationMode;
 			turnMode?: ConversationMode;
 			/** agent 子项目：当前分支的章目录（正文经 GET /api/story 取，hello 不扛正文） */
@@ -368,24 +366,6 @@ export type ServerFrame =
 	| { type: "btw_delta"; kind: "text" | "thinking"; delta: string }
 	| { type: "btw_tool"; detail: string }
 	| { type: "btw_sync"; messages: WireBtwMsg[]; streaming?: boolean }
-	/** 服务端请求浏览器对当前单轮执行酒馆脚本中转（刀 3） */
-	| {
-			type: "relay_request";
-			relayId: string;
-			phase: "explore" | "compose";
-			model: { id: string; provider?: string; api?: string };
-			presetMeta: {
-				name: string | null;
-				raw: Record<string, unknown> | null;
-				charName: string;
-				userName: string;
-				squashSystemMessages?: boolean;
-			};
-			messages: Array<Record<string, unknown>>;
-			tools?: Array<Record<string, unknown>>;
-			samplers: Record<string, unknown>;
-	  }
-	| { type: "relay_abort"; relayId?: string }
 	| { type: "error"; text: string };
 
 /** 浏览器脚本通过 injectPrompts / setExtensionPrompt 注册的运行期临时片段 */

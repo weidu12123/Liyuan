@@ -1154,6 +1154,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		return { systemPrompt: `${base}\n\n${activeStage.systemPrompt}` };
 	});
 	pi.on("context", (event) => activeStage ? { messages: activeStage.context(event.messages) as typeof event.messages } : undefined);
+	pi.on("before_provider_headers", (event, ctx) => activeStage?.providerHeaders?.(event.headers, ctx.model as never));
 	pi.on("before_provider_request", (event, ctx) => activeStage?.providerPayload(event.payload, ctx.model as never));
 	pi.on("message_update", (event) => activeStage?.update(event.assistantMessageEvent as never));
 	pi.on("message_end", (event) => activeStage?.messageEnd(event.message as never));

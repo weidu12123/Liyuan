@@ -1729,8 +1729,16 @@ const bindSession = async () => {
 				resyncAll();
 				break;
 			case "auto_retry_start": {
-				const retryText = t("模型请求失败，自动重试 {attempt}/{max}…", { attempt: event.attempt, max: event.maxAttempts });
-				cli?.out(`[retry] ${retryText} (${event.errorMessage})`);
+				const rawReason = typeof event.errorMessage === "string" ? event.errorMessage.replace(/\s+/g, " ").trim() : "";
+				const briefReason = rawReason.length > 140 ? `${rawReason.slice(0, 140)}…` : rawReason;
+				const retryText = briefReason
+					? t("模型请求失败（{reason}），自动重试 {attempt}/{max}…", {
+							reason: briefReason,
+							attempt: event.attempt,
+							max: event.maxAttempts,
+						})
+					: t("模型请求失败，自动重试 {attempt}/{max}…", { attempt: event.attempt, max: event.maxAttempts });
+				cli?.out(`[retry] ${retryText}`);
 				broadcast({ type: "activity", activity: { kind: "note", name: "retry", detail: retryText } });
 				broadcast({ type: "notify", level: "warning", text: retryText });
 				break;

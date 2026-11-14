@@ -20,6 +20,7 @@ import { createMacroEnv, evalPresetMacros } from "../preset-macro.ts";
 import { extractSPresetConfig } from "../spreset-config.ts";
 import type { CharacterCard, LorebookEntry } from "../types.ts";
 import { buildLiyuanOutputOverrideFragment, type PromptFragment } from "./assemble.ts";
+import { extractPresetRelayMeta, type PresetRelayMeta } from "./preset-relay-meta.ts";
 
 const LAST_USER_SENTINEL = "__LIYUAN_LAST_USER_SENTINEL__";
 
@@ -60,6 +61,9 @@ export interface LiyuanPresetDynamicResult {
 	fragments: PromptFragment[];
 	dirtyLocal: Record<string, string>;
 	dirtyGlobal: Record<string, string>;
+	/** 求值后处于预设末尾的 assistant 预填文本（标准带工具轮剥除不用，供无工具预填恢复或交稿跳按需启用） */
+	trailingPrefillText?: string;
+	relayMeta: PresetRelayMeta;
 	stats: {
 		totalEnabled: number;
 		skippedMarkers: number;
@@ -324,10 +328,12 @@ function resolveInjectedPlaceholder(text: string, ejsContext: EjsExecutionContex
  * - 返回可传给 `buildStageSystemPrompt` 与 `applyHistoryInjections` 的 `PromptFragment[]`。
  */
 export async function assembleLiyuanPresetDynamic(input: LiyuanPresetDynamicInput): Promise<LiyuanPresetDynamicResult> {
+	const relayMeta = extractPresetRelayMeta(input.presetDoc);
 	const emptyResult = (fragments: PromptFragment[] = []): LiyuanPresetDynamicResult => ({
 		fragments,
 		dirtyLocal: {},
 		dirtyGlobal: {},
+		relayMeta,
 		stats: {
 			totalEnabled: 0,
 			skippedMarkers: 0,
@@ -527,10 +533,31 @@ export async function assembleLiyuanPresetDynamic(input: LiyuanPresetDynamicInpu
 		if (v !== undefined) dirtyGlobal[k] = v;
 	}
 
+	const trailingAsstParts: string[] = [];
+	for (let i = afterPieces.length - 1; i >= 0; i--) {
+		const p = afterPieces[i]!;
+		if (p.role !== "assistant") break;
+		if (p.text.trim()) trailingAsstParts.unshift(p.text.trim());
+	}
+	let trailingPrefillText = trailingAsstParts.join("\n\n").trim();
+	if (!trailingPrefillText && relayMeta.rawAssistantPrefill) {
+		let evaluatedPrefill = evalPresetMacros(relayMeta.rawAssistantPrefill, env).text;
+		if (hasPromptTemplateSyntax(evaluatedPrefill)) {
+			try {
+				evaluatedPrefill = await evalEjsTemplate(evaluatedPrefill, ejsContext);
+			} catch {
+				/* ignore */
+			}
+		}
+		trailingPrefillText = evaluatedPrefill.trim();
+	}
+
 	return {
 		fragments,
 		dirtyLocal,
 		dirtyGlobal,
+		...(trailingPrefillText ? { trailingPrefillText } : {}),
+		relayMeta,
 		stats: {
 			totalEnabled,
 			skippedMarkers,

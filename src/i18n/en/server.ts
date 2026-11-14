@@ -83,6 +83,7 @@ export const server: Record<string, string> = {
 	"新开条目": " stored as a new entry",
 	"向量记忆：剧情库{how}（第 {n} 轮 · 当前对话）": "Memory: story store{how} (turn {n} · this chat)",
 	"模型请求失败，自动重试 {attempt}/{max}…": "Model request failed; retrying {attempt}/{max}…",
+	"模型请求失败（{reason}），自动重试 {attempt}/{max}…": "Model request failed ({reason}); retrying {attempt}/{max}…",
 	"模型不存在：{model}": "Model not found: {model}",
 	"模型切换后状态异常": "Unexpected state after switching model",
 	"思考档位不能为空": "Thinking level cannot be empty",

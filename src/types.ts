@@ -117,6 +117,23 @@ export interface CharacterState {
 }
 
 /** 项目配置（app/liyuan.config.json；旧名 rp.config.json 启动时迁移） */
+export interface RelayPolicyConfig {
+	/** 末尾 assistant 预填模式："auto"=按需于拒答恢复使用（默认）；"on"=带工具查完后主动折算预填；"off"=禁用 */
+	prefillMode?: "auto" | "on" | "off";
+	/** 防路由随机注释混淆档位："off" | "head" | "deep" */
+	antiRouteShield?: "off" | "head" | "deep";
+	/** 仅在 Google 原生端点注入 BLOCK_NONE，默认 true */
+	googleSafetyOff?: boolean;
+	/** 是否合并相邻连续 system 消息（缺省跟随预设 squash_system_messages） */
+	squashSystemMessages?: boolean;
+	/** 首包检测到静默拒答/空回时是否在当前跳内部自动降级重发，默认 true */
+	refusalRetry?: boolean;
+	/** 额外透传的请求体字段、排除字段路径与请求头 */
+	customIncludeBody?: Record<string, unknown>;
+	customExcludeBody?: string[];
+	customIncludeHeaders?: Record<string, string>;
+}
+
 export interface RpConfig {
 	/** 角色卡路径（.png 或 .json），相对项目根 */
 	card: string;
@@ -153,6 +170,8 @@ export interface RpConfig {
 	importStripTags?: string[];
 	/** 转换后的预设文件路径（liyuan-preset.json，可选；由 scripts/convert-preset.mjs 生成） */
 	preset?: string;
+	/** 纯后端 pi 发包中转与按需末尾预填策略 */
+	relayPolicy?: RelayPolicyConfig;
 	/** 本机工具总开关：开则 bash/读写等回到工具底座；本机开发默认开，分发默认关 */
 	backendControl?: boolean;
 	/** 决策门禁档位（PLAN-PHASE4 柱 1）：ask=关键剧情决策点停笔询问用户；silent=不问，等同旧行为。默认 silent */

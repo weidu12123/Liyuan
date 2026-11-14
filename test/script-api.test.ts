@@ -731,12 +731,21 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 				join(cliRoot, "assets", "presets", "test_preset.json"),
 				JSON.stringify({
 					temperature: 0.77,
+					squash_system_messages: true,
 					prompts: [
 						{ identifier: "b1", name: "文风块", role: "system", content: "旧文风", enabled: false, injection_position: 0 },
 						{ identifier: "chatHistory", name: "Chat History", marker: true },
+						{ identifier: "pf", name: "预填", role: "assistant", content: "OUTPUT<think>", enabled: true, injection_position: 0 },
 					],
 					prompt_order: [
-						{ character_id: 100001, order: [{ identifier: "b1", enabled: false }, { identifier: "chatHistory", enabled: true }] },
+						{
+							character_id: 100001,
+							order: [
+								{ identifier: "b1", enabled: false },
+								{ identifier: "chatHistory", enabled: true },
+								{ identifier: "pf", enabled: true },
+							],
+						},
 					],
 				}),
 				"utf8",
@@ -781,6 +790,8 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 				child.stdin.write('/script preset.update {"patch":{"blocks":[{"id":"b1","enabled":true,"content":"新文风"}]}}\n');
 				child.stdin.write("/script preset.get\n");
 				child.stdin.write('/script preset.preview {"userText":"推门进去"}\n');
+				child.stdin.write('/script preset.preview {"userText":"推门进去","simulateRelay":true,"includePrefill":true,"api":"openai-completions","provider":"deepseek","model":"deepseek-chat"}\n');
+				child.stdin.write('/script preset.preview {"userText":"推门进去","simulateRelay":true,"includePrefill":true,"api":"google-generative-ai","provider":"google","model":"gemini-2.5-pro"}\n');
 				child.stdin.write("/exit\n");
 				child.stdin.end();
 			});
@@ -794,6 +805,8 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 			assert.ok(cliOutput.includes('"dirty":true') && cliOutput.includes("新文风"), "CLI 再次读取应拿到草稿中已开启的新内容");
 			assert.ok(cliOutput.includes('"action":"preset.preview"'), "CLI 应返回 preset.preview 报文");
 			assert.ok(cliOutput.includes("新文风") && cliOutput.includes("推门进去"), "CLI preset.preview 应实时体现新开启的预设内容与用户输入");
+			assert.ok(cliOutput.includes('"trailingPrefillText":"OUTPUT<think>"') && cliOutput.includes('"partial":true'), "CLI simulateRelay 应正确展示 DeepSeek 预填报文");
+			assert.ok(cliOutput.includes("HARM_CATEGORY_DANGEROUS_CONTENT") && cliOutput.includes("BLOCK_NONE"), "CLI simulateRelay 应对 Google 原生注入 BLOCK_NONE");
 		} finally {
 			rmSync(cliRoot, { recursive: true, force: true });
 			rmSync(cliAgent, { recursive: true, force: true });

@@ -496,6 +496,7 @@ const CONFIG_EDITABLE = new Set([
 	"lorebook",
 	"lorebooks",
 	"preset",
+	"relayPolicy",
 	"samplers",
 	"disabledLore",
 	"backendControl",
@@ -530,6 +531,39 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 	next.greeting = next.greeting === true;
 	// 决策门禁档位：只认 ask / silent；非法值删除（扩展缺省按 silent）
 	if (next.creationMode !== "ask" && next.creationMode !== "silent") delete next.creationMode;
+	// 后端中转策略：严格白名单校验各字段
+	if (next.relayPolicy !== undefined) {
+		const rawRp = next.relayPolicy as Record<string, unknown> | null;
+		if (!rawRp || typeof rawRp !== "object" || Array.isArray(rawRp)) {
+			delete next.relayPolicy;
+		} else {
+			const rp: Record<string, unknown> = {};
+			if (rawRp.prefillMode === "auto" || rawRp.prefillMode === "on" || rawRp.prefillMode === "off") {
+				rp.prefillMode = rawRp.prefillMode;
+			}
+			if (rawRp.antiRouteShield === "off" || rawRp.antiRouteShield === "head" || rawRp.antiRouteShield === "deep") {
+				rp.antiRouteShield = rawRp.antiRouteShield;
+			}
+			if (typeof rawRp.googleSafetyOff === "boolean") rp.googleSafetyOff = rawRp.googleSafetyOff;
+			if (typeof rawRp.squashSystemMessages === "boolean") rp.squashSystemMessages = rawRp.squashSystemMessages;
+			if (typeof rawRp.refusalRetry === "boolean") rp.refusalRetry = rawRp.refusalRetry;
+			if (rawRp.customIncludeBody && typeof rawRp.customIncludeBody === "object" && !Array.isArray(rawRp.customIncludeBody)) {
+				rp.customIncludeBody = rawRp.customIncludeBody;
+			}
+			if (Array.isArray(rawRp.customExcludeBody)) {
+				rp.customExcludeBody = rawRp.customExcludeBody.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+			}
+			if (rawRp.customIncludeHeaders && typeof rawRp.customIncludeHeaders === "object" && !Array.isArray(rawRp.customIncludeHeaders)) {
+				const hOut: Record<string, string> = {};
+				for (const [hk, hv] of Object.entries(rawRp.customIncludeHeaders as Record<string, unknown>)) {
+					if (hk.trim() && typeof hv === "string") hOut[hk.trim()] = hv;
+				}
+				if (Object.keys(hOut).length > 0) rp.customIncludeHeaders = hOut;
+			}
+			if (Object.keys(rp).length > 0) next.relayPolicy = rp;
+			else delete next.relayPolicy;
+		}
+	}
 	// 旁路模型：只认 { provider, entry } 形——entry 是连接配置里那条模型条目的名字，
 	// 不是模型 id（同一个 id 可以有多条条目）。非法值删除（缺省=跟随剧情模型）
 	if (next.sideModel !== undefined) {
@@ -3206,6 +3240,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				const config = loadConfig(host.cwd);
 				sendJson(res, 200, {
 					active: config.preset ?? null,
+					relayPolicy: config.relayPolicy ?? {},
 					presets: listPresetFiles(host.cwd),
 				});
 				return true;

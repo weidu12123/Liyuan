@@ -515,8 +515,17 @@ export interface PresetFileInfo {
 	mode?: "declare" | "process";
 }
 
+export interface RelayPolicyView {
+	prefillMode?: "auto" | "on" | "off";
+	antiRouteShield?: "off" | "head" | "deep";
+	googleSafetyOff?: boolean;
+	squashSystemMessages?: boolean;
+	refusalRetry?: boolean;
+}
+
 export interface PresetsResponse {
 	active: string | null;
+	relayPolicy?: RelayPolicyView;
 	presets: PresetFileInfo[];
 }
 

@@ -18,6 +18,7 @@ export interface StageHooks {
 	systemPrompt: string;
 	toolNames: string[];
 	context(messages: unknown[]): unknown[];
+	providerHeaders?(headers: Record<string, string>, model?: StageModelLike): void;
 	providerPayload(payload: unknown, model?: StageModelLike): unknown;
 	update(event: StageStreamEvent): void;
 	messageEnd(message: { role: string; [key: string]: unknown }): { persist: false } | undefined;

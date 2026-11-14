@@ -31,6 +31,8 @@ import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import { createEjsContext, evalEjsTemplate, getEjsSyntaxErrorInfo } from "./ejs-engine.ts";
 import { loadStageMaterials } from "./stage/materials.ts";
 import { assembleLiyuanPresetDynamic } from "./stage/preset-dynamic.ts";
+import { applyRelayPayload, supportsTrailingPrefill, type RelayModelLike } from "./stage/provider-relay.ts";
+import { flattenContextForPrefill } from "./stage/provider-relay-stream.ts";
 import {
 	applyHistoryInjections,
 	buildStageInjection,
@@ -2239,6 +2241,59 @@ export class ScriptApiService {
 					const past = endsWithUser ? baseHistory.slice(0, -1) : baseHistory;
 					const tailText = endsWithUser ? `${injection}\n\n${baseHistory[baseHistory.length - 1]!.text}` : injection;
 					const messages = applyHistoryInjections(past, tailText, dyn.fragments, { tailHasUserMessage: endsWithUser });
+
+					let simulatedPayload: Record<string, unknown> | undefined;
+					let prefillCapability: ReturnType<typeof supportsTrailingPrefill> | undefined;
+					if (params.simulateRelay === true) {
+						const simModel: RelayModelLike = {
+							id: typeof params.model === "string" && params.model.trim() ? params.model.trim() : "preview-model",
+							provider: typeof params.provider === "string" ? params.provider.trim() : "custom",
+							api: typeof params.api === "string" && params.api.trim() ? params.api.trim() : "openai-completions",
+							reasoning: params.reasoning === true,
+						};
+						prefillCapability = supportsTrailingPrefill(simModel, { hasThinking: params.thinking === true });
+						const usePrefill = Boolean(params.includePrefill === true && dyn.trailingPrefillText && prefillCapability.supported);
+
+						const baseCtx = {
+							systemPrompt,
+							messages: messages.map((m) => ({ role: m.role, content: [{ type: "text", text: m.text }] })),
+							tools: [] as unknown[],
+						};
+						const effCtx = usePrefill && dyn.trailingPrefillText
+							? flattenContextForPrefill(baseCtx, dyn.trailingPrefillText, simModel)
+							: baseCtx;
+
+						let rawReq: Record<string, unknown>;
+						if (simModel.api === "google-generative-ai" || simModel.api === "google-vertex") {
+							rawReq = {
+								model: simModel.id,
+								contents: (effCtx.messages as Array<{ role: string; content: Array<{ text: string }> }>).map((m) => ({
+									role: m.role === "assistant" ? "model" : "user",
+									parts: [{ text: (m.content ?? []).map((c) => c.text).join("") }],
+								})),
+								config: systemPrompt.trim() ? { systemInstruction: systemPrompt } : {},
+							};
+						} else {
+							rawReq = {
+								model: simModel.id,
+								messages: [
+									...(systemPrompt.trim() ? [{ role: "system", content: systemPrompt }] : []),
+									...(effCtx.messages as Array<{ role: string; content: Array<{ text: string }> }>).map((m) => ({
+										role: m.role,
+										content: (m.content ?? []).map((c) => c.text).join(""),
+									})),
+								],
+								...(usePrefill ? {} : { tools: [] }),
+							};
+						}
+						simulatedPayload =
+							applyRelayPayload(rawReq, simModel, {
+								policy: materials.config.relayPolicy,
+								presetMeta: dyn.relayMeta,
+								trailingPrefillActive: usePrefill,
+							}) ?? rawReq;
+					}
+
 					return {
 						ok: true,
 						action,
@@ -2250,6 +2305,10 @@ export class ScriptApiService {
 							systemPrompt,
 							messages,
 							samplers: previewPresetDoc?.samplers ?? materials.config.samplers ?? null,
+							relayMeta: dyn.relayMeta,
+							trailingPrefillText: dyn.trailingPrefillText ?? null,
+							...(prefillCapability ? { prefillCapability } : {}),
+							...(simulatedPayload ? { simulatedPayload } : {}),
 							stats: dyn.stats,
 						},
 					};

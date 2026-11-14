@@ -290,6 +290,16 @@ export function PresetPanel({
 			bumpWatchPanels();
 		});
 
+	const updateRelayPolicy = (patch: Partial<NonNullable<PresetsResponse["relayPolicy"]>>) =>
+		run(async () => {
+			const cur = files.data?.relayPolicy ?? {};
+			await apiPut("/api/config", { relayPolicy: { ...cur, ...patch } });
+			toast("info", t("已更新发包中转设置"));
+			apiGetCacheClear("/api/presets");
+			files.reload();
+			bumpWatchPanels();
+		});
+
 	// ---------------- 库内任意预设：不装载也能展开拨开关（2026-09-14 用户点名） ----------------
 
 	type BlockRow = PresetBlockView & { content: string };
@@ -820,6 +830,81 @@ export function PresetPanel({
 
 			{tab === "library" && (
 				<>
+					<section className="sp-section">
+						<div className="preset-chan-head">
+							<h4>{t("后端发包中转")}</h4>
+							<label className="preset-chan-toggle" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+								<input
+									type="checkbox"
+									checked={files.data?.relayPolicy?.refusalRetry !== false}
+									disabled={busy}
+									onChange={(e) => void updateRelayPolicy({ refusalRetry: e.target.checked })}
+								/>
+								<span>{t("拒答检测自动恢复")}</span>
+							</label>
+						</div>
+						<div className="preset-chan-head" style={{ marginTop: 8 }}>
+							<span style={{ fontSize: 12, color: "var(--ink-2)" }}>{t("末尾预填")}</span>
+							<div className="seg-row" role="group" aria-label={t("末尾预填")}>
+								<button
+									type="button"
+									className={`seg ${(files.data?.relayPolicy?.prefillMode ?? "auto") === "auto" ? "active" : ""}`}
+									disabled={busy}
+									onClick={() => void updateRelayPolicy({ prefillMode: "auto" })}
+								>
+									{t("自动恢复")}
+								</button>
+								<button
+									type="button"
+									className={`seg ${files.data?.relayPolicy?.prefillMode === "on" ? "active" : ""}`}
+									disabled={busy}
+									onClick={() => void updateRelayPolicy({ prefillMode: "on" })}
+								>
+									{t("强制收口")}
+								</button>
+								<button
+									type="button"
+									className={`seg ${files.data?.relayPolicy?.prefillMode === "off" ? "active" : ""}`}
+									disabled={busy}
+									onClick={() => void updateRelayPolicy({ prefillMode: "off" })}
+								>
+									{t("不启用")}
+								</button>
+							</div>
+						</div>
+						<div className="preset-chan-head" style={{ marginTop: 8 }}>
+							<span style={{ fontSize: 12, color: "var(--ink-2)" }}>{t("防路由护盾")}</span>
+							<div className="seg-row" role="group" aria-label={t("防路由护盾")}>
+								<button
+									type="button"
+									className={`seg ${(files.data?.relayPolicy?.antiRouteShield ?? "off") === "off" ? "active" : ""}`}
+									disabled={busy}
+									onClick={() => void updateRelayPolicy({ antiRouteShield: "off" })}
+								>
+									{t("不启用")}
+								</button>
+								<button
+									type="button"
+									className={`seg ${files.data?.relayPolicy?.antiRouteShield === "head" ? "active" : ""}`}
+									disabled={busy}
+									onClick={() => void updateRelayPolicy({ antiRouteShield: "head" })}
+								>
+									{t("首尾")}
+								</button>
+								<button
+									type="button"
+									className={`seg ${files.data?.relayPolicy?.antiRouteShield === "deep" ? "active" : ""}`}
+									disabled={busy}
+									onClick={() => void updateRelayPolicy({ antiRouteShield: "deep" })}
+								>
+									{t("深度")}
+								</button>
+							</div>
+						</div>
+						<div className="sp-hint">
+							{t("全部在后端 pi 出口完成：默认保留全部真工具，遇静默拒答或无工具末跳自动折算并附着末尾预填。")}
+						</div>
+					</section>
 					<section className="sp-section">
 						<div className="preset-chan-head">
 							<h4>{t("预设库")}</h4>

@@ -50,6 +50,9 @@ import {
 	type PromptFragment,
 } from "./assemble.ts";
 import { assembleLiyuanPresetDynamic } from "./preset-dynamic.ts";
+import { extractPresetRelayMeta } from "./preset-relay-meta.ts";
+import { applyRelayHeaders, applyRelayPayload, type RelayModelLike } from "./provider-relay.ts";
+import { wrapRelayStreamFn, type AttemptRelayOverlay } from "./provider-relay-stream.ts";
 import {
 	constantLoreOf,
 	loadStageConfig,
@@ -1178,6 +1181,9 @@ export class StageEngine {
 				...runtimeFragments,
 			];
 			let fragments: PromptFragment[] = customFragments;
+			let trailingPrefillText: string | undefined;
+			let presetRelayMeta = extractPresetRelayMeta(materials.presetDoc);
+			let attemptRelayOverlay: AttemptRelayOverlay = { trailingPrefillActive: false };
 			if (!agentTurn && materials.presetDoc) {
 				const sessionId = sm.getSessionId();
 				const presetName = materials.presetDoc.name;
@@ -1201,6 +1207,8 @@ export class StageEngine {
 					extensionPrompts: customFragments,
 				});
 				fragments = dyn.fragments;
+				trailingPrefillText = dyn.trailingPrefillText;
+				presetRelayMeta = dyn.relayMeta;
 				writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "chat", dyn.dirtyLocal, presetName);
 				writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "global", dyn.dirtyGlobal, presetName);
 			}
@@ -1568,14 +1576,36 @@ export class StageEngine {
 				ws.context = projected.stats; checkpoint(true);
 				return projected.messages;
 			},
+			providerHeaders: (requestHeaders) => {
+				if (agentTurn) return;
+				applyRelayHeaders(requestHeaders, config.relayPolicy);
+			},
 			providerPayload: (payload, requestModel = model) => {
-				if (!samplers || Object.keys(samplers).length === 0) return undefined;
-				return applyProjectedSamplers(payload, samplers, {
-					provider: requestModel.provider,
-					modelId: requestModel.id,
-					baseUrl: requestModel.baseUrl,
-					api: typeof requestModel.api === "string" ? requestModel.api : undefined,
-				});
+				if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+				let next = payload as Record<string, unknown>;
+				let mutated = false;
+				if (samplers && Object.keys(samplers).length > 0) {
+					next = applyProjectedSamplers(next, samplers, {
+						provider: requestModel.provider,
+						modelId: requestModel.id,
+						baseUrl: requestModel.baseUrl,
+						api: typeof requestModel.api === "string" ? requestModel.api : undefined,
+					});
+					mutated = true;
+				}
+				if (!agentTurn) {
+					const relayed = applyRelayPayload(next, requestModel as RelayModelLike, {
+						policy: config.relayPolicy,
+						presetMeta: presetRelayMeta,
+						trailingPrefillActive: attemptRelayOverlay.trailingPrefillActive,
+						overrideShieldMode: attemptRelayOverlay.overrideShieldMode,
+					});
+					if (relayed !== undefined) {
+						next = relayed;
+						mutated = true;
+					}
+				}
+				return mutated ? next : undefined;
 			},
 			update: (event) => {
 				if (agentTurn) {
@@ -1816,6 +1846,22 @@ export class StageEngine {
 				return result;
 			},
 		};
+		const agentHolder = session as unknown as { agent?: { streamFunction?: StageStreamFn } };
+		const origStreamFn = agentHolder.agent?.streamFunction;
+		const wrappedRelay = !agentTurn && agentHolder.agent && origStreamFn;
+		if (wrappedRelay && agentHolder.agent && origStreamFn) {
+			agentHolder.agent.streamFunction = wrapRelayStreamFn(origStreamFn, {
+				policy: config.relayPolicy,
+				presetMeta: presetRelayMeta,
+				hasActivePreset: Boolean(materials.presetDoc),
+				trailingPrefillText,
+				hasThinking: (this.#deps.getThinking?.() ?? "off") !== "off",
+				setAttemptOverlay: (overlay) => {
+					attemptRelayOverlay = overlay;
+				},
+				onRecoveryActivity: (detail) => ev.onActivity?.(detail),
+			});
+		}
 		const release = connection.activate(hooks, tools);
 		try {
 			await session.prompt(userText ?? lastUserText, { expandPromptTemplates: false, reuseUserMessage: userText === null });
@@ -1825,6 +1871,9 @@ export class StageEngine {
 			if (!finished || !endInfo) throw new Error("pi 未完成本拍的 RP 收尾。");
 			return endInfo;
 		} finally {
+			if (wrappedRelay && agentHolder.agent && origStreamFn) {
+				agentHolder.agent.streamFunction = origStreamFn;
+			}
 			release();
 			if (agentTurn) await this.#deps.afterAuthoringTurn?.();
 		}

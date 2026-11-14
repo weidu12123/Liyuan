@@ -43,6 +43,13 @@ export function scriptFrameMeta(s: Pick<AuthorScript, "id" | "source" | "content
 	};
 }
 
+export const PRESET_FRAME_SOURCE_URL_MARKER = "__liyuan_preset_frame__";
+
+/** 根据调用栈判断是否来自禁止操控父页 UI 的预设脚本帧 */
+export function isCallFromPresetFrameStack(stack: string | undefined): boolean {
+	return Boolean(stack && stack.includes(PRESET_FRAME_SOURCE_URL_MARKER));
+}
+
 /**
  * 判别待挂载至父页的节点是否为非同源外部 `<script src>`。
  * 用于同步拦截第三方脚本向父页 head/body 注入外部 URL 脚本。
@@ -138,7 +145,11 @@ try{
         el.setAttribute("data-liyuan-author-script",sid);
         el.type="module";
         mods++;
-        el.textContent="window.__liyuanCurrentScriptId="+JSON.stringify(sid)+";\\n"+code;
+        var fName="";
+        try{fName=String((g.frameElement&&(g.frameElement.id||g.frameElement.name))||g.name||"");}catch(eFn){}
+        var isPresetItem=String(item.source||"")==="preset"||/^TH-script--preset--/.test(fName);
+        var srcUrlTag=isPresetItem?("\\n//# sourceURL=__liyuan_preset_frame__/"+encodeURIComponent(sid)+".mjs"):"";
+        el.textContent="window.__liyuanCurrentScriptId="+JSON.stringify(sid)+";\\n"+code+srcUrlTag;
         document.body.appendChild(el);
         ok++;
       }catch(e){ bad++; console.error("[liyuan scriptHost] 脚本执行失败",item&&item.name,e); }

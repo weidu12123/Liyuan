@@ -173,7 +173,7 @@ export interface ScriptApiHost {
 	getCurrentChatDir(): string | null;
 	getLoreHost(): {
 		listBooks(): { books: Array<{ path: string; name: string; entryCount: number }>; mounted: string[] };
-		listMarked(): Array<LorebookEntry & { agentWritten?: boolean }>;
+		listMarked(): Array<LorebookEntry & { agentWritten?: boolean; source?: string }>;
 		write(input: { title: string; keys: string[]; content: string; constant?: boolean; book?: string }): LorebookEntry | null;
 		update(
 			fingerprint: string,
@@ -1386,22 +1386,35 @@ export class ScriptApiService {
 
 				case "lorebooks.read": {
 					const entries = this.#host.getLoreHost().listMarked();
+					const bookFilter =
+						typeof params.book === "string"
+							? params.book.trim().replace(/\\/g, "/").replace(/\.json$/i, "").toLowerCase()
+							: "";
+					const hasSourceField = entries.some((e) => typeof e.source === "string" && e.source.trim().length > 0);
+					const byBook =
+						bookFilter && hasSourceField
+							? entries.filter((e) => {
+									const src = String(e.source ?? "").trim().replace(/\\/g, "/");
+									const base = (src.split("/").pop() ?? src).replace(/\.json$/i, "").toLowerCase();
+									return base === bookFilter || src.replace(/\.json$/i, "").toLowerCase() === bookFilter;
+								})
+							: entries;
 					const query = typeof params.query === "string" ? params.query.trim().toLowerCase() : "";
 					const filtered = query
-						? entries.filter(
+						? byBook.filter(
 								(e) =>
 									(e.comment ?? "").toLowerCase().includes(query) ||
 									e.content.toLowerCase().includes(query) ||
 									e.keys.some((k) => k.toLowerCase().includes(query)),
 							)
-						: entries;
+						: byBook;
 					return {
 						ok: true,
 						action,
 						requestId,
 						status: "completed",
 						target: this.#host.getTarget(),
-						result: { entries: filtered, total: entries.length },
+						result: { entries: filtered, total: byBook.length },
 					};
 				}
 

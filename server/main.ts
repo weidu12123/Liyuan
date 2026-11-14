@@ -2482,20 +2482,24 @@ function setAccessCookie(res: ServerResponse, token: string | null): void {
 	res.setHeader("set-cookie", token ? `${base}; Max-Age=31536000` : `${base}; Max-Age=0`);
 }
 
-function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+function readJsonBody(req: IncomingMessage, maxBytes = 65536): Promise<Record<string, unknown>> {
 	return new Promise((resolve, reject) => {
 		const chunks: Buffer[] = [];
 		let size = 0;
+		let tooBig = false;
 		req.on("data", (c: Buffer) => {
+			if (tooBig) return;
 			size += c.length;
-			if (size > 65536) {
+			if (size > maxBytes) {
+				tooBig = true;
+				req.resume();
 				reject(new Error(t("body 过大")));
-				req.destroy();
 				return;
 			}
 			chunks.push(c);
 		});
 		req.on("end", () => {
+			if (tooBig) return;
 			try {
 				resolve(chunks.length ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>) : {});
 			} catch (e) {
@@ -2586,7 +2590,7 @@ const httpServer = createServer((req, res) => {
 				res.end(JSON.stringify({ ok: false, error: t("模型正在写，稍后再改") }));
 				return;
 			}
-			const body = await readJsonBody(req);
+			const body = await readJsonBody(req, 32 * 1024 * 1024);
 			const userText = typeof body.userText === "string" ? body.userText.trim() : "";
 			const reroll = body.reroll === true;
 			const editUserText = typeof body.editUserText === "string" ? body.editUserText.trim() : "";
@@ -2689,7 +2693,7 @@ const httpServer = createServer((req, res) => {
 				res.end(JSON.stringify({ error: { message: t("模型 {model} 没有可用鉴权", { model: `${model.provider}/${model.id}` }) } }));
 				return;
 			}
-			const incomingPayload = await readJsonBody(req);
+			const incomingPayload = await readJsonBody(req, 32 * 1024 * 1024);
 			const up = resolveUpstreamRequest(
 				{
 					id: model.id,
@@ -2782,7 +2786,7 @@ const httpServer = createServer((req, res) => {
 			return;
 		}
 		if (req.method === "POST" && urlPath === "/api/pure-tavern/commit") {
-			const body = await readJsonBody(req);
+			const body = await readJsonBody(req, 32 * 1024 * 1024);
 			const userText = typeof body.userText === "string" ? body.userText.trim() : "";
 			const reroll = body.reroll === true;
 			const editUserText = typeof body.editUserText === "string" ? body.editUserText.trim() : "";
@@ -2864,7 +2868,7 @@ const httpServer = createServer((req, res) => {
 			return;
 		}
 		if (req.method === "POST" && urlPath === "/api/liyuan-relay/chunk") {
-			const body = await readJsonBody(req);
+			const body = await readJsonBody(req, 4 * 1024 * 1024);
 			const relayId = String(body.relayId ?? "");
 			const pending = pendingRelays.get(relayId);
 			if (pending && (body.kind === "text" || body.kind === "thinking") && typeof body.delta === "string") {
@@ -2875,7 +2879,7 @@ const httpServer = createServer((req, res) => {
 			return;
 		}
 		if (req.method === "POST" && urlPath === "/api/liyuan-relay/finish") {
-			const body = await readJsonBody(req);
+			const body = await readJsonBody(req, 32 * 1024 * 1024);
 			const relayId = String(body.relayId ?? "");
 			const pending = pendingRelays.get(relayId);
 			if (pending) {

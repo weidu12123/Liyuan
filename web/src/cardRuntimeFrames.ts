@@ -7,6 +7,12 @@ export function isCardRuntimeSource(source: MessageEventSource | null): source i
 	return source !== null && cardRuntimeFrames().some(frame => frame.contentWindow === source);
 }
 
+export function isPresetScriptSource(source: MessageEventSource | null): boolean {
+	if (!source) return false;
+	const frame = cardRuntimeFrames().find((f) => f.contentWindow === source);
+	return Boolean(frame && /^TH-script--preset--/.test(frame.name || frame.id || ""));
+}
+
 export interface LiyuanRuntimeMessageLite {
 	message_id: number;
 	index: number;

@@ -285,6 +285,7 @@ function createTestHost() {
 		root,
 		chatDir,
 		target,
+		host,
 		notifications,
 		api: new ScriptApiService(host),
 		cleanup: () => rmSync(root, { recursive: true, force: true }),
@@ -491,6 +492,23 @@ test("ScriptApiService：世界书、项目文件、宏与正则纯计算", asyn
 		});
 		assert.equal(readFile.ok, true);
 		assert.ok((readFile.result as { content: string }).content.includes("云澜：师姐"));
+
+		// 按书名过滤 lorebooks.read（仅当条目带 source 字段时按书隔离）
+		const origGetLoreHost = h.host.getLoreHost;
+		h.host.getLoreHost = () => ({
+			...origGetLoreHost(),
+			listMarked: () => [
+				{ uid: 1, comment: "A书条目", keys: ["a"], content: "属于A", constant: true, enabled: true, order: 10, depth: 4, position: 0, source: "lorebooks/书A.json" } as LorebookEntry,
+				{ uid: 2, comment: "B书条目", keys: ["b"], content: "属于B", constant: true, enabled: true, order: 10, depth: 4, position: 0, source: "lorebooks/书B.json" } as LorebookEntry,
+			],
+		});
+		const readA = await h.api.invoke({ action: "lorebooks.read", params: { book: "书A" } });
+		assert.equal(readA.ok, true);
+		assert.equal((readA.result as { entries: LorebookEntry[] }).entries.length, 1);
+		assert.equal((readA.result as { entries: LorebookEntry[] }).entries[0]?.comment, "A书条目");
+		const readMissing = await h.api.invoke({ action: "lorebooks.read", params: { book: "不存在的书" } });
+		assert.equal((readMissing.result as { entries: LorebookEntry[] }).entries.length, 0);
+		h.host.getLoreHost = origGetLoreHost;
 
 		const escapeAttempt = await h.api.invoke({
 			action: "project.files.read",

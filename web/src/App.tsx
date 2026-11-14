@@ -49,7 +49,7 @@ import {
 } from "./tavernShim.ts";
 import { runPureTavernBrowserTurn } from "./pureTavernRunner.ts";
 import { abortLiyuanBrowserRelay, runLiyuanBrowserRelay } from "./liyuanRelay.ts";
-import { collectRuntimeInjectedPrompts, syncCardRuntimeContext, syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
+import { collectRuntimeInjectedPrompts, isPresetScriptSource, syncCardRuntimeContext, syncCardRuntimeVariables } from "./cardRuntimeFrames.ts";
 import { setAtHome, shouldShowHomeOnBoot, touchVisit } from "./visit.ts";
 import { getTheme, setTheme } from "./theme.ts";
 import { getWallpaperConfig, type WallpaperConfig } from "./themes.ts";
@@ -667,6 +667,7 @@ export default function App() {
 
 	useEffect(() => {
 		const onMsg = (ev: MessageEvent) => {
+			if (isPresetScriptSource(ev.source)) return;
 			const d = ev.data as {
 				liyuanScriptButtons?: Array<{ scriptId?: unknown; name?: unknown; eventId?: unknown }>;
 				liyuanScriptOwner?: unknown;
@@ -990,6 +991,7 @@ export default function App() {
 		const seeded: Array<{ scriptId: string; name: string; eventId: string }> = [];
 		const seen = new Set<string>();
 		for (const s of authorScripts) {
+			if (s.source === "preset") continue;
 			const btnCfg = (s as unknown as { button?: { enabled?: boolean; buttons?: Array<{ name?: string; visible?: boolean }> } }).button;
 			if (!btnCfg || btnCfg.enabled === false || !Array.isArray(btnCfg.buttons)) continue;
 			for (const b of btnCfg.buttons) {

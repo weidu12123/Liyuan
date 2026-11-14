@@ -11,36 +11,54 @@ import {
 	AUTHOR_SCRIPTS_GLOBAL,
 	buildScriptHostDoc,
 	isBlockedExternalScriptNode,
+	isCallFromPresetFrameStack,
 	SCRIPT_HOST_SANDBOX,
 	scriptFrameMeta,
 } from "../scriptHostDoc.ts";
 import { t } from "../i18n/index.ts";
 
-export { isBlockedExternalScriptNode, scriptFrameMeta };
+export { isBlockedExternalScriptNode, isCallFromPresetFrameStack, scriptFrameMeta };
 
 type HostWindow = Window & { [AUTHOR_SCRIPTS_GLOBAL]?: AuthorScript[] };
 
-/** 这些节点是梨园自己的：React 根（及其祖先）和预设管理器隐藏 DOM 镜像 */
+/** 这些节点是梨园自己的：React 根（及其祖先） */
 function isLiyuanOwned(el: Element, root: Element | null): boolean {
-	if (el.id === "completion_prompt_manager_list") return true;
 	if (!root) return false;
 	return el === root || el.contains(root);
 }
 
-/** 在父页挂载作者脚本期间启用同步外链 `<script src>` 插入拦截，全部脚本退出后恢复原型 */
-function installExternalScriptGuard(): () => void {
+/**
+ * 在父页挂载作者脚本期间启用同步双守卫：
+ * 1. 拦截外部非同源 `<script src>`；
+ * 2. 拦截预设脚本帧（`__liyuan_preset_frame__`）往父页挂载任何界面 DOM / 样式，但不影响 `parent.fetch` 与 `SillyTavern` 接口。
+ */
+function installParentDomGuards(): () => void {
 	const topSet = new Set<unknown>([document.body, document.head, document.documentElement]);
 	const origin = typeof window !== "undefined" ? window.location?.origin : undefined;
 	const origAppendChild = Node.prototype.appendChild;
 	const origInsertBefore = Node.prototype.insertBefore;
+	const origAppend = Element.prototype.append;
+	const origPrepend = Element.prototype.prepend;
+	const origInsertAdjacentElement = Element.prototype.insertAdjacentElement;
+	const origInsertAdjacentHTML = Element.prototype.insertAdjacentHTML;
+
 	const warnBlocked = (node: unknown) => {
 		const el = node as { src?: string; getAttribute?: (k: string) => string | null };
 		const src = el?.getAttribute?.("src") || el?.src || "";
 		console.warn(`[liyuan scriptHost] 已拦截向父页插入外部脚本：${src}`); // i18n-ignore
 	};
+	const isPresetMountBlocked = (target: Node): boolean => {
+		if (!target || target.ownerDocument !== document && target !== document) return false;
+		if (!topSet.has(target) && !document.contains(target)) return false;
+		return isCallFromPresetFrameStack(new Error().stack);
+	};
+
 	Node.prototype.appendChild = function <T extends Node>(this: Node, child: T): T {
 		if (topSet.has(this) && isBlockedExternalScriptNode(child, origin)) {
 			warnBlocked(child);
+			return child;
+		}
+		if (isPresetMountBlocked(this)) {
 			return child;
 		}
 		return origAppendChild.call(this, child) as T;
@@ -50,11 +68,53 @@ function installExternalScriptGuard(): () => void {
 			warnBlocked(child);
 			return child;
 		}
+		if (isPresetMountBlocked(this)) {
+			return child;
+		}
 		return origInsertBefore.call(this, child, refNode) as T;
 	};
+	Element.prototype.append = function (this: Element, ...nodes: Array<Node | string>): void {
+		if (isPresetMountBlocked(this)) return;
+		const filtered = nodes.filter((n) => {
+			if (typeof n !== "string" && topSet.has(this) && isBlockedExternalScriptNode(n, origin)) {
+				warnBlocked(n);
+				return false;
+			}
+			return true;
+		});
+		origAppend.apply(this, filtered);
+	};
+	Element.prototype.prepend = function (this: Element, ...nodes: Array<Node | string>): void {
+		if (isPresetMountBlocked(this)) return;
+		const filtered = nodes.filter((n) => {
+			if (typeof n !== "string" && topSet.has(this) && isBlockedExternalScriptNode(n, origin)) {
+				warnBlocked(n);
+				return false;
+			}
+			return true;
+		});
+		origPrepend.apply(this, filtered);
+	};
+	Element.prototype.insertAdjacentElement = function (
+		this: Element,
+		where: InsertPosition,
+		element: Element,
+	): Element | null {
+		if (isPresetMountBlocked(this)) return element;
+		return origInsertAdjacentElement.call(this, where, element);
+	};
+	Element.prototype.insertAdjacentHTML = function (this: Element, where: InsertPosition, html: string): void {
+		if (isPresetMountBlocked(this)) return;
+		origInsertAdjacentHTML.call(this, where, html);
+	};
+
 	return () => {
 		Node.prototype.appendChild = origAppendChild;
 		Node.prototype.insertBefore = origInsertBefore;
+		Element.prototype.append = origAppend;
+		Element.prototype.prepend = origPrepend;
+		Element.prototype.insertAdjacentElement = origInsertAdjacentElement;
+		Element.prototype.insertAdjacentHTML = origInsertAdjacentHTML;
 	};
 }
 
@@ -170,7 +230,7 @@ export function ScriptHost({ scripts }: { scripts: AuthorScript[] }) {
 		const containers = [document.body, document.head, document.documentElement] as const;
 		const baseline = containers.map((c) => new Set(Array.from(c.children)));
 
-		const removeGuard = installExternalScriptGuard();
+		const removeGuard = installParentDomGuards();
 
 		const observer = new MutationObserver((mutations) => {
 			const activeKeys = activeBootKeysRef.current;

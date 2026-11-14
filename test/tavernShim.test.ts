@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
+import { createMacroEnv, evalPresetMacros } from "../src/preset-macro.ts";
 import { buildSrcDoc } from "../web/src/frameDoc.ts";
 import {
 	IFRAME_TAVERN_BRIDGE_SNIPPET,
@@ -779,7 +780,7 @@ test("提示词模板：window.EjsTemplate (evalTemplate / 小写 evaltemplate /
 	assert.equal(win.EjsTemplate.getFeatures().enabled, true);
 });
 
-test("第3步·预设三通道 A/B/C、正则查询、global/preset 变量与 reasoning 管理器完整联调", async () => {
+test("禁用第5块：预设帧只保留只读查询，全面禁止写预设/预设正则/按钮/弹窗/通道C/父页jQuery（卡帧保留完整能力）", async () => {
 	// 构造轻量级真实感 DOM（验证通道 C 原地复用 <li> 与 classList 翻转）
 	class MiniClassList {
 		#set = new Set<string>();
@@ -996,12 +997,11 @@ test("第3步·预设三通道 A/B/C、正则查询、global/preset 变量与 re
 		parentWin,
 	});
 
-	// 1. 变量读取：global 与 preset 合并了服务端同步数据与预设自带 variables
+	// 1. 变量与只读预设能力保留（供第2/3块脚本读取配置）
 	assert.equal(win.getVariables({ type: "global" }).sleep_var_zishu_define, "1600字");
 	assert.equal(win.getVariables({ type: "preset" }).wave_mode, "novel");
 	assert.equal(win.getVariables({ type: "preset" }).preset_flag, "on");
 
-	// 2. 通道 A：预设名称、toPreset、getTavernRegexes({ type: 'preset' }) 与 reasoning 管理器
 	assert.equal(win.getLoadedPresetName(), "TGbreak😺V2.1.6");
 	assert.deepEqual([...win.getPresetNames()], ["in_use", "TGbreak😺V2.1.6", "梦鲸思客V5-1030-exp"]);
 	const pView = win.getPreset("in_use");
@@ -1023,59 +1023,75 @@ test("第3步·预设三通道 A/B/C、正则查询、global/preset 变量与 re
 	assert.equal(reasoningMgr.apiId, "reasoning");
 	assert.equal(reasoningMgr.getSelectedPresetName(), "Default");
 
-	// 3. 通道 B：chatCompletionSettings 严格保持同一引用（《我即浪潮》强校验），builtin.promptManager.render 刷新 DOM
+	// 2. chatCompletionSettings 对预设帧保持内部同一引用（防兼容判等报错），但不指向父页真实共享对象
 	const stCtx1 = win.SillyTavern.getContext();
 	const stCtx2 = win.SillyTavern.getContext();
 	assert.strictEqual(stCtx1.chatCompletionSettings, stCtx2.chatCompletionSettings);
+	assert.notStrictEqual(stCtx1.chatCompletionSettings, (parentWin as any).__liyuanChatCompletionSettings);
 	assert.equal(typeof win.builtin.promptManager.render, "function");
-	assert.equal(typeof (parentWin as any).builtin.promptManager.render, "function");
 
-	// 通道 C：隐藏 #completion_prompt_manager_list 原地存在并可按 li[data-pm-identifier] 操作
-	const ul = miniDoc.getElementById("completion_prompt_manager_list")!;
-	assert.ok(ul, "父页应挂载隐藏 #completion_prompt_manager_list");
-	const liStyle1 = ul.children.find((el) => el.getAttribute("data-pm-identifier") === "style1")!;
-	const liDeep1 = ul.children.find((el) => el.getAttribute("data-pm-identifier") === "deep1")!;
-	assert.ok(liStyle1 && !liStyle1.classList.contains("completion_prompt_manager_prompt_disabled"));
-	assert.ok(liDeep1 && liDeep1.classList.contains("completion_prompt_manager_prompt_disabled"));
-	assert.equal(liStyle1.querySelector(".prompt-manager-name")?.getAttribute("data-pm-name"), "文风·古韵");
+	// 3. 父页不再挂载通道 C 假列表 #completion_prompt_manager_list
+	assert.equal(miniDoc.getElementById("completion_prompt_manager_list"), null, "已禁用第5块，父页不得再生成通道 C 假列表");
 
-	// 点击 .prompt-manager-toggle-action 应原地翻转 class 并保持同一 <li> 实例（触发 MutationObserver）
-	liStyle1.querySelector(".prompt-manager-toggle-action")!.click();
-	assert.ok(liStyle1.classList.contains("completion_prompt_manager_prompt_disabled"), "点击切换后应加上 disabled 类");
-	assert.strictEqual(
-		ul.children.find((el) => el.getAttribute("data-pm-identifier") === "style1"),
-		liStyle1,
-		"必须原地复用 li 节点，不能整棵销毁重绘",
-	);
-	assert.equal(win.getPreset("in_use").prompts.find((p: any) => p.id === "style1")?.enabled, false);
+	// 4. 预设帧禁止写/切预设（无论 liyuan 还是 pure 模式）：replacePreset/updatePresetWith/setPreset/saveSettingsDebounced/Liyuan.preset.update/replaceTavernRegexes 全部拦截
+	const postMessages: any[] = [];
+	const prevPostMessage = parentWin.postMessage;
+	parentWin.postMessage = (msg: unknown) => {
+		postMessages.push(msg);
+	};
+	for (const mode of ["liyuan", "pure"] as const) {
+		(parentWin as any).__liyuanRuntimeContext.presetMode = mode;
+		rpcCalls.length = 0;
+		postMessages.length = 0;
 
-	// 等待通道 C 防抖写回落到 Liyuan.preset.update，且不包含未变动的 20KB tavern_helper.scripts
-	await new Promise((r) => setTimeout(r, 120));
-	const updateCall = rpcCalls.find((c) => c.action === "preset.update");
-	assert.ok(updateCall, "通道 C 开关点击应触发 Liyuan.preset.update");
-	const patch = updateCall!.params.patch as Record<string, any>;
-	assert.ok(Array.isArray(patch.order));
-	assert.equal(patch.order.find((o: any) => o.identifier === "style1")?.enabled, false);
-	assert.ok(!JSON.stringify(patch).includes("xxxxxxxx"), "增量补丁不得重复序列化未变的 tavern_helper.scripts");
+		await win.updatePresetWith("in_use", (p: any) => {
+			const target = p.prompts.find((x: any) => x.id === "deep1");
+			if (target) target.enabled = true;
+			return p;
+		});
+		await win.replacePreset("in_use", { ...pView, prompts: [] });
+		await win.setPreset("in_use", { settings: { temperature: 0.1 } });
+		assert.equal(await win.loadPreset("梦鲸思客V5-1030-exp"), false);
+		assert.equal(await win.createPreset("新预设", pView), false);
+		assert.equal(await win.deletePreset("梦鲸思客V5-1030-exp"), false);
+		assert.equal(await win.renamePreset("TGbreak😺V2.1.6", "新名"), false);
+		await win.replaceTavernRegexes([], { type: "preset" });
 
-	// 4. 通道 A：updatePresetWith 写回并刷新隐藏 DOM
-	rpcCalls.length = 0;
-	await win.updatePresetWith("in_use", (p: any) => {
-		const target = p.prompts.find((x: any) => x.id === "deep1");
-		target.enabled = true;
-		return p;
-	});
-	assert.ok(!liDeep1.classList.contains("completion_prompt_manager_prompt_disabled"), "通道 A 更新应同步移除隐藏 DOM 的 disabled 类");
-	assert.ok(rpcCalls.some((c) => c.action === "preset.update"));
+		stCtx1.chatCompletionSettings.prompts[1].content = "试图偷偷篡改";
+		stCtx1.saveSettingsDebounced();
+		await stCtx1.saveSettings();
+		await win.builtin.saveSettings();
+		await new Promise((r) => setTimeout(r, 90));
 
-	// 5. 通道 B：原地改 chatCompletionSettings + saveSettingsDebounced
-	rpcCalls.length = 0;
-	stCtx1.chatCompletionSettings.prompts[1].content = "现代白描";
-	stCtx1.saveSettingsDebounced();
-	await new Promise((r) => setTimeout(r, 120));
-	const bCall = rpcCalls.find((c) => c.action === "preset.update");
-	assert.ok(bCall, "saveSettingsDebounced 应落盘变更的 prompts 内容");
-	assert.equal((bCall!.params.patch as any).prompts?.[0]?.content, "现代白描");
+		assert.equal(rpcCalls.some((c) => c.action === "preset.update"), false, `${mode} 模式下预设脚本不得触发 preset.update`);
+		assert.equal(win.getPreset("in_use").prompts[1].content, "古风描写", `${mode} 模式下父页真实预设不得被篡改`);
+		assert.equal(win.getTavernRegexes({ type: "preset" }).length, 1, `${mode} 模式下预设正则不得被预设脚本清空`);
+
+		const rpcRes = await win.Liyuan.preset.update({ blocks: [{ id: "style1", enabled: false }] });
+		assert.equal(rpcRes.ok, false);
+		assert.equal(rpcRes.error?.code, "permission_denied");
+
+		// 5. 预设脚本不得注册按钮到父页，且 callGenericPopup 直接返回取消态不插弹窗 DOM
+		win.replaceScriptButtons([{ name: "非法预设按钮", visible: true }]);
+		win.getButtonEvent("偷渡按钮");
+		assert.deepEqual([...win.getScriptButtons()], []);
+		assert.equal(postMessages.some((m) => m && m.liyuanScriptButtons), false, "预设帧不得向父页推脚本按钮");
+
+		const popupRes = await stCtx1.callGenericPopup("预设弹窗", stCtx1.POPUP_TYPE.CONFIRM);
+		assert.equal(popupRes, 0);
+		const inputRes = await stCtx1.callGenericPopup("输入", stCtx1.POPUP_TYPE.INPUT, "默认值");
+		assert.equal(inputRes, null);
+	}
+	parentWin.postMessage = prevPostMessage;
+
+	// 6. 预设帧不得共享父页 jQuery（与卡帧形成明确隔离）
+	const fakeParentJq = Object.assign(() => ({}), { fn: {}, _isParentJq: true });
+	parentWin.jQuery = fakeParentJq;
+	parentWin.$ = fakeParentJq;
+	const { win: presetWinNoJq } = createIframeSandbox({ iframeName: "TH-script--preset--no_parent_jq", parentWin });
+	assert.notStrictEqual(presetWinNoJq.$, fakeParentJq, "预设帧不得共享父页 jQuery");
+	const { win: cardWinWithJq } = createIframeSandbox({ iframeName: "TH-script--card--has_parent_jq", parentWin });
+	assert.strictEqual(cardWinWithJq.$, fakeParentJq, "角色卡帧仍正常共享父页 jQuery");
 });
 
 test("第4步刀3：ToolManager.canPerformToolCalls 在 liyuan 模式下返回 false 防止假工具劫持，在 pure 模式下返回 true", () => {
@@ -1093,7 +1109,7 @@ test("第4步刀3：ToolManager.canPerformToolCalls 在 liyuan 模式下返回 f
 });
 
 test("第4步刀5：SillyTavern.getContext() 补齐 POPUP_TYPE/POPUP_RESULT/callGenericPopup/generating/onlineStatus/messageFormatting/updateMessageBlock 等实扫缺失接口", async () => {
-	const { win, parentWin } = createIframeSandbox({ iframeName: "TH-script--preset--compat" });
+	const { win, parentWin } = createIframeSandbox({ iframeName: "TH-script--card--compat" });
 	(parentWin as any).__liyuanRuntimeContext.streaming = true;
 	(parentWin as any).__liyuanRuntimeContext.model = "claude-sonnet-4-6";
 	const ctx = win.SillyTavern.getContext();
@@ -1119,6 +1135,223 @@ test("第4步刀5：SillyTavern.getContext() 补齐 POPUP_TYPE/POPUP_RESULT/call
 
 	(parentWin as any).__liyuanRuntimeContext.streaming = false;
 	assert.equal(win.SillyTavern.getContext().generating, false);
+});
+
+test("第4块收口：预设脚本（TH-script--preset--*）在 liyuan 与 pure 模式下均禁止删改消息、斜杠控流与后台偷跑生成（卡帧保留完整能力）", async () => {
+	const parentCalls: Array<{ action: string; params: Record<string, unknown> }> = [];
+	const parentSlash: string[] = [];
+	const { win, parentWin, rpcCalls } = createIframeSandbox({
+		iframeName: "TH-script--preset--repair_test",
+		onRpc: async (action, params) => {
+			parentCalls.push({ action, params });
+			return { ok: true, action, result: { text: "ok" } };
+		},
+	});
+	(parentWin as any).triggerSlash = (cmd: string) => {
+		parentSlash.push(cmd);
+		return Promise.resolve("");
+	};
+	(parentWin as any).TavernHelper = {
+		generate: () => {
+			parentCalls.push({ action: "parent.TH.generate", params: {} });
+			return Promise.resolve("生成文本");
+		},
+		generateRaw: () => {
+			parentCalls.push({ action: "parent.TH.generateRaw", params: {} });
+			return Promise.resolve("生成文本");
+		},
+	};
+	const origText = win.getChatMessages(2)[0].message;
+
+	for (const mode of ["liyuan", "pure"] as const) {
+		(parentWin as any).__liyuanRuntimeContext.presetMode = mode;
+		parentCalls.length = 0;
+		parentSlash.length = 0;
+		rpcCalls.length = 0;
+
+		// 1. 酒馆助手层：getChatMessages 只读允许；setChatMessages 只放行 data，不许改写正文或发 updateReply
+		assert.equal(win.getChatMessages(2)[0].message, origText);
+		await win.setChatMessages([{ message_id: 2, message: "试图覆盖", data: { safeFlag: 1 } }]);
+		assert.equal(win.getChatMessages(2)[0].message, origText, `${mode} 下预设脚本不得改写消息正文`);
+		assert.ok(rpcCalls.some((c) => c.action === "data.write"), "消息变量 data 写回照常放行");
+
+		// 2. deleteChatMessages / createChatMessages / triggerSlash / SillyTavern.generate / TavernHelper.generate 全部拦截
+		await win.deleteChatMessages([2, -1]);
+		await win.createChatMessages([{ role: "user", message: "私自续发" }]);
+		await win.triggerSlash("/drop");
+		await win.triggerSlash("/hide 2-2");
+		await win.triggerSlash("/send 偷跑|/trigger");
+		assert.equal(await win.TavernHelper.generate({ user_input: "自动补全" }), "");
+		assert.equal(await win.TavernHelper.generateRaw({ ordered_prompts: [] }), "");
+		assert.equal(await win.SillyTavern.getContext().generate("quiet", { quietPrompt: "偷总结" }), "");
+		assert.equal(await win.SillyTavern.getContext().generateQuietPrompt("偷总结"), "");
+		assert.deepEqual(parentSlash, [], `${mode} 下预设控流斜杠不得抵达父页`);
+
+		// 3. 梨园 RPC 层（messages.updateReply / dropLast / chat.submit / generation.*）全部拦截
+		const r1 = await win.Liyuan.messages.updateReply("绕过修改");
+		const r2 = await win.Liyuan.messages.dropLast();
+		const r3 = await win.Liyuan.chat.submit("自动发");
+		const r4 = await win.Liyuan.generation.explicit({ prompt: "偷生成" });
+		const r5 = await win.Liyuan.generation.contextual({ prompt: "偷生成" });
+		assert.equal(r1.ok, false);
+		assert.equal(r1.error?.code, "permission_denied");
+		assert.equal(r2.ok, false);
+		assert.equal(r3.ok, false);
+		assert.equal(r4.ok, false);
+		assert.equal(r5.ok, false);
+		assert.equal(
+			parentCalls.some((c) =>
+				[
+					"messages.updateReply",
+					"messages.dropLast",
+					"chat.submit",
+					"generation.explicit",
+					"generation.contextual",
+					"parent.TH.generate",
+					"parent.TH.generateRaw",
+				].includes(c.action),
+			),
+			false,
+		);
+	}
+
+	// 4. 角色卡脚本帧（TH-script--card--*）仍保有完整消息改写与独立生成能力
+	const cardCalls: Array<{ action: string; params: Record<string, unknown> }> = [];
+	const { win: cardWin } = createIframeSandbox({
+		iframeName: "TH-script--card--allowed",
+		onRpc: async (action, params) => {
+			cardCalls.push({ action, params });
+			return { ok: true, action, result: { text: "卡生成ok" } };
+		},
+	});
+	await cardWin.setChatMessages([{ message_id: 2, message: "角色卡脚本允许修补" }]);
+	assert.equal(cardWin.getChatMessages(2)[0].message, "角色卡脚本允许修补");
+	assert.ok(cardCalls.some((c) => c.action === "messages.updateReply"));
+	assert.equal(await cardWin.TavernHelper.generate({ user_input: "角色卡后台生成" }), "卡生成ok");
+	assert.ok(cardCalls.some((c) => c.action === "generation.contextual"));
+});
+
+test("第3块收口：前端 substitudeMacros 对齐后端、formatAsTavernRegexedString 支持 source/depth/trimStrings，预设帧禁止篡改世界书并修复 message key", async () => {
+	// 1. 宏对拍：前后端应产出完全一致的求值结果
+	const { win, rpcCalls } = createIframeSandbox({
+		iframeName: "TH-script--card--macro_regex",
+		onRpc: async (action, params) => {
+			if (action === "lorebooks.read") {
+				return { ok: true, action, requestId: "lb_1", result: { entries: [{ uid: 1, comment: "山门", keys: ["山门"], content: "设定", constant: false }] } };
+			}
+			return { ok: true, action, requestId: "ok", result: {} };
+		},
+	});
+	const sampleMacro =
+		"{{// 注释应剥除}}{{trim}}\n{{charIfNotGroup}}回应{{user}}：{{lastUserMessage}}｜{{lastCharMessage}}" +
+		"{{setvar::hp::100}}{{addvar::hp::25}}{{incvar::hp}}{{decvar::hp}} HP={{getvar::hp}} 有={{hasvar::hp}}" +
+		"{{deletevar::hp}} 删后={{hasvar::hp}}" +
+		"{{setglobalvar::g_cnt::10}}{{addglobalvar::g_cnt::5}}{{incglobalvar::g_cnt}} G={{getglobalvar::g_cnt}}" +
+		" R={{random::甲::乙::丙}} D={{roll::2d6+1}} S={{space::2}}N={{newline::1}}{{noop}} {{unknown_keep}}";
+
+	const backendEnv = createMacroEnv({
+		charName: "苏瑶",
+		userName: "韩立",
+		userText: "",
+		lastMessage: "第2楼最新回复",
+		lastCharMessage: "第2楼最新回复",
+	});
+	// createIframeSandbox 里的第 1 楼为 user("第1楼用户输入")，第 2 楼为 assistant("第2楼最新回复")
+	const expectedFromBackend = evalPresetMacros(
+		sampleMacro.replace("{{lastUserMessage}}", "第1楼玩家提问"),
+		backendEnv,
+	).text;
+	const actualFromFrontend = win.substitudeMacros(sampleMacro);
+	assert.equal(actualFromFrontend, expectedFromBackend, "前端 substitudeMacros 应与后端 preset-macro.ts 语义与结果完全一致");
+
+	// 2. scope: "message" (含默认 latest) 应以计算后楼层号 "2" 作为 key 落盘，而非字面 "latest"
+	rpcCalls.length = 0;
+	win.insertOrAssignVariables({ mood: "calm" }, { type: "message" });
+	const msgWrite = rpcCalls.find((c) => c.action === "data.write" && c.params.scope === "message");
+	assert.ok(msgWrite, "应发出 scope:message 的 data.write");
+	assert.equal(msgWrite!.params.key, "2");
+
+	// 3. formatAsTavernRegexedString 支持 source / destination / depth / trimStrings / substituteRegex / {{match}} / $1
+	const parentCtx = (win.parent as any).__liyuanRuntimeContext;
+	parentCtx.presetRaw = {
+		extensions: {
+			regex_scripts: [
+				{
+					id: "wi_rule",
+					scriptName: "仅世界书剥标记",
+					findRegex: "/\\[WI:([\\s\\S]*?)\\]/g",
+					replaceString: "《$1》",
+					trimStrings: ["垃圾"],
+					placement: [5], // world_info
+					disabled: false,
+					markdownOnly: false,
+					promptOnly: true,
+					minDepth: 1,
+					maxDepth: 5,
+				},
+				{
+					id: "ai_sub_rule",
+					scriptName: "宏替换正则",
+					findRegex: "/{{char}}说：([\\s\\S]*)/g",
+					replaceString: "[{{match}} -> $1]",
+					trimStrings: [],
+					placement: [2], // ai_output
+					substituteRegex: 1,
+					disabled: false,
+					markdownOnly: true,
+					promptOnly: false,
+				},
+			],
+		},
+	};
+	assert.equal(
+		win.formatAsTavernRegexedString("[WI:垃圾青云门]", "world_info", "prompt", { depth: 2 }),
+		"《青云门》",
+	);
+	assert.equal(
+		win.formatAsTavernRegexedString("[WI:青云门]", "world_info", "prompt", { depth: 9 }),
+		"[WI:青云门]",
+		"超出 maxDepth 时不得命中规则",
+	);
+	assert.equal(
+		win.formatAsTavernRegexedString("苏瑶说：你好", "ai_output", "display"),
+		"[苏瑶说：你好 -> 你好]",
+	);
+
+	// 4. 卡帧调用 getWorldbook 传入 book 参数且可写；预设帧只读放行、写世界书全部拦截
+	rpcCalls.length = 0;
+	await win.getWorldbook("修仙设定");
+	assert.equal(rpcCalls.find((c) => c.action === "lorebooks.read")?.params.book, "修仙设定");
+
+	const { win: presetWin, rpcCalls: presetRpc } = createIframeSandbox({
+		iframeName: "TH-script--preset--no_lore_write",
+		onRpc: async (action) => {
+			if (action === "lorebooks.read") {
+				return { ok: true, action, requestId: "lb_p", result: { entries: [{ uid: 1, comment: "旧条目", keys: ["k"], content: "原文" }] } };
+			}
+			return { ok: true, action, requestId: "ok", result: {} };
+		},
+	});
+	const readByPreset = await presetWin.getWorldbook("修仙设定");
+	assert.equal(readByPreset.length, 1);
+	assert.equal(await presetWin.createWorldbook("非法书", [{ name: "x", content: "y" }]), false);
+	assert.equal(await presetWin.deleteWorldbook("修仙设定"), false);
+	const createdRes = await presetWin.createWorldbookEntries("修仙设定", [{ name: "偷写", content: "内容" }]);
+	assert.deepEqual([...createdRes.new_entries], []);
+	await presetWin.replaceWorldbook("修仙设定", [{ name: "覆盖", content: "坏" }]);
+	await presetWin.updateWorldbookWith("修仙设定", (list: any[]) => list);
+	await presetWin.SillyTavern.getContext().saveWorldInfo("修仙设定", { entries: { 0: { content: "改" } } });
+	await presetWin.rebindChatWorldbook("c1", "新书");
+	const directLoreWrite = await presetWin.Liyuan.lorebooks.createEntry({ title: "偷插", keys: ["k"], content: "v" });
+	assert.equal(directLoreWrite.ok, false);
+	assert.equal(directLoreWrite.error?.code, "permission_denied");
+	assert.equal(
+		presetRpc.some((c) =>
+			["lorebooks.createEntry", "lorebooks.updateEntry", "lorebooks.removeEntry", "lorebooks.mount"].includes(c.action),
+		),
+		false,
+		"预设帧绝不得向后端发出任何世界书写入或挂载请求",
+	);
 });
 
 

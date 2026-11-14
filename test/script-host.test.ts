@@ -15,9 +15,11 @@ import test from "node:test";
 import { SCRIPT_FRAME_CSP } from "../web/src/frameDoc.ts";
 import {
 	AUTHOR_SCRIPTS_GLOBAL,
+	PRESET_FRAME_SOURCE_URL_MARKER,
 	SCRIPT_HOST_SANDBOX,
 	buildScriptHostDoc,
 	isBlockedExternalScriptNode,
+	isCallFromPresetFrameStack,
 	scriptFrameMeta,
 } from "../web/src/scriptHostDoc.ts";
 import { IFRAME_TAVERN_BRIDGE_SNIPPET, IFRAME_TAVERN_GLOBALS_SNIPPET } from "../web/src/tavernShim.ts";
@@ -176,4 +178,18 @@ test("刀4 · 多帧独立宿主命名、单帧精准隔离执行与父页外链
 		assert.equal(f1.fakeWin.__liyuanCurrentScriptId, "p1");
 		assert.equal(f2.fakeWin.__liyuanCurrentScriptId, "c1");
 	});
+});
+
+test("禁用第5块DOM守卫：预设帧注入带 sourceURL 标记，且栈帧识别不误伤卡帧或父页", () => {
+	const docHtml = buildScriptHostDoc();
+	assert.ok(docHtml.includes(PRESET_FRAME_SOURCE_URL_MARKER));
+
+	const presetStack = `Error\n    at mount (<anonymous>:613:76)\n    at ${PRESET_FRAME_SOURCE_URL_MARKER}/p1.mjs:675:3`;
+	const cardStack = "Error\n    at mountCardHud (about:srcdoc:44:9)";
+	const appStack = "Error\n    at render (http://127.0.0.1:7620/assets/index.js:100:3)";
+
+	assert.equal(isCallFromPresetFrameStack(presetStack), true);
+	assert.equal(isCallFromPresetFrameStack(cardStack), false);
+	assert.equal(isCallFromPresetFrameStack(appStack), false);
+	assert.equal(isCallFromPresetFrameStack(undefined), false);
 });

@@ -15,6 +15,7 @@
 import {
 	emitCardRuntimeEvent,
 	isCardRuntimeSource,
+	isPresetScriptSource,
 	type LiyuanRuntimeContextSnapshot,
 } from "./cardRuntimeFrames.ts";
 import { JQUERY_MIN } from "./vendor/jquery-min.ts";
@@ -702,7 +703,16 @@ export function installParentTavernShim(): void {
 				};
 			} | null;
 			if (!d || typeof d !== "object" || !isCardRuntimeSource(ev.source)) return;
+			const isPresetSrc = isPresetScriptSource(ev.source);
 			if (typeof d.liyuanTriggerSlash === "string") {
+				if (
+					isPresetSrc &&
+					/(?:^|\|)\s*\/(?:del|delete|drop|hide|unhide|cut|editreply|send|sendas|trigger|reroll|swipe|continue|regenerate)(?:\b|\s|$)/i.test(
+						d.liyuanTriggerSlash,
+					)
+				) {
+					return;
+				}
 				void triggerSlash(d.liyuanTriggerSlash);
 				return;
 			}
@@ -716,6 +726,48 @@ export function installParentTavernShim(): void {
 				const action = String(rpc.action ?? "");
 				const params = rpc.params && typeof rpc.params === "object" ? (rpc.params as Record<string, unknown>) : {};
 				const opts = rpc.opts && typeof rpc.opts === "object" ? (rpc.opts as LiyuanScriptCallOptions) : {};
+				if (
+					isPresetSrc &&
+					(action === "preset.update" ||
+						action === "lorebooks.createEntry" ||
+						action === "lorebooks.updateEntry" ||
+						action === "lorebooks.removeEntry" ||
+						action === "lorebooks.mount" ||
+						action === "messages.updateReply" ||
+						action === "messages.dropLast" ||
+						action === "chat.submit" ||
+						action === "chat.regenerate" ||
+						action === "generation.explicit" ||
+						action === "generation.contextual")
+				) {
+					const deniedMsg =
+						action === "preset.update"
+							? "梨园预设仅允许通过梨园预设面板修改，预设脚本无权修改预设"
+							: action.startsWith("lorebooks.")
+								? "梨园世界书归用户与角色卡管理，预设脚本无权修改世界书"
+								: action.startsWith("messages.")
+									? "梨园已保护对话历史，预设脚本无权删改消息正文"
+									: "预设脚本无权触发对话发送或后台独立生成";
+					try {
+						(ev.source as Window).postMessage(
+							{
+								liyuanScriptRpcResult: {
+									id,
+									envelope: {
+										ok: false,
+										action,
+										requestId: id || "protected",
+										error: { code: "permission_denied", message: deniedMsg },
+									},
+								},
+							},
+							"*",
+						);
+					} catch {
+						/* ignore */
+					}
+					return;
+				}
 				void invoke(action, params, opts).then((envelope) => {
 					try {
 						(ev.source as Window).postMessage({ liyuanScriptRpcResult: { id, envelope } }, "*");
@@ -867,6 +919,21 @@ try{
   var IFRAME_EVENTS=${JSON.stringify(iframe_events)};
   g.tavern_events=TAVERN_EVENTS;
   g.iframe_events=IFRAME_EVENTS;
+  function readCtxQuick(){
+    var c=g.__liyuanRuntimeContext;
+    if(!c){try{var pw=g.parent&&g.parent!==g?g.parent:null;if(pw&&pw.__liyuanRuntimeContext)c=pw.__liyuanRuntimeContext;}catch(e){}}
+    return (c&&typeof c==="object")?c:null;
+  }
+  function isPresetScriptFrame(){
+    var n="";
+    try{if(g.frameElement&&(g.frameElement.id||g.frameElement.name))n=String(g.frameElement.id||g.frameElement.name);}catch(e){}
+    if(!n)n=String(g.__TH_IFRAME_ID||g.name||"");
+    return /^TH-script--preset--/.test(n);
+  }
+  function isBlockedPresetSlash(cmd){
+    return /(?:^|\\|)\\s*\\/(?:del|delete|drop|hide|unhide|cut|editreply|send|sendas|trigger|reroll|swipe|continue|regenerate)(?:\\b|\\s|$)/i.test(String(cmd||""));
+  }
+  g.__liyuanIsPresetScriptFrame=isPresetScriptFrame;
   var MSG_ID_EVENTS={"message_swiped":1,"message_sent":1,"message_received":1,"message_edited":1,"message_updated":1,"user_message_rendered":1,"character_message_rendered":1};
   function bus(){if(!g.__liyuanEventBus)g.__liyuanEventBus=new Map();return g.__liyuanEventBus;}
   function wmap(){if(!g.__liyuanWrapperMap)g.__liyuanWrapperMap=new Map();return g.__liyuanWrapperMap;}
@@ -978,67 +1045,87 @@ try{
     }
     return Promise.resolve({ok:false,action:action,requestId:"offline",error:{code:"execution_failed",message:"未连接父窗口"}});
   }
-  if(!g.Liyuan){
-    try{
-      var pw=parentWin();
-      if(pw&&pw.Liyuan)g.Liyuan=pw.Liyuan;
-    }catch(e){}
-    if(!g.Liyuan){
-      g.Liyuan={
-        version:"1.0.0",
-        call:rpcCall,
-        context:{read:function(o){return rpcCall("context.read",{},o);},capabilities:function(o){return rpcCall("capabilities.read",{},o);}},
-        messages:{
-          list:function(p,o){return rpcCall("messages.list",p||{},o);},
-          get:function(p,o){return rpcCall("messages.get",p||{},o);},
-          updateReply:function(t,o){return rpcCall("messages.updateReply",{text:t},o);},
-          dropLast:function(o){return rpcCall("messages.dropLast",{},o);}
-        },
-        state:{read:function(o){return rpcCall("state.read",{},o);},commit:function(patch,o){return rpcCall("state.commit",{patch:patch},o);}},
-        data:{
-          read:function(p,o){return rpcCall("data.read",p||{},o);},
-          write:function(p,o){return rpcCall("data.write",p||{},o);},
-          remove:function(p,o){return rpcCall("data.remove",p||{},o);}
-        },
-        chat:{
-          submit:function(p,o){return rpcCall("chat.submit",typeof p==="string"?{text:p}:(p||{}),o);},
-          regenerate:function(p,o){return rpcCall("chat.regenerate",p||{},o);},
-          abort:function(o){return rpcCall("requests.cancel",{includeMainChat:true},o);}
-        },
-        generation:{
-          explicit:function(p,o){return rpcCall("generation.explicit",p||{},o);},
-          contextual:function(p,o){return rpcCall("generation.contextual",p||{},o);}
-        },
-        requests:{
-          cancel:function(id,o){return rpcCall("requests.cancel",id?{targetRequestId:id}:{},o);},
-          observe:function(id,o){return rpcCall("requests.observe",id?{targetRequestId:id}:{},o);}
-        },
-        lorebooks:{
-          list:function(o){return rpcCall("lorebooks.list",{},o);},
-          read:function(p,o){return rpcCall("lorebooks.read",p||{},o);},
-          createEntry:function(p,o){return rpcCall("lorebooks.createEntry",p||{},o);},
-          updateEntry:function(p,o){return rpcCall("lorebooks.updateEntry",p||{},o);},
-          removeEntry:function(fp,o){return rpcCall("lorebooks.removeEntry",{fingerprint:fp},o);},
-          mount:function(path,m,o){return rpcCall("lorebooks.mount",{path:path,mounted:m!==false},o);}
-        },
-        project:{
-          files:{
-            list:function(o){return rpcCall("project.files.list",{},o);},
-            read:function(path,o){return rpcCall("project.files.read",{path:path},o);},
-            write:function(path,c,o){return rpcCall("project.files.write",{path:path,content:c},o);},
-            remove:function(path,o){return rpcCall("project.files.remove",{path:path},o);}
-          }
-        },
-        panels:{
-          list:function(o){return rpcCall("panels.list",{},o);},
-          write:function(p,o){return rpcCall("panels.write",p||{},o);},
-          close:function(n,o){return rpcCall("panels.close",{name:n},o);}
-        }
-      };
+  function guardedRpcCall(action,params,opts){
+    if(isPresetScriptFrame()){
+      if(action==="preset.update"){
+        return Promise.resolve({ok:false,action:action,requestId:"protected",error:{code:"permission_denied",message:"梨园预设仅允许通过梨园预设面板修改，预设脚本无权修改预设"}});
+      }
+      if(action==="lorebooks.createEntry"||action==="lorebooks.updateEntry"||action==="lorebooks.removeEntry"||action==="lorebooks.mount"){
+        return Promise.resolve({ok:false,action:action,requestId:"protected",error:{code:"permission_denied",message:"梨园世界书归用户与角色卡管理，预设脚本无权修改世界书"}});
+      }
+      if(action==="messages.updateReply"||action==="messages.dropLast"){
+        return Promise.resolve({ok:false,action:action,requestId:"protected",error:{code:"permission_denied",message:"梨园已保护对话历史，预设脚本无权删改消息正文"}});
+      }
+      if(action==="chat.submit"||action==="chat.regenerate"||action==="generation.explicit"||action==="generation.contextual"){
+        return Promise.resolve({ok:false,action:action,requestId:"protected",error:{code:"permission_denied",message:"预设脚本无权触发对话发送或后台独立生成"}});
+      }
     }
+    return rpcCall(action,params,opts);
+  }
+  if(!g.Liyuan){
+    var pw=parentWin();
+    var pLiyuan=(pw&&pw.Liyuan)?pw.Liyuan:null;
+    g.Liyuan={
+      version:"1.0.0",
+      call:guardedRpcCall,
+      getSnapshot:function(){return pLiyuan&&typeof pLiyuan.getSnapshot==="function"?pLiyuan.getSnapshot():readCtxQuick();},
+      context:{read:function(o){return guardedRpcCall("context.read",{},o);},capabilities:function(o){return guardedRpcCall("capabilities.read",{},o);}},
+      messages:{
+        list:function(p,o){return guardedRpcCall("messages.list",p||{},o);},
+        get:function(p,o){return guardedRpcCall("messages.get",p||{},o);},
+        updateReply:function(t,o){return guardedRpcCall("messages.updateReply",{text:t},o);},
+        dropLast:function(o){return guardedRpcCall("messages.dropLast",{},o);}
+      },
+      state:{read:function(o){return guardedRpcCall("state.read",{},o);},commit:function(patch,o){return guardedRpcCall("state.commit",{patch:patch},o);}},
+      data:{
+        read:function(p,o){return guardedRpcCall("data.read",p||{},o);},
+        write:function(p,o){return guardedRpcCall("data.write",p||{},o);},
+        remove:function(p,o){return guardedRpcCall("data.remove",p||{},o);}
+      },
+      chat:{
+        submit:function(p,o){return guardedRpcCall("chat.submit",typeof p==="string"?{text:p}:(p||{}),o);},
+        regenerate:function(p,o){return guardedRpcCall("chat.regenerate",p||{},o);},
+        abort:function(o){return guardedRpcCall("requests.cancel",{includeMainChat:true},o);}
+      },
+      generation:{
+        explicit:function(p,o){return guardedRpcCall("generation.explicit",p||{},o);},
+        contextual:function(p,o){return guardedRpcCall("generation.contextual",p||{},o);}
+      },
+      requests:{
+        cancel:function(id,o){return guardedRpcCall("requests.cancel",id?{targetRequestId:id}:{},o);},
+        observe:function(id,o){return guardedRpcCall("requests.observe",id?{targetRequestId:id}:{},o);}
+      },
+      lorebooks:{
+        list:function(o){return guardedRpcCall("lorebooks.list",{},o);},
+        read:function(p,o){return guardedRpcCall("lorebooks.read",p||{},o);},
+        createEntry:function(p,o){return guardedRpcCall("lorebooks.createEntry",p||{},o);},
+        updateEntry:function(p,o){return guardedRpcCall("lorebooks.updateEntry",p||{},o);},
+        removeEntry:function(fp,o){return guardedRpcCall("lorebooks.removeEntry",{fingerprint:fp},o);},
+        mount:function(path,m,o){return guardedRpcCall("lorebooks.mount",{path:path,mounted:m!==false},o);}
+      },
+      preset:{
+        list:function(o){return guardedRpcCall("preset.list",{},o);},
+        get:function(p,o){return guardedRpcCall("preset.get",typeof p==="string"?{name:p}:(p||{}),o);},
+        update:function(p,o){return guardedRpcCall("preset.update",p||{},o);}
+      },
+      project:{
+        files:{
+          list:function(o){return guardedRpcCall("project.files.list",{},o);},
+          read:function(path,o){return guardedRpcCall("project.files.read",{path:path},o);},
+          write:function(path,c,o){return guardedRpcCall("project.files.write",{path:path,content:c},o);},
+          remove:function(path,o){return guardedRpcCall("project.files.remove",{path:path},o);}
+        }
+      },
+      panels:{
+        list:function(o){return guardedRpcCall("panels.list",{},o);},
+        write:function(p,o){return guardedRpcCall("panels.write",p||{},o);},
+        close:function(n,o){return guardedRpcCall("panels.close",{name:n},o);}
+      }
+    };
   }
   if(typeof g.triggerSlash!=="function"){
     g.triggerSlash=function(cmd){
+      if(isPresetScriptFrame()&&isBlockedPresetSlash(cmd))return Promise.resolve("");
       var p=parentWin();
       try{
         if(p&&typeof p.triggerSlash==="function"){
@@ -1056,33 +1143,35 @@ try{
       tavern_events:TAVERN_EVENTS,
       iframe_events:IFRAME_EVENTS,
       generate:function(params){
+        if(isPresetScriptFrame())return Promise.resolve("");
         var p=parentTH();
         if(p&&typeof p.generate==="function")return p.generate(params);
         var cfg=Object.assign({},params||{});
         if(!cfg.prompt&&cfg.user_input)cfg.prompt=cfg.user_input;
         var act=(cfg.mode==="chat")?"chat.submit":(cfg.mode==="explicit"||cfg.use_preset===false||Array.isArray(cfg.messages)||Array.isArray(cfg.ordered_prompts))?"generation.explicit":"generation.contextual";
-        return rpcCall(act,cfg).then(function(env){
+        return guardedRpcCall(act,cfg).then(function(env){
           if(env&&env.ok&&env.result&&typeof env.result.text==="string")return env.result.text;
           var u=cfg.user_input||cfg.prompt||"";
           return "（梨园：界面内 AI 生成尚未接入）"+String(u).slice(0,80);
         });
       },
       generateRaw:function(params){
+        if(isPresetScriptFrame())return Promise.resolve("");
         var p=parentTH();
         if(p&&typeof p.generateRaw==="function")return p.generateRaw(params);
-        return rpcCall("generation.explicit",params||{}).then(function(env){
+        return guardedRpcCall("generation.explicit",params||{}).then(function(env){
           return (env&&env.ok&&env.result&&typeof env.result.text==="string")?env.result.text:"";
         });
       },
       stopGenerationById:function(id){
         var p=parentTH();
         if(p&&typeof p.stopGenerationById==="function")return p.stopGenerationById(id);
-        return rpcCall("requests.cancel",{targetRequestId:id});
+        return guardedRpcCall("requests.cancel",{targetRequestId:id});
       },
       stopAllGeneration:function(){
         var p=parentTH();
         if(p&&typeof p.stopAllGeneration==="function")return p.stopAllGeneration();
-        return rpcCall("requests.cancel",{includeMainChat:true});
+        return guardedRpcCall("requests.cancel",{includeMainChat:true});
       }
     };
   }
@@ -1112,10 +1201,15 @@ try{
     }catch(e){}
     return String(g.name||"").indexOf("TH-script--")===0;
   })();
-  // 对齐酒馆助手 parent_jquery.js：页面级脚本宿主帧的 $ / jQuery 必须指向父窗口实例，
-  // 否则作者写 $('<dialog>').appendTo('body') 会挂进 0×0 隐藏子帧导致页面不可见；
-  // 消息气泡帧（HtmlFrame）继续保持自身文档作用域的 jQuery。
-  if(isScriptHostFrame&&pw0&&typeof pw0.jQuery==="function"){
+  function isPresetFrameNow(){
+    if(typeof g.__liyuanIsPresetScriptFrame==="function")return g.__liyuanIsPresetScriptFrame();
+    var n=String(g.__TH_IFRAME_ID||g.name||"");
+    try{if(g.frameElement&&(g.frameElement.id||g.frameElement.name))n=String(g.frameElement.id||g.frameElement.name);}catch(e){}
+    return /^TH-script--preset--/.test(n);
+  }
+  // 仅角色卡脚本宿主帧共享父页 jQuery；预设脚本帧强制使用自身 0×0 子帧内的隔离 jQuery，
+  // 使其挂载的控制面板 UI 自然落回不可见子帧而不污染梨园界面。
+  if(isScriptHostFrame&&!isPresetFrameNow()&&pw0&&typeof pw0.jQuery==="function"){
     try{g.jQuery=pw0.jQuery;g.$=pw0.$||pw0.jQuery;}catch(jqShareErr){}
   }
   if(typeof g.jQuery!=="function"&&g.document){
@@ -1761,7 +1855,7 @@ try{
           try{
             var writeParams={scope:scope,mode:mode==="replace"?"replace":"merge",data:next};
             if(scope==="extension"&&subId)writeParams.extension_id=String(subId);
-            if(scope==="message"&&subId!==undefined)writeParams={scope:"message",mode:"merge",key:String(subId),value:next};
+            if(scope==="message")writeParams={scope:"message",mode:"merge",key:String(mid),value:next};
             g.Liyuan.call("data.write",writeParams,{scriptId:scope==="script"?String(subId||g.getScriptId()):undefined});
             if((scope==="chat"||scope==="message")&&next.stat_data&&typeof next.stat_data==="object"){
               g.Liyuan.call("state.commit",{patch:next.stat_data});
@@ -1910,25 +2004,147 @@ try{
     var list=(c&&Array.isArray(c.messages))?c.messages:[];
     var lastIdx=list.length>0?(list.length-1):0;
     var lastMsg=list.length>0?String(list[list.length-1].message||list[list.length-1].text||""):"";
+    var lastUserMsg="";
+    var lastCharMsg="";
+    for(var mi=list.length-1;mi>=0;mi--){
+      var rm=list[mi];
+      if(!rm)continue;
+      var mt=String(rm.message!=null?rm.message:(rm.text||""));
+      if(!lastUserMsg&&rm.role==="user")lastUserMsg=mt;
+      if(!lastCharMsg&&rm.role!=="user")lastCharMsg=mt;
+      if(lastUserMsg&&lastCharMsg)break;
+    }
     var charName=c?String(c.charName||""):"";
     var userName=c?String(c.userName||""):"";
-    s=s.replace(/\\{\\{\\s*char\\s*\\}\\}/gi,charName)
-       .replace(/\\{\\{\\s*user\\s*\\}\\}/gi,userName)
-       .replace(/\\{\\{\\s*lastMessageId\\s*\\}\\}/gi,String(lastIdx))
-       .replace(/\\{\\{\\s*lastMessage\\s*\\}\\}/gi,lastMsg)
-       .replace(/\\{\\{\\s*getvar::([^}]+)\\}\\}/gi,function(_m,k){
-         var v=g._.get(g.getVariables({type:"chat"}),String(k).trim());
-         return v==null?"":String(v);
-       })
-       .replace(/\\{\\{\\s*getglobalvar::([^}]+)\\}\\}/gi,function(_m,k){
-         var v=g._.get(g.getVariables({type:"global"}),String(k).trim());
-         return v==null?"":String(v);
-       })
-       .replace(/\\{\\{\\s*setvar::([^:}]+)::([^}]*)\\}\\}/gi,function(_m,k,val){
-         var patch={};g._.set(patch,String(k).trim(),val);
-         g.insertOrAssignVariables(patch,{type:"chat"});
-         return "";
-       });
+    var commentRe=/\\{\\{\\s*\\/\\/[\\s\\S]*?\\}\\}/g;
+    var trimRe=/\\s*\\{\\{\\s*trim\\s*\\}\\}\\s*/gi;
+    var tokenRe=/\\{\\{(?:(?!\\{\\{)[\\s\\S])*?\\}\\}/g;
+    function readScopedVar(scope,k){
+      var key=String(k||"").trim();
+      if(!key)return undefined;
+      var bag=g.getVariables({type:scope});
+      if(bag&&Object.prototype.hasOwnProperty.call(bag,key))return bag[key];
+      return g._.get(bag,key);
+    }
+    function writeScopedVar(scope,k,val){
+      var key=String(k||"").trim();
+      if(!key)return;
+      var patch={};
+      patch[key]=val;
+      g.insertOrAssignVariables(patch,{type:scope});
+    }
+    function addScopedVar(scope,k,val){
+      var key=String(k||"").trim();
+      if(!key)return;
+      var cur=readScopedVar(scope,key);
+      var vt=String(val==null?"":val).trim();
+      var vn=Number(vt);
+      if(cur===undefined||cur===null){
+        writeScopedVar(scope,key,(vt!==""&&isFinite(vn))?String(vn):String(val||""));
+        return;
+      }
+      var ct=String(cur).trim();
+      var cn=Number(ct);
+      if(ct!==""&&vt!==""&&isFinite(cn)&&isFinite(vn))writeScopedVar(scope,key,String(cn+vn));
+      else writeScopedVar(scope,key,String(cur)+String(val||""));
+    }
+    function stepScopedVar(scope,k,delta){
+      var key=String(k||"").trim();
+      if(!key)return "";
+      var cur=readScopedVar(scope,key);
+      var ct=cur==null?"":String(cur).trim();
+      var n=(ct!==""&&isFinite(Number(ct)))?Number(ct):0;
+      var next=String(n+delta);
+      writeScopedVar(scope,key,next);
+      return next;
+    }
+    function evalMacroToken(token){
+      var body=token.slice(2,-2);
+      var nmMatch=body.match(/^\\s*([^:\\s{}]+)/);
+      var name=(nmMatch&&nmMatch[1]?nmMatch[1]:"").toLowerCase();
+      var rest=body.slice(nmMatch?nmMatch[0].length:0).replace(/^(::|:)/,"");
+      if(name==="char"||name==="charifnotgroup")return charName;
+      if(name==="user")return userName;
+      if(name==="lastmessageid")return String(lastIdx);
+      if(name==="lastmessage")return lastMsg;
+      if(name==="lastusermessage")return lastUserMsg;
+      if(name==="lastcharmessage")return lastCharMsg;
+      if(name==="space"){
+        var sn=Math.max(1,Math.min(200,Math.trunc(Number(rest.trim())||1)));
+        return new Array(sn+1).join(" ");
+      }
+      if(name==="newline"){
+        var nn=Math.max(1,Math.min(50,Math.trunc(Number(rest.trim())||1)));
+        return new Array(nn+1).join("\\n");
+      }
+      if(name==="noop")return "";
+      if(name==="setvar"){
+        var sp=rest.split("::");
+        if(sp[0]&&sp[0].trim())writeScopedVar("chat",sp[0],sp.slice(1).join("::"));
+        return "";
+      }
+      if(name==="addvar"){
+        var ap=rest.split("::");
+        if(ap[0]&&ap[0].trim())addScopedVar("chat",ap[0],ap.slice(1).join("::"));
+        return "";
+      }
+      if(name==="incvar")return stepScopedVar("chat",rest.split("::")[0],1);
+      if(name==="decvar")return stepScopedVar("chat",rest.split("::")[0],-1);
+      if(name==="getvar"){
+        var gv=readScopedVar("chat",rest.split("::")[0]);
+        return gv==null?"":String(gv);
+      }
+      if(name==="hasvar"||name==="varexists")return readScopedVar("chat",rest.split("::")[0])!==undefined?"true":"false";
+      if(name==="deletevar"||name==="flushvar"){
+        var dk=String(rest.split("::")[0]||"").trim();
+        if(dk)g.deleteVariable(dk,{type:"chat"});
+        return "";
+      }
+      if(name==="setglobalvar"){
+        var sgp=rest.split("::");
+        if(sgp[0]&&sgp[0].trim())writeScopedVar("global",sgp[0],sgp.slice(1).join("::"));
+        return "";
+      }
+      if(name==="addglobalvar"){
+        var agp=rest.split("::");
+        if(agp[0]&&agp[0].trim())addScopedVar("global",agp[0],agp.slice(1).join("::"));
+        return "";
+      }
+      if(name==="incglobalvar")return stepScopedVar("global",rest.split("::")[0],1);
+      if(name==="decglobalvar")return stepScopedVar("global",rest.split("::")[0],-1);
+      if(name==="getglobalvar"){
+        var ggv=readScopedVar("global",rest.split("::")[0]);
+        return ggv==null?"":String(ggv);
+      }
+      if(name==="random"){
+        var rargs=rest.indexOf("::")>=0?rest.split("::"):rest.split(",");
+        var rh=0;
+        for(var ri=0;ri<rest.length;ri++)rh=(rh*31+rest.charCodeAt(ri))|0;
+        return rargs[Math.abs(rh)%rargs.length]||"";
+      }
+      if(name==="roll"){
+        var expr=rest.trim();
+        var dice=/^(\\d*)d(\\d+)([+-]\\d+)?$/i.exec(expr);
+        var faces=dice?Number(dice[2]):0;
+        if(!dice||!isFinite(faces)||faces<1)return token;
+        var count=Math.min(Math.max(dice[1]?Number(dice[1]):1,1),100);
+        var dh=0;
+        for(var di=0;di<expr.length;di++)dh=(dh*31+expr.charCodeAt(di))|0;
+        var sum=0;
+        for(var dj=0;dj<count;dj++){
+          dh=(dh*1103515245+12345)|0;
+          sum+=(Math.abs(dh)%faces)+1;
+        }
+        return String(sum+(dice[3]?Number(dice[3]):0));
+      }
+      return token;
+    }
+    for(var pass=0;pass<16;pass++){
+      var before=s;
+      s=s.replace(commentRe,"").replace(trimRe,"").replace(tokenRe,evalMacroToken);
+      if(s===before)break;
+    }
+    s=s.replace(commentRe,"").replace(trimRe,"");
     if(g.__liyuanCustomMacros&&g.__liyuanCustomMacros.size>0){
       g.__liyuanCustomMacros.forEach(function(item){
         try{s=s.replace(item.regex,function(){var a=[].slice.call(arguments);return item.replace.apply(g,[{role:"assistant",message_id:lastIdx}].concat(a));});}catch(e){}
@@ -1998,6 +2214,7 @@ try{
   };
   g.setChatMessages=function(chat_messages,_opts){
     if(!Array.isArray(chat_messages))return Promise.resolve();
+    var protectText=isPresetFrameNow();
     var c=readRuntimeCtx();
     var list=c&&Array.isArray(c.messages)?c.messages:[];
     chat_messages.forEach(function(patch){
@@ -2007,6 +2224,7 @@ try{
       if(patch.data&&typeof patch.data==="object"){
         g.__liyuanAuthorVarsWrite("message",patch.data,"replace",idx);
       }
+      if(protectText)return;
       var newText=typeof patch.message==="string"?patch.message:(Array.isArray(patch.swipes)&&typeof patch.swipes[patch.swipe_id||0]==="string"?patch.swipes[patch.swipe_id||0]:undefined);
       var nextSwipeId=typeof patch.swipe_id==="number"?patch.swipe_id:undefined;
       if(typeof newText==="string"||nextSwipeId!==undefined){
@@ -2028,6 +2246,7 @@ try{
     return g.setChatMessages([{message_id:message_id===undefined?g.getLastMessageId():message_id,message:text,data:data,swipe_id:swipeId}],opts);
   };
   g.createChatMessages=function(msgs){
+    if(isPresetFrameNow())return Promise.resolve();
     if(!Array.isArray(msgs)||!msgs.length)return Promise.resolve();
     var last=msgs[msgs.length-1];
     if(last&&last.role==="user"&&typeof last.message==="string"&&g.Liyuan&&typeof g.Liyuan.call==="function"){
@@ -2036,6 +2255,7 @@ try{
     return Promise.resolve();
   };
   g.deleteChatMessages=function(ids){
+    if(isPresetFrameNow())return Promise.resolve();
     var c=readRuntimeCtx();
     var list=c&&Array.isArray(c.messages)?c.messages:[];
     var lastIdx=list.length-1;
@@ -2085,19 +2305,105 @@ try{
   };
 
   // 正则格式化（刀5：formatAsTavernRegexedString / getTavernRegexes）
-  g.formatAsTavernRegexedString=function(text,_source,destination){
+  g.formatAsTavernRegexedString=function(text,source,destination,opts){
     var s=g.substitudeMacros(String(text==null?"":text));
     var c=readRuntimeCtx();
-    var rules=destination==="prompt"?(c&&c.promptRules):(c&&c.displayRules);
-    if(Array.isArray(rules)){
-      for(var i=0;i<rules.length;i++){
-        var r=rules[i];
-        if(!r||r.enabled===false||!r.pattern)continue;
-        try{
-          var re=new RegExp(r.pattern,r.flags||"g");
-          s=s.replace(re,String(r.replace||""));
-        }catch(e){}
+    var dest=(destination==="prompt"||(opts&&opts.isPrompt))?"prompt":"display";
+    var srcMap={user_input:1,ai_output:2,slash_command:3,world_info:5,reasoning:6};
+    var targetPlace=typeof source==="number"?source:(srcMap[String(source||"ai_output")]||2);
+    var depth=(opts&&typeof opts.depth==="number"&&isFinite(opts.depth))?opts.depth:undefined;
+    function escapeRegexChars(v){return String(v||"").replace(/[.*+?^\${}()|[\\]\\\\]/g,"\\\\$&");}
+    function splitRegexLiteral(raw){
+      var str=String(raw||"");
+      if(str.charAt(0)==="/"){
+        for(var i=str.length-1;i>0;i--){
+          if(str.charAt(i)==="/"){
+            var bs=0;
+            for(var j=i-1;j>=0&&str.charAt(j)==="\\\\";j--)bs++;
+            if(bs%2===0){
+              return {pattern:str.slice(1,i),flags:str.slice(i+1)||"g"};
+            }
+          }
+        }
       }
+      return {pattern:str,flags:"g"};
+    }
+    function expandRepl(tpl,match,captures,trims){
+      function cut(v){
+        var out=String(v==null?"":v);
+        if(Array.isArray(trims)){
+          for(var ti=0;ti<trims.length;ti++){
+            if(trims[ti])out=out.split(String(trims[ti])).join("");
+          }
+        }
+        return out;
+      }
+      var wMatch=String(tpl||"").replace(/\\{\\{\\s*match\\s*\\}\\}/gi,function(){return cut(match);});
+      var isLong=wMatch.length>=8000;
+      return wMatch.replace(/\\$(\\$|&|\\d{1,2})/g,function(whole,kind){
+        if(kind==="$")return "$";
+        if(kind==="&")return isLong?whole:cut(match);
+        var n=Number(kind);
+        if(n>=1&&n<=captures.length)return cut(captures[n-1]||"");
+        return whole;
+      });
+    }
+    var baseList=dest==="prompt"?(c&&c.promptRules):(c&&c.displayRules);
+    var collected=[];
+    var seenKeys={};
+    function pushNormalized(r,fromRawPreset){
+      if(!r||typeof r!=="object"||r.enabled===false||r.disabled===true)return;
+      if(fromRawPreset){
+        var md=Boolean(r.markdownOnly);
+        var pr=Boolean(r.promptOnly);
+        if(dest==="prompt"){if(md&&!pr)return;}
+        else{if(pr&&!md)return;}
+      }
+      var pls=Array.isArray(r.placement)?r.placement:null;
+      if(pls&&pls.indexOf(targetPlace)<0)return;
+      if(!pls&&targetPlace!==2)return;
+      var minD=typeof r.minDepth==="number"?r.minDepth:(typeof r.min_depth==="number"?r.min_depth:null);
+      var maxD=typeof r.maxDepth==="number"?r.maxDepth:(typeof r.max_depth==="number"?r.max_depth:null);
+      if(depth!==undefined){
+        if(minD!==null&&depth<minD)return;
+        if(maxD!==null&&depth>maxD)return;
+      }
+      var rawPat=r.pattern||r.source||r.findRegex||r.find_regex;
+      if(!rawPat)return;
+      var parsed=r.pattern?{pattern:String(r.pattern),flags:String(r.flags||"g")}:splitRegexLiteral(rawPat);
+      if(!parsed.pattern)return;
+      var rep=r.replace!==undefined?String(r.replace):(r.replaceString!==undefined?String(r.replaceString):String(r.replace_string||""));
+      var trims=Array.isArray(r.trim)?r.trim:(Array.isArray(r.trimStrings)?r.trimStrings:(Array.isArray(r.trim_strings)?r.trim_strings:[]));
+      var subMode=typeof r.substituteRegex==="number"?r.substituteRegex:0;
+      var dedupKey=parsed.pattern+"\\u0000"+parsed.flags+"\\u0000"+rep;
+      if(seenKeys[dedupKey])return;
+      seenKeys[dedupKey]=true;
+      collected.push({pattern:parsed.pattern,flags:parsed.flags,replace:rep,trim:trims,substituteRegex:subMode});
+    }
+    if(Array.isArray(baseList)){
+      for(var bi=0;bi<baseList.length;bi++)pushNormalized(baseList[bi],false);
+    }
+    var rawPresetRegex=(c&&c.presetRaw&&c.presetRaw.extensions&&Array.isArray(c.presetRaw.extensions.regex_scripts))?c.presetRaw.extensions.regex_scripts:[];
+    for(var pi=0;pi<rawPresetRegex.length;pi++)pushNormalized(rawPresetRegex[pi],true);
+    for(var i=0;i<collected.length;i++){
+      var r=collected[i];
+      try{
+        var pat=r.pattern;
+        if(r.substituteRegex===1)pat=g.substitudeMacros(pat);
+        else if(r.substituteRegex===2){
+          pat=pat.replace(/\\{\\{(?:(?!\\{\\{)[\\s\\S])*?\\}\\}/g,function(tok){return escapeRegexChars(g.substitudeMacros(tok));});
+        }
+        var re=new RegExp(pat,r.flags||"g");
+        var tpl=g.substitudeMacros(r.replace);
+        s=s.replace(re,function(match){
+          var args=[].slice.call(arguments,1);
+          var last=args[args.length-1];
+          var hasGroups=typeof last==="object"&&last!==null;
+          var capEnd=hasGroups?args.length-3:args.length-2;
+          var caps=args.slice(0,Math.max(0,capEnd));
+          return expandRepl(tpl,match,caps,r.trim);
+        });
+      }catch(e){}
     }
     return s;
   };
@@ -2172,6 +2478,7 @@ try{
   };
   g.replaceTavernRegexes=function(regexes,option){
     var opt=option&&typeof option==="object"?option:null;
+    if(opt&&opt.type==="preset"&&isPresetFrameNow())return Promise.resolve();
     if(opt&&opt.type==="preset"&&Array.isArray(regexes)){
       var sRaw=(typeof g.__liyuanGetSharedPresetRaw==="function")?g.__liyuanGetSharedPresetRaw():null;
       if(sRaw){
@@ -2241,6 +2548,7 @@ try{
   g.getLorebookNames=g.getWorldbookNames;
   g.getGlobalWorldbookNames=g.getWorldbookNames;
   g.rebindGlobalWorldbooks=function(names){
+    if(isPresetFrameNow())return Promise.resolve();
     if(Array.isArray(names)&&g.Liyuan&&typeof g.Liyuan.call==="function"){
       names.forEach(function(n){try{g.Liyuan.call("lorebooks.mount",{path:n,mounted:true});}catch(e){}});
     }
@@ -2257,6 +2565,7 @@ try{
   g.getChatWorldbookName=function(){return g.getCurrentCharPrimaryLorebook();};
   g.getChatLorebook=g.getChatWorldbookName;
   g.rebindChatWorldbook=function(chatName,bookName){
+    if(isPresetFrameNow())return Promise.resolve();
     var target=bookName||chatName;
     if(typeof target==="string"&&g.Liyuan&&typeof g.Liyuan.call==="function"){
       return g.Liyuan.call("lorebooks.mount",{path:target,mounted:true}).then(function(){});
@@ -2270,6 +2579,7 @@ try{
   };
   g.getOrCreateChatLorebook=g.getOrCreateChatWorldbook;
   g.createWorldbook=function(name,entries){
+    if(isPresetFrameNow())return Promise.resolve(false);
     if(Array.isArray(entries)&&entries.length&&g.Liyuan&&typeof g.Liyuan.call==="function"){
       return g.createWorldbookEntries(name,entries).then(function(){return true;});
     }
@@ -2277,17 +2587,19 @@ try{
   };
   g.createLorebook=g.createWorldbook;
   g.createOrReplaceWorldbook=g.createWorldbook;
-  g.deleteWorldbook=function(){return Promise.resolve(true);};
+  g.deleteWorldbook=function(){return Promise.resolve(!isPresetFrameNow());};
   g.deleteLorebook=g.deleteWorldbook;
-  g.getWorldbook=function(_name){
+  g.getWorldbook=function(name){
     if(!g.Liyuan||typeof g.Liyuan.call!=="function")return Promise.resolve([]);
-    return g.Liyuan.call("lorebooks.read",{}).then(function(env){
+    var req=typeof name==="string"&&name.trim()?{book:name.trim()}:{};
+    return g.Liyuan.call("lorebooks.read",req).then(function(env){
       var raw=(env&&env.ok&&env.result&&Array.isArray(env.result.entries))?env.result.entries:[];
       return raw.map(toWorldbookEntry);
     });
   };
   g.getLorebookEntries=g.getWorldbook;
   g.createWorldbookEntries=function(bookName,newEntries){
+    if(isPresetFrameNow())return Promise.resolve({worldbook:[],new_entries:[]});
     var list=Array.isArray(newEntries)?newEntries:(newEntries?[newEntries]:[]);
     if(!g.Liyuan||typeof g.Liyuan.call!=="function")return Promise.resolve({worldbook:[],new_entries:[]});
     var tasks=list.map(function(item){
@@ -2303,11 +2615,13 @@ try{
   };
   g.createLorebookEntries=g.createWorldbookEntries;
   g.createLorebookEntry=function(bookName,entry){
+    if(isPresetFrameNow())return Promise.resolve(null);
     return g.createWorldbookEntries(bookName,[entry]).then(function(r){return r.new_entries[0]||null;});
   };
   g.replaceWorldbook=function(bookName,entries){
+    if(isPresetFrameNow())return Promise.resolve();
     if(!Array.isArray(entries)||!g.Liyuan||typeof g.Liyuan.call!=="function")return Promise.resolve();
-    return g.Liyuan.call("lorebooks.read",{}).then(function(env){
+    return g.Liyuan.call("lorebooks.read",typeof bookName==="string"&&bookName.trim()?{book:bookName.trim()}:{}).then(function(env){
       var existing=(env&&env.ok&&env.result&&Array.isArray(env.result.entries))?env.result.entries:[];
       var tasks=entries.map(function(item,idx){
         var fp=(item.extra&&item.extra.fingerprint)||(existing[idx]&&existing[idx].fingerprint);
@@ -2325,6 +2639,7 @@ try{
   g.replaceLorebookEntries=g.replaceWorldbook;
   g.setLorebookEntries=g.replaceWorldbook;
   g.updateWorldbookWith=function(bookName,updater){
+    if(isPresetFrameNow())return g.getWorldbook(bookName);
     return g.getWorldbook(bookName).then(function(entries){
       var res=typeof updater==="function"?updater(deepClone(entries)):entries;
       return Promise.resolve(res).then(function(nextEntries){
@@ -2334,7 +2649,8 @@ try{
   };
   g.updateLorebookEntriesWith=g.updateWorldbookWith;
   g.deleteWorldbookEntries=function(bookName,predicate){
-    return g.Liyuan.call("lorebooks.read",{}).then(function(env){
+    if(isPresetFrameNow())return Promise.resolve({worldbook:[],deleted_entries:[]});
+    return g.Liyuan.call("lorebooks.read",typeof bookName==="string"&&bookName.trim()?{book:bookName.trim()}:{}).then(function(env){
       var existing=(env&&env.ok&&env.result&&Array.isArray(env.result.entries))?env.result.entries:[];
       var mapped=existing.map(toWorldbookEntry);
       var toDelete=[];
@@ -2630,125 +2946,22 @@ try{
   }
   g.__liyuanGetSharedPresetRaw=getSharedPresetRaw;
 
-  function ensurePromptManagerListEl(){
-    var doc=presetHost.document;
-    if(!doc||typeof doc.getElementById!=="function"||typeof doc.createElement!=="function")return null;
-    var ul=doc.getElementById("completion_prompt_manager_list");
-    if(!ul&&doc.body){
-      ul=doc.createElement("ul");
-      ul.id="completion_prompt_manager_list";
-      ul.setAttribute("aria-hidden","true");
-      if(ul.style)ul.style.cssText="display:none!important";
-      doc.body.appendChild(ul);
-    }
-    return ul;
+  function getPresetRawForCurrentContext(){
+    if(!isPresetFrameNow())return getSharedPresetRaw();
+    if(!g.__liyuanIsolatedPresetRaw)g.__liyuanIsolatedPresetRaw=deepClone(getSharedPresetRaw());
+    return g.__liyuanIsolatedPresetRaw;
   }
-  function findChildLiByIdentifier(ul,id){
-    if(!ul||!ul.children)return null;
-    for(var i=0;i<ul.children.length;i++){
-      var ch=ul.children[i];
-      if(ch&&typeof ch.getAttribute==="function"&&ch.getAttribute("data-pm-identifier")===id)return ch;
-    }
-    return null;
-  }
-  function syncPromptManagerDom(rawOpt){
-    if(pw0&&typeof pw0.__liyuanSyncPromptManagerDom==="function"){
-      return pw0.__liyuanSyncPromptManagerDom(rawOpt);
-    }
-    var raw=rawOpt||getSharedPresetRaw();
-    var ul=ensurePromptManagerListEl();
-    if(!ul)return;
-    var doc=ul.ownerDocument||presetHost.document;
-    var orderObj=pickOrderObj(raw);
-    var order=orderObj?orderObj.order:[];
-    var nameById={};
-    var prompts=Array.isArray(raw.prompts)?raw.prompts:[];
-    for(var pi=0;pi<prompts.length;pi++){
-      var p=prompts[pi];
-      if(p&&typeof p.identifier==="string")nameById[p.identifier]=String(p.name||p.identifier);
-    }
-    var keepIds={};
-    for(var i=0;i<order.length;i++){
-      var entry=order[i];
-      if(!entry||typeof entry.identifier!=="string")continue;
-      var id=entry.identifier;
-      keepIds[id]=true;
-      var enabled=entry.enabled!==false;
-      var pName=nameById[id]||id;
-      var li=findChildLiByIdentifier(ul,id);
-      if(!li){
-        li=doc.createElement("li");
-        li.className=enabled?"completion_prompt_manager_prompt":"completion_prompt_manager_prompt completion_prompt_manager_prompt_disabled";
-        li.setAttribute("data-pm-identifier",id);
-        var nameSpan=doc.createElement("span");
-        nameSpan.className="completion_prompt_manager_prompt_name prompt-manager-name";
-        nameSpan.setAttribute("data-pm-name",pName);
-        nameSpan.textContent=pName;
-        var toggleSpan=doc.createElement("span");
-        toggleSpan.className="prompt-manager-toggle-action";
-        toggleSpan.setAttribute("data-action","toggle");
-        toggleSpan.setAttribute("role","switch");
-        var editSpan=doc.createElement("span");
-        editSpan.className="prompt-manager-edit-action";
-        (function(targetId){
-          if(typeof toggleSpan.addEventListener==="function"){
-            toggleSpan.addEventListener("click",function(){
-              var settings=getSharedPresetRaw();
-              var curOrderObj=pickOrderObj(settings);
-              var list=curOrderObj?curOrderObj.order:[];
-              var hit=null;
-              for(var oi=0;oi<list.length;oi++){
-                if(list[oi]&&list[oi].identifier===targetId){hit=list[oi];break;}
-              }
-              var nextEnabled=hit?!(hit.enabled!==false):true;
-              if(hit)hit.enabled=nextEnabled;
-              var defs=Array.isArray(settings.prompts)?settings.prompts:[];
-              for(var di=0;di<defs.length;di++){
-                if(defs[di]&&defs[di].identifier===targetId)defs[di].enabled=nextEnabled;
-              }
-              var curLi=findChildLiByIdentifier(ul,targetId);
-              if(curLi&&curLi.classList){
-                if(nextEnabled)curLi.classList.remove("completion_prompt_manager_prompt_disabled");
-                else curLi.classList.add("completion_prompt_manager_prompt_disabled");
-              }
-              scheduleCommitPresetFromSettings();
-            });
-          }
-        })(id);
-        li.appendChild(nameSpan);
-        li.appendChild(toggleSpan);
-        li.appendChild(editSpan);
-        ul.appendChild(li);
-      }else{
-        if(li.classList){
-          var isDisabled=li.classList.contains("completion_prompt_manager_prompt_disabled");
-          if(enabled&&isDisabled)li.classList.remove("completion_prompt_manager_prompt_disabled");
-          else if(!enabled&&!isDisabled)li.classList.add("completion_prompt_manager_prompt_disabled");
-        }
-        var existingNameEl=typeof li.querySelector==="function"?(li.querySelector("[data-pm-name]")||li.querySelector(".prompt-manager-name")):null;
-        if(existingNameEl){
-          if(existingNameEl.getAttribute("data-pm-name")!==pName)existingNameEl.setAttribute("data-pm-name",pName);
-          if(existingNameEl.textContent!==pName)existingNameEl.textContent=pName;
-        }
-        if(ul.children[i]!==li)ul.appendChild(li);
-      }
-    }
-    if(ul.children){
-      for(var ri=ul.children.length-1;ri>=0;ri--){
-        var node=ul.children[ri];
-        var nid=node&&typeof node.getAttribute==="function"?node.getAttribute("data-pm-identifier"):null;
-        if(nid&&!keepIds[nid]&&typeof node.remove==="function")node.remove();
-      }
-    }
-  }
+
+  // 已移除父页隐藏通道 C（#completion_prompt_manager_list）假 DOM 注入：保留空同步函数以保持内部调用签名稳定
+  function syncPromptManagerDom(_rawOpt){}
   if(!pw0){
     presetHost.__liyuanSyncPromptManagerDom=syncPromptManagerDom;
-    if(presetHost.document&&presetHost.document.readyState==="loading"&&typeof presetHost.document.addEventListener==="function"){
-      presetHost.document.addEventListener("DOMContentLoaded",function(){syncPromptManagerDom();});
-    }
   }
 
   function commitPresetPatch(patch){
+    if(isPresetFrameNow()){
+      return Promise.resolve({ok:false,error:{code:"permission_denied",message:"梨园预设仅允许通过梨园预设面板修改，预设脚本无权修改预设"}});
+    }
     if(pw0&&typeof pw0.__liyuanCommitPresetPatch==="function"){
       return pw0.__liyuanCommitPresetPatch(patch);
     }
@@ -2810,6 +3023,7 @@ try{
       presetHost.__liyuanActivePresetName=nextName||curName||"in_use";
       presetHost.__liyuanPresetBaseline=snapshotPresetBaseline(target);
       presetHost.__liyuanPresetInitialized=true;
+      if(g.__liyuanIsolatedPresetRaw)g.__liyuanIsolatedPresetRaw=deepClone(target);
       syncPromptManagerDom(target);
     }else if(nextName){
       presetHost.__liyuanActivePresetName=nextName;
@@ -3043,6 +3257,7 @@ try{
     return f(url,init).then(function(r){return r.ok?r.json().catch(function(){return null;}):null;}).catch(function(){return null;});
   }
   g.loadPreset=function(name){
+    if(isPresetFrameNow())return Promise.resolve(false);
     var nm=String(name||"").trim();
     if(!nm)return Promise.resolve(false);
     return apiFetchJson("/api/presets").then(function(data){
@@ -3061,10 +3276,12 @@ try{
     return deepClone(g.default_preset);
   };
   g.createPreset=function(name,preset){
+    if(isPresetFrameNow())return Promise.resolve(false);
     if(g.getPresetNames().indexOf(name)>=0)return Promise.resolve(false);
     return g.createOrReplacePreset(name,preset);
   };
   g.createOrReplacePreset=function(name,preset,opts){
+    if(isPresetFrameNow())return Promise.resolve(false);
     var target=(!name||name==="in_use"||name===g.getLoadedPresetName())?"in_use":String(name);
     var shared=getSharedPresetRaw();
     if(target==="in_use"){
@@ -3077,6 +3294,7 @@ try{
     return apiFetchJson("/api/presets/saveas",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:String(name),raw:rawToSave})}).then(function(r){return r?Boolean(r.ok!==false):true;});
   };
   g.deletePreset=function(name){
+    if(isPresetFrameNow())return Promise.resolve(false);
     var nm=String(name||"").trim();
     if(!nm)return Promise.resolve(true);
     return apiFetchJson("/api/presets").then(function(data){
@@ -3087,6 +3305,7 @@ try{
     });
   };
   g.renamePreset=function(oldName,newName){
+    if(isPresetFrameNow())return Promise.resolve(false);
     var o=String(oldName||"").trim();
     var n=String(newName||"").trim();
     if(!o||!n)return Promise.resolve(false);
@@ -3098,6 +3317,7 @@ try{
     });
   };
   g.replacePreset=function(name,preset,opts){
+    if(isPresetFrameNow())return Promise.resolve();
     var target=(!name||name==="in_use"||name===g.getLoadedPresetName())?"in_use":String(name);
     if(target!=="in_use")return Promise.resolve();
     var shared=getSharedPresetRaw();
@@ -3107,6 +3327,7 @@ try{
     return commitPresetFromSharedState().then(function(){});
   };
   g.updatePresetWith=function(name,updater,opts){
+    if(isPresetFrameNow())return Promise.resolve(g.getPreset(name));
     var cur=g.getPreset(name);
     var res=typeof updater==="function"?updater(cur):cur;
     if(res&&typeof res.then==="function"){
@@ -3117,6 +3338,7 @@ try{
     return g.replacePreset(name,res,opts).then(function(){return g.getPreset(name);});
   };
   g.setPreset=function(name,patch,opts){
+    if(isPresetFrameNow())return Promise.resolve(g.getPreset(name));
     return g.updatePresetWith(name,function(cur){
       return baseMerge(cur,patch||{},function(_l,r){return Array.isArray(r)?deepClone(r):undefined;});
     },opts);
@@ -3232,9 +3454,11 @@ try{
   var promptMgrRenderDebouncedTimer=null;
   var promptMgrStub={
     render:function(_afterAction){
+      if(isPresetFrameNow())return;
       syncPromptManagerDom();
     },
     renderDebounced:function(){
+      if(isPresetFrameNow())return;
       if(promptMgrRenderDebouncedTimer)clearTimeout(promptMgrRenderDebouncedTimer);
       promptMgrRenderDebouncedTimer=setTimeout(function(){
         promptMgrRenderDebouncedTimer=null;
@@ -3244,14 +3468,14 @@ try{
     getPromptOrderEntry:function(promptOrId){
       var id=typeof promptOrId==="string"?promptOrId:(promptOrId&&promptOrId.identifier?String(promptOrId.identifier):"");
       if(!id)return null;
-      var ord=pickOrderObj(getSharedPresetRaw());
+      var ord=pickOrderObj(getPresetRawForCurrentContext());
       if(!ord)return null;
       for(var i=0;i<ord.order.length;i++){
         if(ord.order[i]&&ord.order[i].identifier===id)return ord.order[i];
       }
       return null;
     },
-    get serviceSettings(){return getSharedPresetRaw();}
+    get serviceSettings(){return getPresetRawForCurrentContext();}
   };
   g.promptManager=promptMgrStub;
   g.builtin={
@@ -3275,7 +3499,10 @@ try{
     renderMarkdown:function(txt){return String(txt==null?"":txt);},
     renderPromptManager:promptMgrStub.render,
     renderPromptManagerDebounced:promptMgrStub.renderDebounced,
-    saveSettings:function(){return commitPresetFromSharedState().then(function(){});},
+    saveSettings:function(){
+      if(isPresetFrameNow())return Promise.resolve();
+      return commitPresetFromSharedState().then(function(){});
+    },
     uuidv4:makeUuid
   };
   g.placeholder_prompt_default_order=["world_info_before","persona_description","char_description","char_personality","scenario","world_info_after","dialogue_examples","chat_history"];
@@ -3291,6 +3518,7 @@ try{
     return g.__liyuanScriptRegistry[sid];
   }
   function notifyParentButtons(){
+    if(isPresetFrameNow())return;
     var pw=parentWin();
     if(!pw||!g.__liyuanScriptRegistry)return;
     var flat=[];
@@ -3310,6 +3538,7 @@ try{
   }
   g.getButtonEvent=function(btnName){
     var name=String(btnName||"");
+    if(isPresetFrameNow())return "th_btn_"+g.getScriptId()+"_"+name;
     var entry=curScriptEntry();
     if(name&&entry&&entry.button&&Array.isArray(entry.button.buttons)){
       if(!entry.button.buttons.some(function(x){return x&&x.name===name;})){
@@ -3319,13 +3548,18 @@ try{
     }
     return "th_btn_"+g.getScriptId()+"_"+name;
   };
-  g.getScriptButtons=function(){return deepClone(curScriptEntry().button.buttons||[]);};
+  g.getScriptButtons=function(){
+    if(isPresetFrameNow())return [];
+    return deepClone(curScriptEntry().button.buttons||[]);
+  };
   g.replaceScriptButtons=function(a,b){
+    if(isPresetFrameNow())return;
     var btns=Array.isArray(a)?a:(Array.isArray(b)?b:[]);
     curScriptEntry().button.buttons=deepClone(btns);
     notifyParentButtons();
   };
   g.updateScriptButtonsWith=function(updater){
+    if(isPresetFrameNow())return [];
     var cur=g.getScriptButtons();
     var res=typeof updater==="function"?updater(cur):cur;
     if(res&&typeof res.then==="function"){
@@ -3760,14 +3994,14 @@ try{
       if(!n)return g.getLoadedPresetName();
       return list.indexOf(n)>=0?n:undefined;
     },
-    selectPreset:function(name){return g.loadPreset(name);},
-    savePreset:function(){return commitPresetFromSharedState().then(function(){return true;});},
-    deletePreset:function(name){return g.deletePreset(name);},
+    selectPreset:function(name){return isPresetFrameNow()?Promise.resolve(false):g.loadPreset(name);},
+    savePreset:function(){return isPresetFrameNow()?Promise.resolve(false):commitPresetFromSharedState().then(function(){return true;});},
+    deletePreset:function(name){return isPresetFrameNow()?Promise.resolve(false):g.deletePreset(name);},
     getPresetList:function(){
       var names=g.getPresetNames();
       var map={};
       for(var i=0;i<names.length;i++)map[names[i]]=i;
-      return {presets:[getSharedPresetRaw()],preset_names:map};
+      return {presets:[getPresetRawForCurrentContext()],preset_names:map};
     },
     readPresetExtensionField:function(opts){
       var p=opts&&opts.path?String(opts.path):"";
@@ -3931,7 +4165,7 @@ try{
           has:function(k){return lp(g.getVariables({type:"global"}),k)!==undefined;}
         }
       },
-      chatCompletionSettings:getSharedPresetRaw(),
+      chatCompletionSettings:getPresetRawForCurrentContext(),
       getPresetManager:function(apiId){return apiId==="reasoning"?reasoningPresetManagerAdapter:presetManagerAdapter;},
       getRequestHeaders:function(){return {"Content-Type":"application/json"};},
       selectCharacterById:function(){return Promise.resolve();},
@@ -3945,6 +4179,7 @@ try{
         });
       },
       saveWorldInfo:function(name,data){
+        if(isPresetFrameNow())return Promise.resolve();
         var list=data&&data.entries?(Array.isArray(data.entries)?data.entries:Object.values(data.entries)):[];
         return g.replaceWorldbook(name,list).then(function(){
           return g.eventEmit(g.tavern_events.WORLDINFO_UPDATED,name,data||{entries:{}});
@@ -3959,8 +4194,12 @@ try{
       saveMetadata:function(){return Promise.resolve();},
       saveMetadataDebounced:function(){},
       saveChatConditional:function(){return Promise.resolve();},
-      saveSettings:function(){return commitPresetFromSharedState().then(function(){});},
+      saveSettings:function(){
+        if(isPresetFrameNow())return Promise.resolve();
+        return commitPresetFromSharedState().then(function(){});
+      },
       saveSettingsDebounced:function(){
+        if(isPresetFrameNow())return;
         syncPromptManagerDom();
         scheduleCommitPresetFromSettings();
       },
@@ -4010,8 +4249,11 @@ try{
       POPUP_TYPE:{TEXT:1,CONFIRM:2,INPUT:3,DISPLAY:4},
       POPUP_RESULT:{AFFIRMATIVE:1,NEGATIVE:0,CANCELLED:null,CUSTOM:2},
       callGenericPopup:function(content,type,inputValue,options){
-        var pDoc=(presetHost&&presetHost.document)||g.document;
         var pType=typeof type==="number"?type:1;
+        if(isPresetFrameNow()){
+          return Promise.resolve(pType===3?null:0);
+        }
+        var pDoc=(presetHost&&presetHost.document)||g.document;
         var defVal=inputValue==null?"":String(inputValue);
         if(!pDoc||!pDoc.body||typeof pDoc.createElement!=="function"){
           if(pType===3)return Promise.resolve(defVal);

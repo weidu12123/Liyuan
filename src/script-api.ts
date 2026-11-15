@@ -283,11 +283,22 @@ function sanitizeScopeId(raw: unknown, fallback = "default"): string {
 	return s.replace(/[^\w一-龥.-]/g, "_").replace(/\.+/g, ".").slice(0, 64) || fallback;
 }
 
+function resolveRealPathWithMissing(targetPath: string): string {
+	let cur = resolve(targetPath);
+	const suffix: string[] = [];
+	while (!existsSync(cur)) {
+		const parent = dirname(cur);
+		if (parent === cur) break;
+		suffix.unshift(basename(cur));
+		cur = parent;
+	}
+	const base = existsSync(cur) ? realpathSync(cur) : cur;
+	return suffix.length > 0 ? join(base, ...suffix) : base;
+}
+
 function insideRealPath(rootDir: string, candidatePath: string): boolean {
-	const absRoot = existsSync(rootDir) ? realpathSync(rootDir) : resolve(rootDir);
-	const parentDir = dirname(candidatePath);
-	const absParent = existsSync(parentDir) ? realpathSync(parentDir) : resolve(parentDir);
-	const absTarget = existsSync(candidatePath) ? realpathSync(candidatePath) : join(absParent, basename(candidatePath));
+	const absRoot = resolveRealPathWithMissing(rootDir);
+	const absTarget = resolveRealPathWithMissing(candidatePath);
 	const rel = relative(absRoot, absTarget);
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }

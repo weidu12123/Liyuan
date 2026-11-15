@@ -118,12 +118,18 @@ export interface CharacterState {
 
 /** 项目配置（app/liyuan.config.json；旧名 rp.config.json 启动时迁移） */
 export interface RelayPolicyConfig {
-	/** 末尾 assistant 预填模式："auto"=按需于拒答恢复使用（默认）；"on"=带工具查完后主动折算预填；"off"=禁用 */
-	prefillMode?: "auto" | "on" | "off";
-	/** 防路由随机注释混淆档位："off" | "head" | "deep" */
-	antiRouteShield?: "off" | "head" | "deep";
+	/** 工具参数交稿破限（类似假工具，强制走真实 draft_write 工具参数写入正文）："auto"=遇拒答恢复切换重试（默认）；"on"=强制走工具调用交稿；"off"=禁用 */
+	toolOutputMode?: "auto" | "on" | "off";
+	/** 上下文打包进虚拟工具描述（绕开 messages 正文输入审查）："off"=关闭（仅保缓存不打包）；"auto"=正常先直连保留缓存，遇拒答或输入拦截自动打包重试（默认）；"tool-desc"=每次均打包进工具描述 */
+	contextPackMode?: "off" | "auto" | "tool-desc";
+	/** 防路由与输入打断混淆档位："off" | "head" | "deep" | "scramble" */
+	antiRouteShield?: "off" | "head" | "deep" | "scramble";
 	/** 仅在 Google 原生端点注入 BLOCK_NONE，默认 true */
 	googleSafetyOff?: boolean;
+	/** 是否在 OpenAI 兼容端点（openai-completions + gemini 模型）附带 safety_settings: BLOCK_NONE，默认 false */
+	googleSafetyOnOpenAi?: boolean;
+	/** 对 temperature / top_p 施加 ±0.002 微量随机扰动并禁用自动降级回退，默认 false（deep/scramble 自动启用） */
+	jitterSampling?: boolean;
 	/** 是否合并相邻连续 system 消息（缺省跟随预设 squash_system_messages） */
 	squashSystemMessages?: boolean;
 	/** 首包检测到静默拒答/空回时是否在当前跳内部自动降级重发，默认 true */

@@ -77,7 +77,7 @@ function syncPromptSlots(stagedDir) {
 	const dst = join(cwd, "assets");
 	mkdirSync(dst, { recursive: true });
 	for (const f of readdirSafe(join(stagedDir, "assets"))) {
-		if (!f.endsWith(".md")) continue;
+		if (!f.endsWith(".md") && !f.endsWith(".txt")) continue;
 		const from = join(stagedDir, "assets", f);
 		try {
 			if (statSync(from).isDirectory()) continue;

@@ -15,7 +15,10 @@
  * 纯函数 + 零模块级可变状态（jiti 二象性红线），可单测。
  */
 import { createHash } from "node:crypto";
-import { assemble, type AssembledPiece, type AssembleResult } from "./preset-assemble.ts";
+import { join } from "node:path";
+import { extractAuthorScriptVariables } from "./authorScripts.ts";
+import { createEjsContext, evalEjsTemplate, hasPromptTemplateSyntax } from "./ejs-engine.ts";
+import { assemble, type AssembledPiece, type AssembleReportItem, type AssembleResult, type DepthPiece } from "./preset-assemble.ts";
 import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import type { PresetDoc } from "./preset-doc.ts";
 import { PRESET_SOURCE_SUFFIX, formatEntry, stripEntriesWhere, uniqueEntryName } from "./prompt-entries.ts";
@@ -53,6 +56,12 @@ export interface DeclareEntry {
 	note?: string;
 }
 
+export const presetDeclarationSlug = (name: string): string =>
+	name.trim().replace(/[\\/:*?"<>|\s]+/g, "-").replace(/^-+|-+$/g, "") || "preset";
+
+export const presetDeclarationPath = (cwd: string, presetName: string): string =>
+	join(cwd, "assets", "presets", ".liyuan", `预设声明-${presetDeclarationSlug(presetName)}.json`); // i18n-ignore：文件名协议
+
 export interface PresetDeclaration {
 	version: 1;
 	preset: string;
@@ -84,17 +93,177 @@ export const assembleForDeclare = (
 	opts: { charName: string; userName: string },
 ): AssembleResult => assemble(doc.entries, opts);
 
+const LAST_USER_MACRO_RE = /\{\{\s*lastusermessage\s*\}\}/i;
+
+/**
+ * 带 EJS 模板与脚本默认变量的异步装配（用于服务端/运行时声明与转译）：
+ * 若预设不含 EJS 语法且无脚本默认变量，则直接走同步 `assemble`，输出逐字节一致。
+ */
+export async function assembleForDeclareWithEjs(
+	doc: PresetDoc,
+	opts: { charName: string; userName: string },
+): Promise<AssembleResult> {
+	const scriptVars = doc.raw ? extractAuthorScriptVariables(doc.raw) : {};
+	const hasScriptVars = Object.keys(scriptVars).length > 0;
+	const hasEjs = doc.entries.some((e) => e.enabled && !e.marker && hasPromptTemplateSyntax(e.content));
+	if (!hasScriptVars && !hasEjs) {
+		return assemble(doc.entries, opts);
+	}
+
+	const chatVars: Record<string, unknown> = { ...scriptVars };
+	const globalVars: Record<string, unknown> = {};
+	const rawPrompts =
+		doc.raw && Array.isArray(doc.raw.prompts)
+			? (doc.raw.prompts as Array<Record<string, unknown>>)
+					.filter((p) => typeof p?.name === "string" && typeof p?.content === "string")
+					.map((p) => ({ name: p.name as string, content: p.content as string }))
+			: [];
+	const ejsContext = createEjsContext({
+		chatVars,
+		globalVars,
+		presetPrompts: rawPrompts,
+		charName: opts.charName,
+		userName: opts.userName,
+		messages: [],
+		runType: "generate",
+	});
+	const env = createMacroEnv({
+		charName: opts.charName,
+		userName: opts.userName,
+		vars: chatVars,
+		globalVars,
+	});
+
+	const syncToEjs = () => {
+		for (const [k, v] of env.vars.entries()) chatVars[k] = v;
+		for (const [k, v] of env.globalVars.entries()) globalVars[k] = v;
+	};
+	const syncFromEjs = () => {
+		for (const [k, v] of Object.entries(chatVars)) {
+			env.vars.set(k, typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
+		}
+		for (const [k, v] of Object.entries(globalVars)) {
+			env.globalVars.set(k, typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
+		}
+	};
+
+	const before: AssembledPiece[] = [];
+	const after: AssembledPiece[] = [];
+	const depth: DepthPiece[] = [];
+	const markers: AssembleResult["markers"] = [];
+	const report: AssembleReportItem[] = [];
+	const unsupported = new Set<string>();
+	const usesLastUserMessage: string[] = [];
+	let afterHistory = false;
+
+	for (const e of doc.entries) {
+		if (e.missing) {
+			report.push({ identifier: e.identifier, name: e.name, action: "缺失定义", chars: 0 });
+			continue;
+		}
+		if (!e.enabled) {
+			report.push({ identifier: e.identifier, name: e.name, action: "关闭", chars: e.content.length });
+			continue;
+		}
+		if (e.marker) {
+			if (e.identifier === "chatHistory") {
+				afterHistory = true;
+				markers.push({ id: e.identifier, enabled: true, filled: true });
+			} else {
+				markers.push({ id: e.identifier, enabled: true, filled: false });
+			}
+			report.push({
+				identifier: e.identifier,
+				name: e.name,
+				action: e.identifier === "chatHistory" ? "marker 槽位" : "marker 无料",
+				chars: 0,
+			});
+			continue;
+		}
+
+		if (LAST_USER_MACRO_RE.test(e.content)) usesLastUserMessage.push(e.identifier);
+		syncFromEjs();
+		const evaled = evalPresetMacros(e.content, env);
+		for (const name of evaled.unsupported) unsupported.add(name);
+		syncToEjs();
+
+		let text = evaled.text;
+		if (hasPromptTemplateSyntax(text)) {
+			try {
+				text = await evalEjsTemplate(text, ejsContext);
+				syncFromEjs();
+			} catch {
+				/* EJS 异常不中断其余预设块声明 */
+			}
+		}
+
+		if (text.trim().length === 0) {
+			report.push({ identifier: e.identifier, name: e.name, action: "零字", chars: 0 });
+			continue;
+		}
+
+		const piece: AssembledPiece = {
+			source: "block",
+			id: e.identifier,
+			name: e.name,
+			role: e.role,
+			text,
+		};
+		if (e.injectionPosition === 1) {
+			depth.push({ ...piece, depth: e.injectionDepth, order: e.injectionOrder });
+			report.push({
+				identifier: e.identifier,
+				name: e.name,
+				action: "深度注入",
+				chars: text.length,
+				depth: e.injectionDepth,
+			});
+			continue;
+		}
+		(afterHistory ? after : before).push(piece);
+		report.push({
+			identifier: e.identifier,
+			name: e.name,
+			action: afterHistory ? "历史后" : "历史前",
+			chars: text.length,
+		});
+	}
+
+	depth.sort((a, b) => a.depth - b.depth || a.order - b.order);
+	return {
+		before,
+		after,
+		depth,
+		markers,
+		unsupported: [...unsupported],
+		vars: env.vars,
+		globalVars: env.globalVars,
+		dirtyLocal: [...(env.dirtyLocal ?? [])],
+		dirtyGlobal: [...(env.dirtyGlobal ?? [])],
+		usesLastUserMessage,
+		report,
+	};
+}
+
+/** 异步编译预设（含 EJS 与脚本变量求值，保留 {{char}}/{{user}} 占位供全局声明复用） */
+export async function compilePresetWithEjs(doc: PresetDoc): Promise<AssembleResult> {
+	return assembleForDeclareWithEjs(doc, { charName: CHAR_PLACEHOLDER, userName: USER_PLACEHOLDER });
+}
+
 // ---------------- 声明提示词（数据加工通道，非 RP 送模面） ----------------
 
 const STATION_DEFINITIONS: Record<DeclareStation, string> = {
-	identity: "设定「你是谁」：身份/人格/作家扮演、破限信件、内容边界共识、反审查声明",
+	identity:
+		"设定「你是谁」：身份/人格/作家扮演、模型卡、破限信件/越狱声明、内容边界共识、反审查声明。只要包含身份或破限声明，即使混有思考步骤或标签规范，一律归入 identity 保留",
 	writing:
-		"正文写作规则：文风、描写边界、禁词表、对白与转述规则、nsfw 准则、字数要求。若混合了思考/自检或步骤说明，只要指导正文写作，一律归入 writing 保留",
-	thinking: "纯思考协议：思考模板、思考量要求、思考容器标签、逐项自检清单、思维链开头/收尾",
-	draft: "纯草稿协议：分段草稿/排练注释（如段前 HTML 注释）、改稿仪式",
-	output: "纯输出合约或引擎控制：格式模块顺序、正文包裹标签、状态栏/选项/摘要等每拍附加输出的规格、运行时接管协议",
-	memory: "纯记忆记账：要求每拍输出摘要/关键记忆/事件记录供前端留存（自建记忆系统）",
-	wrapper: "纯材料包装：包裹卡内容槽位的开闭标签、分节标题、加载演出（如 [World Loading...]）",
+		"正文写作与排版规则：文风、描写边界、禁词表、对白与转述、nsfw 准则、字数、剧情思考分析方法，以及正文/状态栏/选项/留言等展示格式。只要指导创作或读者可见排版，即使混有思考步骤或标签格式，一律归入 writing 保留",
+	thinking:
+		"仅限与多轮工具循环硬互斥的单轮禁令：强迫「只许思考或输出一次 / 严禁分轮或调用工具」的协议。常规思考步骤、剧情分析与思考引导保留为 writing 或 identity，绝不归此类",
+	draft: "仅限强迫每自然段前插内联改稿仪式/禁止使用交稿工具的纯冲突指令；常规续写/正文引导归 writing",
+	output:
+		"仅限强迫调用虚构函数工具（如必须通过某假工具参数输出、严禁直接输出文本）或前端运行时接管协议；正常的正文包裹标签、选项、留言等排版规范保留归 writing",
+	memory: "仅限要求每拍输出外部同步脚本命令或占用后台自动记账的纯冲突指令；其余归 writing",
+	wrapper: "纯材料包装：跳过卡/历史槽位后仅剩的孤立开闭标签、分节标题、加载演出（如 [World Loading...]）",
 };
 
 export function buildDeclarePrompt(
@@ -115,10 +284,9 @@ export function buildDeclarePrompt(
 		...STATIONS.map((s) => `- ${s}：${STATION_DEFINITIONS[s]}（去向：${STATION_META[s].dest}）`),
 		"",
 		"规则：",
-		"- 破限与身份类内容一律 identity，不做取舍。",
-		"- 正文写作规则一律 writing；若分段混有思考、自检或步骤说明，只要包含指导正文写作的要求，一律保留为 writing。",
-		"- 拿不准的分段一律 writing（保守保留）。",
-		"- 只有纯粹的机制段（纯思考模板、纯草稿排练、纯格式输出包裹、纯自建记忆）才归入对应停用类别。",
+		"- 破限、模型卡与身份声明一律 identity（即使混有思考规划或标签说明也必须保留），不做取舍。",
+		"- 正文写作规则、正常思考引导与展示排版格式一律 writing；拿不准的分段一律 writing（保守保留）。",
+		"- 只有与多轮工具循环硬互斥的单轮/禁工具/假工具接管指令，或纯材料空包装才停用或跳过；绝不因分段包含思考引导、模型卡或展示标签而停用。",
 		"- 只分类，不评价、不改写分段内容。",
 		"",
 		"输出 JSON 数组，id 为段头编号（整数），逐段一项：",
@@ -343,6 +511,23 @@ export function translatePresetWithDeclaration(
 	opts: { charName: string; userName: string },
 ): DeclareTranslateResult {
 	const r = assemble(doc.entries, { charName: opts.charName, userName: opts.userName });
+	return translateFromAssembled(doc, r, declaration);
+}
+
+export async function translatePresetWithDeclarationAsync(
+	doc: PresetDoc,
+	declaration: PresetDeclaration,
+	opts: { charName: string; userName: string },
+): Promise<DeclareTranslateResult> {
+	const r = await assembleForDeclareWithEjs(doc, { charName: opts.charName, userName: opts.userName });
+	return translateFromAssembled(doc, r, declaration);
+}
+
+function translateFromAssembled(
+	doc: PresetDoc,
+	r: AssembleResult,
+	declaration: PresetDeclaration,
+): DeclareTranslateResult {
 	const pieces = declarePieces(r);
 	const norm = normalizeDeclaration(declaration, pieces);
 	const stationOf = new Map(norm.entries.map((e) => [e.identifier, e]));

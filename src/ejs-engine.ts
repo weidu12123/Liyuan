@@ -59,7 +59,7 @@ export interface WorldInfoDecoratorInfo {
 
 /**
  * 解析世界书条目首行连续的 @@ 装饰器（对齐 ST-Prompt-Template src/function/worldinfo.ts:901-958）
- * 同时剥离正文末尾遗留的 `@@endif` 行（兼容《凡人修仙传_v1》等卡写法）。
+ * 同时剥离正文末尾遗留的 `@@endif` 行（兼容多段条件卡片写法）。
  */
 export function parseDecoratorsFromText(content: string): { decorators: string[]; args: string[]; cleanContent: string } {
 	const normalized = typeof content === "string" ? content : "";

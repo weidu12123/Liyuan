@@ -291,6 +291,7 @@ function Stage-Clean {
     "scripts\_*.sh",
     # root-level dev scratch (underscore convention) + probe dumps + local export bundles
     "_*",
+    "liyuan-design*",
     "导出*",
     "TESTING.md",
     "CLAUDE.md",

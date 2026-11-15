@@ -12,7 +12,7 @@ import { cardRulesPath } from "../src/user-rules.ts";
 import type { RpConfig } from "../src/types.ts";
 import { DEFAULT_CONFIG } from "../src/types.ts";
 
-test("syncCardFiles：停用静态转译后自动剥离历史遗留的（预设）条目，保留用户条款与世界书镜像", () => {
+test("syncCardFiles：停用静态转译后自动剥离历史遗留的（预设）条目，保留用户条款与世界书镜像", async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "liyuan-strip-preset-"));
 	process.env.LIYUAN_CODING_AGENT_DIR = join(cwd, "agentDir");
 	try {
@@ -33,7 +33,7 @@ test("syncCardFiles：停用静态转译后自动剥离历史遗留的（预设�
 			"utf8",
 		);
 
-		const res = syncCardFiles(cwd);
+		const res = await syncCardFiles(cwd);
 		assert.equal(res.strippedPresetEntries, true, "触发历史预设条目剥离");
 		assert.equal(existsSync(rulesAbs), false, "仅含旧预设的 APPEND_SYSTEM.md 已删除");
 		const nextAgents = readFileSync(agentsAbs, "utf8");

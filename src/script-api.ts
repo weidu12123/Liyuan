@@ -30,15 +30,20 @@ import {
 import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import { createEjsContext, evalEjsTemplate, getEjsSyntaxErrorInfo } from "./ejs-engine.ts";
 import { loadStageMaterials } from "./stage/materials.ts";
-import { assembleLiyuanPresetDynamic } from "./stage/preset-dynamic.ts";
-import { applyRelayPayload, supportsTrailingPrefill, type RelayModelLike } from "./stage/provider-relay.ts";
-import { flattenContextForPrefill } from "./stage/provider-relay-stream.ts";
+import {
+	presetDeclarationPath,
+	stripPresetEntries,
+	translatePresetWithDeclarationAsync,
+	type PresetDeclaration,
+} from "./preset-declare.ts";
+import { parsePromptEntries, renderForModel } from "./prompt-entries.ts";
+import { applyRelayPayload, type RelayModelLike } from "./stage/provider-relay.ts";
+import { extractPresetRelayMeta } from "./stage/preset-relay-meta.ts";
 import {
 	applyHistoryInjections,
 	buildStageInjection,
 	buildStageSystemPrompt,
 	formatLoreIndex,
-	readShippedRpSystemProtocol,
 } from "./stage/assemble.ts";
 import { constantLoreOf } from "./stage/materials.ts";
 import { scanEntries } from "./lorebook.ts";
@@ -2176,7 +2181,6 @@ export class ScriptApiService {
 						previewPresetDoc = loadPresetDoc(snap.raw, snap.name);
 					}
 					const target = this.#host.getTarget();
-					const chatDir = target.chatDir ?? this.#host.getCurrentChatDir();
 					const userText = typeof params.userText === "string" ? params.userText : "";
 					const macroCtx = { charName: materials.card.name, userName: materials.config.userName };
 					const baseHistory: Array<{ role: "user" | "assistant"; text: string }> = [];
@@ -2197,36 +2201,65 @@ export class ScriptApiService {
 						if (prev && prev.role === "user") prev.text = `${prev.text}\n\n${userText.trim()}`;
 						else baseHistory.push({ role: "user", text: userText.trim() });
 					}
-					const presetName = previewPresetDoc?.name;
-					const chatVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "chat", presetName);
-					const globalVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "global", presetName);
-					const characterVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "character", presetName);
-					const presetVars = readScriptScopeVarsSync(this.#host.cwd, chatDir, target.sessionId, materials.config.card, "preset", presetName);
 
 					const windowText = baseHistory.slice(-Math.max(1, materials.config.scanDepth)).map((m) => m.text).join("\n");
 					const activated = scanEntries(materials.entries, windowText, materials.config.maxLoreInjections);
-					const dyn = await assembleLiyuanPresetDynamic({
-						card: materials.card,
-						presetDoc: previewPresetDoc,
-						allLoreEntries: materials.allLoreEntries ?? materials.entries,
-						userName: materials.config.userName,
-						history: baseHistory,
-						userText: userText.trim(),
-						chatId: target.sessionId,
-						chatVars,
-						globalVars,
-						characterVars,
-						presetVars,
-					});
-					const extraSystemFragments = dyn.fragments.filter((f) => f.placement === "system" && f.text.trim()).map((f) => f.text);
+
+					const relayMeta = extractPresetRelayMeta(previewPresetDoc);
+					let effUserRules = materials.userRules;
+					let effCardAgents = materials.cardAgents;
+					let presetActive = 0;
+					let presetDisabled = 0;
+
+					if (previewPresetDoc) {
+						const syncedInCard =
+							(!requestedName || requestedName === "in_use") &&
+							(parsePromptEntries(materials.userRules.card).some((e) => e.source?.kind === "preset") ||
+								parsePromptEntries(materials.cardAgentsRaw ?? "").some((e) => e.source?.kind === "preset"));
+						if (!syncedInCard) {
+							const declAbs = presetDeclarationPath(this.#host.cwd, previewPresetDoc.name);
+							let stored: PresetDeclaration | null = null;
+							if (existsSync(declAbs)) {
+								try {
+									stored = JSON.parse(readFileSync(declAbs, "utf8")) as PresetDeclaration;
+								} catch {
+									stored = null;
+								}
+							}
+							const decl: PresetDeclaration = stored ?? {
+								version: 1,
+								preset: previewPresetDoc.name,
+								createdAt: new Date().toISOString(),
+								entries: [],
+							};
+							const translated = await translatePresetWithDeclarationAsync(previewPresetDoc, decl, macroCtx);
+							presetActive = translated.lines.filter((l) => l.action === "append" || l.action === "agents").length;
+							presetDisabled = translated.lines.filter((l) => l.action === "disabled").length;
+							effUserRules = {
+								...materials.userRules,
+								card: [stripPresetEntries(materials.userRules.card), renderForModel(translated.appendMarkdown)]
+									.filter((s) => s.trim())
+									.join("\n\n"),
+							};
+							effCardAgents = [stripPresetEntries(materials.cardAgents), renderForModel(translated.agentsSection)]
+								.filter((s) => s.trim())
+								.join("\n\n");
+						} else {
+							const allPresetEntries = [
+								...parsePromptEntries(materials.userRules.card).filter((e) => e.source?.kind === "preset"),
+								...parsePromptEntries(materials.cardAgentsRaw ?? "").filter((e) => e.source?.kind === "preset"),
+							];
+							presetActive = allPresetEntries.filter((e) => e.enabled).length;
+							presetDisabled = allPresetEntries.filter((e) => !e.enabled).length;
+						}
+					}
+
 					const systemPrompt = buildStageSystemPrompt({
 						card: materials.card,
 						config: materials.config,
 						constantLore: constantLoreOf(materials),
-						rpSystemProtocol: readShippedRpSystemProtocol(),
-						userRules: materials.userRules,
-						cardAgents: materials.cardAgents,
-						...(extraSystemFragments.length > 0 ? { extraSystemFragments } : {}),
+						userRules: effUserRules,
+						cardAgents: effCardAgents,
 						tools: true,
 					});
 					const injection = buildStageInjection({
@@ -2234,16 +2267,15 @@ export class ScriptApiService {
 						activatedLore: activated,
 						card: materials.card,
 						config: materials.config,
-						cardAgentsActive: materials.cardAgents.trim().length > 0,
+						cardAgentsActive: effCardAgents.trim().length > 0,
 						loreIndex: formatLoreIndex(materials.entries),
 					});
 					const endsWithUser = baseHistory[baseHistory.length - 1]?.role === "user";
 					const past = endsWithUser ? baseHistory.slice(0, -1) : baseHistory;
 					const tailText = endsWithUser ? `${injection}\n\n${baseHistory[baseHistory.length - 1]!.text}` : injection;
-					const messages = applyHistoryInjections(past, tailText, dyn.fragments, { tailHasUserMessage: endsWithUser });
+					const messages = applyHistoryInjections(past, tailText, [], { tailHasUserMessage: endsWithUser });
 
 					let simulatedPayload: Record<string, unknown> | undefined;
-					let prefillCapability: ReturnType<typeof supportsTrailingPrefill> | undefined;
 					if (params.simulateRelay === true) {
 						const simModel: RelayModelLike = {
 							id: typeof params.model === "string" && params.model.trim() ? params.model.trim() : "preview-model",
@@ -2251,25 +2283,14 @@ export class ScriptApiService {
 							api: typeof params.api === "string" && params.api.trim() ? params.api.trim() : "openai-completions",
 							reasoning: params.reasoning === true,
 						};
-						prefillCapability = supportsTrailingPrefill(simModel, { hasThinking: params.thinking === true });
-						const usePrefill = Boolean(params.includePrefill === true && dyn.trailingPrefillText && prefillCapability.supported);
-
-						const baseCtx = {
-							systemPrompt,
-							messages: messages.map((m) => ({ role: m.role, content: [{ type: "text", text: m.text }] })),
-							tools: [] as unknown[],
-						};
-						const effCtx = usePrefill && dyn.trailingPrefillText
-							? flattenContextForPrefill(baseCtx, dyn.trailingPrefillText, simModel)
-							: baseCtx;
 
 						let rawReq: Record<string, unknown>;
 						if (simModel.api === "google-generative-ai" || simModel.api === "google-vertex") {
 							rawReq = {
 								model: simModel.id,
-								contents: (effCtx.messages as Array<{ role: string; content: Array<{ text: string }> }>).map((m) => ({
+								contents: messages.map((m) => ({
 									role: m.role === "assistant" ? "model" : "user",
-									parts: [{ text: (m.content ?? []).map((c) => c.text).join("") }],
+									parts: [{ text: m.text }],
 								})),
 								config: systemPrompt.trim() ? { systemInstruction: systemPrompt } : {},
 							};
@@ -2278,21 +2299,63 @@ export class ScriptApiService {
 								model: simModel.id,
 								messages: [
 									...(systemPrompt.trim() ? [{ role: "system", content: systemPrompt }] : []),
-									...(effCtx.messages as Array<{ role: string; content: Array<{ text: string }> }>).map((m) => ({
-										role: m.role,
-										content: (m.content ?? []).map((c) => c.text).join(""),
-									})),
+									...messages.map((m) => ({ role: m.role, content: m.text })),
 								],
-								...(usePrefill ? {} : { tools: [] }),
+								tools: [],
 							};
 						}
+						const basePolicy = materials.config.relayPolicy ?? {};
+						const simPolicy = {
+							...basePolicy,
+							...(params.contextPackMode === "off" ||
+							params.contextPackMode === "auto" ||
+							params.contextPackMode === "tool-desc"
+								? { contextPackMode: params.contextPackMode }
+								: {}),
+							...(params.antiRouteShield === "off" ||
+							params.antiRouteShield === "head" ||
+							params.antiRouteShield === "deep" ||
+							params.antiRouteShield === "scramble"
+								? { antiRouteShield: params.antiRouteShield }
+								: {}),
+							...(typeof params.googleSafetyOnOpenAi === "boolean"
+								? { googleSafetyOnOpenAi: params.googleSafetyOnOpenAi }
+								: {}),
+						};
 						simulatedPayload =
 							applyRelayPayload(rawReq, simModel, {
-								policy: materials.config.relayPolicy,
-								presetMeta: dyn.relayMeta,
-								trailingPrefillActive: usePrefill,
+								policy: simPolicy,
+								presetMeta: relayMeta,
 							}) ?? rawReq;
 					}
+
+					const simTools = simulatedPayload
+						? Array.isArray(simulatedPayload.tools)
+							? (simulatedPayload.tools as Array<{ name?: unknown; function?: { name?: unknown; description?: unknown }; description?: unknown }>)
+							: Array.isArray((simulatedPayload.config as { tools?: unknown[] } | undefined)?.tools)
+								? (((simulatedPayload.config as { tools?: Array<{ functionDeclarations?: Array<{ name?: unknown; description?: unknown }> }> }).tools ?? []).flatMap((g) => g.functionDeclarations ?? []))
+								: []
+						: [];
+					const carrier = simTools.find((t) => (t.function?.name ?? t.name) === "liyuan_context_reference");
+					const carrierDesc = typeof carrier?.function?.description === "string"
+						? carrier.function.description
+						: typeof carrier?.description === "string"
+							? carrier.description
+							: "";
+					const msgsSource = simulatedPayload
+						? Array.isArray(simulatedPayload.messages)
+							? simulatedPayload.messages
+							: Array.isArray(simulatedPayload.contents)
+								? simulatedPayload.contents
+								: []
+						: [];
+					const relayStats = simulatedPayload
+						? {
+								packedIntoToolDescription: Boolean(carrier),
+								carrierToolChars: carrierDesc.length,
+								messagesChars: JSON.stringify(msgsSource).length,
+							}
+						: undefined;
 
 					return {
 						ok: true,
@@ -2305,11 +2368,10 @@ export class ScriptApiService {
 							systemPrompt,
 							messages,
 							samplers: previewPresetDoc?.samplers ?? materials.config.samplers ?? null,
-							relayMeta: dyn.relayMeta,
-							trailingPrefillText: dyn.trailingPrefillText ?? null,
-							...(prefillCapability ? { prefillCapability } : {}),
+							relayMeta,
 							...(simulatedPayload ? { simulatedPayload } : {}),
-							stats: dyn.stats,
+							...(relayStats ? { relayStats } : {}),
+							stats: { mode: "markdown-declared", activeEntries: presetActive, disabledEntries: presetDisabled },
 						},
 					};
 				}

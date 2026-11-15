@@ -3,10 +3,12 @@ import { test } from "node:test";
 
 import {
 	assembleForDeclare,
+	assembleForDeclareWithEjs,
 	buildDeclarePrompt,
 	buildProcessPrompt,
 	compiledPieces,
 	compilePreset,
+	compilePresetWithEjs,
 	declarePieces,
 	parseDeclareResponse,
 	parseProcessResponse,
@@ -15,6 +17,7 @@ import {
 	processIntoEntries,
 	stripPresetEntries,
 	translatePresetWithDeclaration,
+	translatePresetWithDeclarationAsync,
 	type PresetDeclaration,
 } from "../src/preset-declare.ts";
 import { parsePromptEntries } from "../src/prompt-entries.ts";
@@ -66,12 +69,14 @@ test("declarePieces：排除 marker 与末条 assistant 预填，保留文档序
 	assert.equal(pieces[4].where, "after"); // cot 在 chatHistory 之后
 });
 
-test("buildDeclarePrompt：带标识符、站别判据与输出格式", () => {
+test("buildDeclarePrompt：带标识符、站别判据与输出格式，且明确收窄停用范围保住混合破限与常规思考排版", () => {
 	const { systemPrompt, userText } = buildDeclarePrompt(declarePieces(assembled), {
 		preset: "测试预设",
 	});
 	assert.match(systemPrompt, /identity/);
 	assert.match(systemPrompt, /拿不准的分段一律 writing/);
+	assert.match(systemPrompt, /即使混有思考规划或标签说明也必须保留/);
+	assert.match(systemPrompt, /只许思考或输出一次/);
 	assert.match(systemPrompt, /\{"id"/);
 	assert.match(systemPrompt, /id 为段头编号/);
 	assert.ok(!userText.includes("main"));
@@ -305,3 +310,69 @@ test("processIntoEntries：两条固定条目、占位按卡求值、空产物�
 	assert.ok(r2.appendMarkdown.includes("为怀瑾执笔"));
 	assert.equal(r2.agentsSection, "");
 });
+
+test("EJS + authorScripts 接入：异步编译与转译支持条件分支与预设变量，普通块仍与原版逐字节一致", async () => {
+	const ejsPresetRaw: Record<string, unknown> = {
+		prompts: [
+			{
+				identifier: "id_block",
+				name: "身份",
+				role: "system",
+				content: "为{{char}}与{{user}}执笔。",
+			},
+			{
+				identifier: "ejs_style",
+				name: "条件文风",
+				role: "system",
+				content: "<% if (getvar('pov') === 'second') { %>使用第二人称。<% } else { %>使用第三人称。<% } %>",
+			},
+			{
+				identifier: "chatHistory",
+				name: "Chat History",
+				marker: true,
+			},
+			{
+				identifier: "pf",
+				name: "预填",
+				role: "assistant",
+				content: "OUTPUT",
+			},
+		],
+		prompt_order: [
+			{
+				character_id: 100001,
+				order: [
+					{ identifier: "id_block", enabled: true },
+					{ identifier: "ejs_style", enabled: true },
+					{ identifier: "chatHistory", enabled: true },
+					{ identifier: "pf", enabled: true },
+				],
+			},
+		],
+		extensions: {
+			tavern_helper: {
+				variables: { pov: "second" },
+			},
+		},
+	};
+	const ejsDoc = loadPresetDoc(ejsPresetRaw, "EJS测试预设");
+	const pieces = declarePieces(await compilePresetWithEjs(ejsDoc));
+	assert.equal(pieces.length, 2, "预填位剔除，剩余身份与条件文风 2 段");
+	assert.equal(pieces[0]!.text, "为{{char}}与{{user}}执笔。", "全局声明阶段保留占位符");
+	assert.equal(pieces[1]!.text, "使用第二人称。", "EJS 读取 authorScripts 变量并展开分支");
+
+	const decl: PresetDeclaration = {
+		version: 1,
+		preset: "EJS测试预设",
+		createdAt: "2026-11-14T00:00:00.000Z",
+		entries: [
+			{ identifier: "id_block", name: "身份", role: "system", where: "before", chars: 15, station: "identity" },
+			{ identifier: "ejs_style", name: "条件文风", role: "system", where: "before", chars: 7, station: "writing" },
+		],
+	};
+	const tr = await translatePresetWithDeclarationAsync(ejsDoc, decl, { charName: "云澜", userName: "沈舟" });
+	assert.ok(tr.appendMarkdown.includes("为云澜与沈舟执笔。"));
+	assert.ok(tr.agentsSection.includes("## 条件文风（预设）\n\n使用第二人称。"));
+	assert.equal(tr.lines.some((l) => l.action === "dropped-prefill"), true);
+});
+

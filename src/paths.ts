@@ -329,6 +329,7 @@ const LEGACY_CARD_WORKSPACE_SYSTEMS = new Set([
 	"You are an agent operating inside 梨园（Liyuan）. Your working directory is a card workspace: the files around you — AGENTS.md, APPEND_SYSTEM.md, the lorebooks, 记忆/ — are the current card's material.",
 	"You are an agent operating inside 梨园（Liyuan）. Your working directory is a card workspace: the files around you — AGENTS.md, APPEND_SYSTEM.md, the lorebooks — are the current card's material.",
 ]);
+const SHRUNK_APPEND_99CAB45_MARKER = "## 个人写作规矩（可自由编辑）";
 
 export function seedStageSystemPrompt(cwd: string, agentDir: string): void {
 	try {
@@ -358,7 +359,19 @@ export function seedStageSystemPrompt(cwd: string, agentDir: string): void {
 			lastAgentMergeLog.push(`已播种环境底座 SYSTEM.md → ${target}`);
 		}
 
-		if (!existsSync(appendTarget) && existsSync(shipped("APPEND_SYSTEM.md"))) {
+		if (existsSync(appendTarget)) {
+			const curAppend = readFileSync(appendTarget, "utf8");
+			// 若仍是 99cab45 拆走 RP_SYSTEM 后的未改动缩水默认版，平滑恢复合并版全局 APPEND_SYSTEM.md
+			if (
+				curAppend.includes(SHRUNK_APPEND_99CAB45_MARKER) &&
+				!curAppend.includes("draft_write") &&
+				curAppend.trim().length < 280 &&
+				existsSync(shipped("APPEND_SYSTEM.md"))
+			) {
+				copyFileSync(shipped("APPEND_SYSTEM.md"), appendTarget);
+				lastAgentMergeLog.push(`迁移：APPEND_SYSTEM.md 已合并恢复完整扮演协议默认值`);
+			}
+		} else if (existsSync(shipped("APPEND_SYSTEM.md"))) {
 			copyFileSync(shipped("APPEND_SYSTEM.md"), appendTarget);
 			lastAgentMergeLog.push(`已播种扮演定义默认值 APPEND_SYSTEM.md → ${appendTarget}`);
 		}

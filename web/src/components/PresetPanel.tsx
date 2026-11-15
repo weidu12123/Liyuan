@@ -29,6 +29,7 @@ import {
 	type PresetBlocksResponse,
 	type PresetResponse,
 	type PresetsResponse,
+	type RelayPolicyView,
 	type RulesResponse,
 	type RulesSaveResponse,
 } from "../api.ts";
@@ -117,14 +118,14 @@ const LOCAL_PROMPT_SLOTS: PromptSlotMeta[] = [
 		title: () => t("局部系统提示词"),
 		file: "APPEND_SYSTEM.md", // i18n-ignore
 		effect: "beat",
-		hint: () => t("当前角色卡的系统提示词（APPEND_SYSTEM.md），仅对本卡生效。"),
+		hint: () => t("当前角色卡的系统提示词（APPEND_SYSTEM.md），仅对本卡生效；预设转译的身份/破限条目也会落入此处。"),
 	},
 	{
 		scope: "agents",
 		title: () => t("提示词"),
 		file: "AGENTS.md", // i18n-ignore
 		effect: "beat",
-		hint: () => t("当前角色卡的常驻提示词档案（AGENTS.md），包含角色设定与挂载世界书常驻条目。"),
+		hint: () => t("当前角色卡的常驻提示词档案（AGENTS.md），包含角色设定、预设写作规则与挂载世界书常驻条目。"),
 	},
 ];
 
@@ -179,7 +180,7 @@ function diffPreview(base: string, mine: string): string {
 function SourceBadge({ entry }: { entry: PromptEntry }) {
 	const s = entry.source;
 	if (!s) return null;
-	if (s.kind === "preset") return <span className="preset-src-badge preset">{t("预设")}</span>;
+	if (s.kind === "preset") return <span className="preset-src-badge preset" title={t("预设转译条目：随预设装载/开关自动更新")}>{t("预设")}</span>;
 	return (
 		<span className="preset-src-badge lore" title={t("挂载书常驻条目的镜像：挂上就有、卸下就没、书改了跟着改")}>
 			{t("世界书·{book}", { book: s.book })}
@@ -211,7 +212,8 @@ export function PresetPanel({
 		card: false,
 		agents: false,
 	});
-	const [openAgentsCats, setOpenAgentsCats] = useState<Record<"lorebook" | "custom", boolean>>({
+	const [openAgentsCats, setOpenAgentsCats] = useState<Record<"preset" | "lorebook" | "custom", boolean>>({
+		preset: false,
 		lorebook: false,
 		custom: false,
 	});
@@ -268,14 +270,24 @@ export function PresetPanel({
 
 	// ---------------- 预设库：装载 / 保存（2026-09-14 用户定序：先编辑原版，再装载处理） ----------------
 
-	/** 装载：设为活动预设（config.preset） */
-	const loadPreset = (file: string) =>
+	/** 装载：设为活动预设（config.preset）——服务端随即按开关转译进这张卡的提示词文件（首次约 30 秒，问一次模型）。
+	 *  重新装载（活动预设）：丢弃草稿与这份预设的声明缓存，全部重问一次模型后重落条目。 */
+	const loadPreset = (file: string, redeclare = false) =>
 		run(async () => {
-			await apiPost("/api/presets/select", { file });
-			toast("info", t("已装载预设"));
+			await apiPost("/api/presets/select", { file, ...(redeclare ? { redeclare: true } : {}) });
+			toast(
+				"info",
+				redeclare
+					? t("已重新装载——重问一次模型（约 30 秒）后落新条目")
+					: t("已装载并转译——在上方预设库里展开该预设拨开关即自动更新"),
+			);
+			apiGetCacheClear("/api/presets");
+			apiGetCacheClear("/api/rules");
+			apiGetCacheClear("/api/card-agents");
 			files.reload();
 			rules.reload();
 			agents.reload();
+			bumpWatchPanels();
 		});
 
 	/** 卸载：不再使用活动预设（文件保留在库里；卡文件里的预设条目由服务端剥净） */
@@ -284,21 +296,52 @@ export function PresetPanel({
 			await apiPost("/api/presets/select", { file: null });
 			toast("info", t("已卸载——预设文件保留在库里"));
 			if (editorTarget?.kind === "preset-samplers") onChangeEditorTarget?.(null);
+			apiGetCacheClear("/api/presets");
+			apiGetCacheClear("/api/rules");
+			apiGetCacheClear("/api/card-agents");
 			files.reload();
 			rules.reload();
 			agents.reload();
 			bumpWatchPanels();
 		});
 
-	const updateRelayPolicy = (patch: Partial<NonNullable<PresetsResponse["relayPolicy"]>>) =>
-		run(async () => {
-			const cur = files.data?.relayPolicy ?? {};
-			await apiPut("/api/config", { relayPolicy: { ...cur, ...patch } });
-			toast("info", t("已更新发包中转设置"));
-			apiGetCacheClear("/api/presets");
-			files.reload();
-			bumpWatchPanels();
-		});
+	const [relayOverride, setRelayOverride] = useState<RelayPolicyView | null>(null);
+	const relayDraftRef = useRef<RelayPolicyView | null>(null);
+	const pendingRelaySavesRef = useRef(0);
+	const relaySaveChainRef = useRef<Promise<void>>(Promise.resolve());
+	useEffect(() => {
+		if (files.data?.relayPolicy && pendingRelaySavesRef.current === 0) {
+			relayDraftRef.current = files.data.relayPolicy;
+			setRelayOverride(null);
+		}
+	}, [files.data?.relayPolicy]);
+	const relayPolicy = relayOverride ?? files.data?.relayPolicy ?? {};
+
+	const updateRelayPolicy = (patch: Partial<RelayPolicyView>) => {
+		const nextPolicy: RelayPolicyView = {
+			...(relayDraftRef.current ?? files.data?.relayPolicy ?? {}),
+			...patch,
+		};
+		relayDraftRef.current = nextPolicy;
+		setRelayOverride(nextPolicy);
+		pendingRelaySavesRef.current += 1;
+		relaySaveChainRef.current = relaySaveChainRef.current
+			.then(async () => {
+				await apiPut("/api/config", { relayPolicy: nextPolicy });
+				toast("info", t("已更新发包中转设置"));
+				apiGetCacheClear("/api/presets");
+				bumpWatchPanels();
+			})
+			.catch((err) => {
+				toast("error", err instanceof Error ? err.message : String(err));
+			})
+			.finally(() => {
+				pendingRelaySavesRef.current = Math.max(0, pendingRelaySavesRef.current - 1);
+				if (pendingRelaySavesRef.current === 0) {
+					files.reload();
+				}
+			});
+	};
 
 	// ---------------- 库内任意预设：不装载也能展开拨开关（2026-09-14 用户点名） ----------------
 
@@ -356,6 +399,8 @@ export function PresetPanel({
 					.then(() => {
 						if (b.file === activeFile) {
 							setDirty(true);
+							apiGetCacheClear("/api/rules");
+							apiGetCacheClear("/api/card-agents");
 							rules.reload();
 							agents.reload();
 						}
@@ -371,7 +416,7 @@ export function PresetPanel({
 		run(async () => {
 			await apiDelete("/api/card-agents");
 			toast("info", t("已删除卡档案——回到自动投影"));
-			if (editorTarget && editorTarget.kind !== "preset-block" && editorTarget.kind !== "preset-samplers" && editorTarget.scope === "agents") {
+			if (editorTarget && (!editorTarget.kind || editorTarget.kind === "prompt") && editorTarget.scope === "agents") {
 				onChangeEditorTarget?.(null);
 			}
 			agents.reload();
@@ -424,6 +469,10 @@ export function PresetPanel({
 			await apiPost("/api/preset/revert", {});
 			await loadFromDisk();
 			if (openFile) void loadBlocks(openFile);
+			apiGetCacheClear("/api/rules");
+			apiGetCacheClear("/api/card-agents");
+			rules.reload();
+			agents.reload();
 			bumpWatchPanels();
 		}, t("已恢复为文件中的版本"));
 
@@ -434,8 +483,14 @@ export function PresetPanel({
 				"/api/presets/import",
 				{ name: file.name.replace(/\.json$/i, ""), json },
 			);
-			toast("info", t("已导入并设为活动预设（{blocks} 条 · 启用 {enabled}）", { blocks: r.blockCount, enabled: r.enabledCount }));
+			toast("info", t("已导入预设库（{blocks} 条 · 启用 {enabled}）——已设为活动预设并转译", { blocks: r.blockCount, enabled: r.enabledCount }));
+			apiGetCacheClear("/api/presets");
+			apiGetCacheClear("/api/rules");
+			apiGetCacheClear("/api/card-agents");
 			files.reload();
+			rules.reload();
+			agents.reload();
+			bumpWatchPanels();
 		} catch (e) {
 			toast("error", e instanceof Error ? e.message : String(e));
 		}
@@ -504,8 +559,7 @@ export function PresetPanel({
 	) => {
 		const isSelected =
 			editorTarget !== null &&
-			editorTarget.kind !== "preset-block" &&
-			editorTarget.kind !== "preset-samplers" &&
+			(!editorTarget.kind || editorTarget.kind === "prompt") &&
 			editorTarget.scope === slot.scope &&
 			editorTarget.mode === "entry" &&
 			editorTarget.entryName === e.name;
@@ -567,8 +621,7 @@ export function PresetPanel({
 		const isOpen = openScopes[slot.scope];
 		const isPromptTarget =
 			editorTarget !== null &&
-			editorTarget.kind !== "preset-block" &&
-			editorTarget.kind !== "preset-samplers" &&
+			(!editorTarget.kind || editorTarget.kind === "prompt") &&
 			editorTarget.scope === slot.scope;
 		const isFullSelected = isPromptTarget && editorTarget.mode === "full";
 		const isCreateSelected = isPromptTarget && editorTarget.mode === "create";
@@ -629,6 +682,12 @@ export function PresetPanel({
 							<div className="agents-subcat-list">
 								{(
 									[
+										{
+											key: "preset" as const,
+											label: t("预设"),
+											items: entries.filter((e) => e.source?.kind === "preset"),
+											emptyHint: t("暂无预设转译条目。"),
+										},
 										{
 											key: "lorebook" as const,
 											label: t("世界书"),
@@ -832,41 +891,55 @@ export function PresetPanel({
 				<>
 					<section className="sp-section">
 						<div className="preset-chan-head">
-							<h4>{t("后端发包中转")}</h4>
-							<label className="preset-chan-toggle" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-								<input
-									type="checkbox"
-									checked={files.data?.relayPolicy?.refusalRetry !== false}
-									disabled={busy}
-									onChange={(e) => void updateRelayPolicy({ refusalRetry: e.target.checked })}
-								/>
-								<span>{t("拒答检测自动恢复")}</span>
-							</label>
+							<h4>{t("中转设置")}</h4>
 						</div>
 						<div className="preset-chan-head" style={{ marginTop: 8 }}>
-							<span style={{ fontSize: 12, color: "var(--ink-2)" }}>{t("末尾预填")}</span>
-							<div className="seg-row" role="group" aria-label={t("末尾预填")}>
+							<span style={{ fontSize: 12, color: "var(--ink-2)" }}>{t("工具交稿")}</span>
+							<div className="seg-row" role="group" aria-label={t("工具交稿")}>
 								<button
 									type="button"
-									className={`seg ${(files.data?.relayPolicy?.prefillMode ?? "auto") === "auto" ? "active" : ""}`}
-									disabled={busy}
-									onClick={() => void updateRelayPolicy({ prefillMode: "auto" })}
+									className={`seg ${(relayPolicy.toolOutputMode ?? "auto") === "auto" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ toolOutputMode: "auto" })}
 								>
 									{t("自动恢复")}
 								</button>
 								<button
 									type="button"
-									className={`seg ${files.data?.relayPolicy?.prefillMode === "on" ? "active" : ""}`}
-									disabled={busy}
-									onClick={() => void updateRelayPolicy({ prefillMode: "on" })}
+									className={`seg ${relayPolicy.toolOutputMode === "on" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ toolOutputMode: "on" })}
 								>
-									{t("强制收口")}
+									{t("强制工具")}
 								</button>
 								<button
 									type="button"
-									className={`seg ${files.data?.relayPolicy?.prefillMode === "off" ? "active" : ""}`}
-									disabled={busy}
-									onClick={() => void updateRelayPolicy({ prefillMode: "off" })}
+									className={`seg ${relayPolicy.toolOutputMode === "off" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ toolOutputMode: "off" })}
+								>
+									{t("不启用")}
+								</button>
+							</div>
+						</div>
+						<div className="preset-chan-head" style={{ marginTop: 8 }}>
+							<span style={{ fontSize: 12, color: "var(--ink-2)" }}>{t("输入搬运")}</span>
+							<div className="seg-row" role="group" aria-label={t("输入搬运")}>
+								<button
+									type="button"
+									className={`seg ${(relayPolicy.contextPackMode ?? "auto") === "auto" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ contextPackMode: "auto" })}
+								>
+									{t("自动重试")}
+								</button>
+								<button
+									type="button"
+									className={`seg ${relayPolicy.contextPackMode === "tool-desc" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ contextPackMode: "tool-desc" })}
+								>
+									{t("工具打包")}
+								</button>
+								<button
+									type="button"
+									className={`seg ${relayPolicy.contextPackMode === "off" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ contextPackMode: "off" })}
 								>
 									{t("不启用")}
 								</button>
@@ -877,32 +950,43 @@ export function PresetPanel({
 							<div className="seg-row" role="group" aria-label={t("防路由护盾")}>
 								<button
 									type="button"
-									className={`seg ${(files.data?.relayPolicy?.antiRouteShield ?? "off") === "off" ? "active" : ""}`}
-									disabled={busy}
-									onClick={() => void updateRelayPolicy({ antiRouteShield: "off" })}
+									className={`seg ${(relayPolicy.antiRouteShield ?? "off") === "off" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ antiRouteShield: "off" })}
 								>
 									{t("不启用")}
 								</button>
 								<button
 									type="button"
-									className={`seg ${files.data?.relayPolicy?.antiRouteShield === "head" ? "active" : ""}`}
-									disabled={busy}
-									onClick={() => void updateRelayPolicy({ antiRouteShield: "head" })}
+									className={`seg ${relayPolicy.antiRouteShield === "head" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ antiRouteShield: "head" })}
 								>
 									{t("首尾")}
 								</button>
 								<button
 									type="button"
-									className={`seg ${files.data?.relayPolicy?.antiRouteShield === "deep" ? "active" : ""}`}
-									disabled={busy}
-									onClick={() => void updateRelayPolicy({ antiRouteShield: "deep" })}
+									className={`seg ${relayPolicy.antiRouteShield === "deep" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ antiRouteShield: "deep" })}
 								>
 									{t("深度")}
 								</button>
+								<button
+									type="button"
+									className={`seg ${relayPolicy.antiRouteShield === "scramble" ? "active" : ""}`}
+									onClick={() => updateRelayPolicy({ antiRouteShield: "scramble" })}
+								>
+									{t("强混淆")}
+								</button>
 							</div>
 						</div>
-						<div className="sp-hint">
-							{t("全部在后端 pi 出口完成：默认保留全部真工具，遇静默拒答或无工具末跳自动折算并附着末尾预填。")}
+						<div className="preset-chan-head" style={{ marginTop: 8 }}>
+							<label className="preset-chan-toggle" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+								<input
+									type="checkbox"
+									checked={relayPolicy.googleSafetyOnOpenAi === true}
+									onChange={(e) => updateRelayPolicy({ googleSafetyOnOpenAi: e.target.checked })}
+								/>
+								<span>{t("兼容网关附带 Gemini 安全放行")}</span>
+							</label>
 						</div>
 					</section>
 					<section className="sp-section">
@@ -957,21 +1041,24 @@ export function PresetPanel({
 												</div>
 											</button>
 											<div className="preset-block-acts">
-												{!isActive && (
-													<button
-														type="button"
-														className="act"
-														disabled={busy}
-														onClick={() => void loadPreset(p.file)}
-													>
-														{t("装载")}
-													</button>
-												)}
+												<button
+													type="button"
+													className="act"
+													disabled={busy}
+													title={
+														isActive
+															? t("丢弃草稿与声明缓存，重新编译并重问一次模型（约 30 秒）")
+															: undefined
+													}
+													onClick={() => void loadPreset(p.file, isActive)}
+												>
+													{isActive ? t("重新装载") : t("装载")}
+												</button>
 												{isActive && (
 													<ConfirmButton
 														className="act"
 														disabled={busy}
-														confirmText={t("确认卸载（预设文件保留在库里）")}
+														confirmText={t("确认卸载（卡文件里的预设条目一并移除，预设文件保留）")}
 														onConfirm={() => void unloadPreset()}
 													>
 														{t("卸载")}
@@ -1086,7 +1173,7 @@ export function PresetPanel({
 													<>
 														{isDirtyPreset && (
 															<div className="field-hint preset-dirty-hint">
-																{t("有未保存修改：点「保存」写回预设文件。")}
+																{t("有未保存修改：已转译、已用于对话；点「保存」写回预设文件。")}
 															</div>
 														)}
 														{visibleBlocks.length === 0 && (
@@ -1143,7 +1230,7 @@ export function PresetPanel({
 															);
 														})}
 														<div className="field-hint">
-															{t("拨开关＝编辑这份预设的原版选项：活动预设暂存草稿（「保存」落盘），未装载的直接写文件。")}
+															{t("拨开关＝编辑这份预设的原版选项：活动预设进草稿（「保存」落盘）并即时重转译；未装载的直接写文件，装载时生效。")}
 														</div>
 													</>
 												)}

@@ -94,7 +94,7 @@ for (const f of fs.readdirSync(path.join(root, ".liyuan", "extensions"))) {
 // 它们是模块按 import.meta.url 直接读的产品文件，**漏一个就是一个 ENOENT**——1.6.0 桌面版
 // 漏了 AUTHORING.md，工作模式提示词读不到，每一拍开演都失败。加槽位文件不必再来这里改名单。
 const promptSlots = fs.readdirSync(path.join(root, "assets"), { withFileTypes: true })
-	.filter((e) => e.isFile() && e.name.endsWith(".md"))
+	.filter((e) => e.isFile() && (e.name.endsWith(".md") || e.name.endsWith(".txt")))
 	.map((e) => e.name);
 for (const f of promptSlots) {
 	copyFile(path.join(root, "assets", f), path.join(appDir, "assets", f));

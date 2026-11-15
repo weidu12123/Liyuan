@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, it } from "node:test";
-import { loadCardFile } from "../src/card.ts";
 import {
 	compileStagePromptTemplates,
 	createEjsContext,
@@ -12,22 +9,16 @@ import {
 	getEjsSyntaxErrorInfo,
 	parseWorldInfoDecorators,
 } from "../src/ejs-engine.ts";
-import { findInitVar, seedMvuIfNeeded } from "../src/mvu.ts";
+import { findInitVar } from "../src/mvu.ts";
 import { renderForModel } from "../src/prompt-entries.ts";
 import { defaultState } from "../src/state.ts";
-import type { LorebookEntry, WorldState } from "../src/types.ts";
-
-function findCardPng(dir: string): string | null {
-	if (!existsSync(dir)) return null;
-	const png = readdirSync(dir).find((f) => f.endsWith(".png"));
-	return png ? join(dir, png) : null;
-}
+import type { LorebookEntry } from "../src/types.ts";
 
 describe("ST-Prompt-Template EJS Engine (Knife 1)", () => {
 	it("evaluates basic EJS tags, <%_ _%> whitespace slurping, print(), and <#escape-ejs>", async () => {
 		const state = defaultState();
-		state.mvu = { fame: 20, arousal: 60, 核心状态: { 快感值: [35, 100] } };
-		const ctx = createEjsContext({ state, userName: "韩立", charName: "南宫婉" });
+		state.mvu = { fame: 20, energy: 60, 核心状态: { 灵力值: [35, 100] } };
+		const ctx = createEjsContext({ state, userName: "沈舟", charName: "青梧" });
 
 		const tpl = [
 			"<%_ if (getvar('stat_data.fame', { defaults: 0 }) <= 30) { _%>",
@@ -35,7 +26,7 @@ describe("ST-Prompt-Template EJS Engine (Knife 1)", () => {
 			"<%_ } else { _%>",
 			"【声名远播】",
 			"<%_ } _%>",
-			"快感:<%= getvar('stat_data.核心状态.快感值[0]') %>",
+			"灵力:<%= getvar('stat_data.核心状态.灵力值[0]') %>",
 			"<% print('角色:' + charName) -%>",
 			"<#escape-ejs><%= not_evaluated %><#/escape-ejs>",
 		].join("\n");
@@ -43,8 +34,8 @@ describe("ST-Prompt-Template EJS Engine (Knife 1)", () => {
 		const out = await evalEjsTemplate(tpl, ctx);
 		assert.ok(out.includes("【初涉江湖】"));
 		assert.ok(!out.includes("【声名远播】"));
-		assert.ok(out.includes("快感:35"));
-		assert.ok(out.includes("角色:南宫婉"));
+		assert.ok(out.includes("灵力:35"));
+		assert.ok(out.includes("角色:青梧"));
 		assert.ok(out.includes("<%= not_evaluated %>"));
 	});
 
@@ -57,12 +48,12 @@ describe("ST-Prompt-Template EJS Engine (Knife 1)", () => {
 		assert.equal(out.trim(), "凝碧崖玉简、青竹蜂云剑");
 	});
 
-	it("pulls disabled worldinfo entries via await getwi(null, title) like 《道渊》v5.5.4", async () => {
+	it("pulls disabled worldinfo entries via await getwi(null, title)", async () => {
 		const entries: LorebookEntry[] = [
 			{
 				uid: 1,
-				comment: "玄天界介绍",
-				content: "玄天界乃下界三千大世界之一，主角：{{user}}。",
+				comment: "青云界介绍",
+				content: "青云界乃下界三千世界之一，主角：{{user}}。",
 				keys: [],
 				secondaryKeys: [],
 				constant: true,
@@ -72,7 +63,7 @@ describe("ST-Prompt-Template EJS Engine (Knife 1)", () => {
 			},
 			{
 				uid: 2,
-				comment: "玄天界灵石体系",
+				comment: "青云界灵石体系",
 				content: "下品、中品、上品、极品灵石（当前境界：<%= getvar('stat_data.realm', { defaults: '炼气期' }) %>）。",
 				keys: [],
 				secondaryKeys: [],
@@ -84,27 +75,27 @@ describe("ST-Prompt-Template EJS Engine (Knife 1)", () => {
 		];
 		const state = defaultState();
 		state.mvu = { realm: "筑基中期" };
-		const ctx = createEjsContext({ state, allLoreEntries: entries, userName: "林玄", charName: "道渊" });
-		const switchTpl = `<%- await getwi(null, '玄天界介绍') -%>\n<%- await getwi(null, '玄天界灵石体系') -%>`;
+		const ctx = createEjsContext({ state, allLoreEntries: entries, userName: "沈舟", charName: "青梧" });
+		const switchTpl = `<%- await getwi(null, '青云界介绍') -%>\n<%- await getwi(null, '青云界灵石体系') -%>`;
 		const out = await evalEjsTemplate(switchTpl, ctx);
-		assert.ok(out.includes("玄天界乃下界三千大世界之一，主角：林玄。"));
+		assert.ok(out.includes("青云界乃下界三千世界之一，主角：沈舟。"));
 		assert.ok(out.includes("当前境界：筑基中期"));
 		assert.ok(ctx.__inlinedLoreUids.has(1));
 		assert.ok(ctx.__inlinedLoreUids.has(2));
 	});
 
-	it("parses @@preprocessing, @@if, and @@endif like 《凡人修仙传_v1》 and 《母马之城》", async () => {
+	it("parses @@preprocessing, @@if, and @@endif conditional chapter blocks", async () => {
 		const controllerEntry = {
 			comment: "[系统]EJS·章节控制器",
-			content: `@@preprocessing\n<%_ globalThis._fanrenSeg = '011-020'; _%>\n参考章节段:<%= globalThis._fanrenSeg %>`,
+			content: `@@preprocessing\n<%_ globalThis._chapterSeg = '011-020'; _%>\n参考章节段:<%= globalThis._chapterSeg %>`,
 		};
 		const seg1 = {
-			comment: "[凡界篇剧情]第001-010章摘要",
-			content: `@@if (typeof globalThis !== 'undefined' && globalThis._fanrenSeg === '001-010')\n七玄门开篇剧情\n@@endif`,
+			comment: "[初卷剧情]第001-010章摘要",
+			content: `@@if (typeof globalThis !== 'undefined' && globalThis._chapterSeg === '001-010')\n山门开篇剧情\n@@endif`,
 		};
 		const seg2 = {
-			comment: "[凡界篇剧情]第011-020章摘要",
-			content: `@@if (typeof globalThis !== 'undefined' && globalThis._fanrenSeg === '011-020')\n墨大夫夺舍剧情\n@@endif`,
+			comment: "[初卷剧情]第011-020章摘要",
+			content: `@@if (typeof globalThis !== 'undefined' && globalThis._chapterSeg === '011-020')\n秘境试炼剧情\n@@endif`,
 		};
 
 		const ctx = createEjsContext({});
@@ -117,7 +108,7 @@ describe("ST-Prompt-Template EJS Engine (Knife 1)", () => {
 		const seg2Dec = parseWorldInfoDecorators(seg2);
 		assert.equal(await evaluateDecoratorIf(seg1Dec.ifConditions, ctx), false);
 		assert.equal(await evaluateDecoratorIf(seg2Dec.ifConditions, ctx), true);
-		assert.equal(seg2Dec.cleanContent.trim(), "墨大夫夺舍剧情");
+		assert.equal(seg2Dec.cleanContent.trim(), "秘境试炼剧情");
 	});
 
 	it("supports setvar, incvar, decvar, delvar, insvar, define, and injectPrompt/getPromptsInjected", async () => {
@@ -160,77 +151,101 @@ describe("ST-Prompt-Template EJS Engine (Knife 1)", () => {
 		assert.equal(getEjsSyntaxErrorInfo("<% if (a) { %>ok<% } %>"), "");
 	});
 
-	it("compiles real cards (《道渊》, 《凡人修仙传_v1》, 《世子很凶》) via compileStagePromptTemplates", async () => {
-		// 1. 《道渊》v5.2: 验证常驻开关 -内容控制开关-玄天界 (二选一) 通过 await getwi 拉取 9 大玄天界设定
-		if (existsSync("cards/《道渊》v5.2/v5.2_1.png")) {
-			const card = loadCardFile("cards/《道渊》v5.2/v5.2_1.png");
-			const state = defaultState();
-			const out = await compileStagePromptTemplates({
-				cardAgentsRaw: "",
-				cardAgentsRendered: "",
-				entries: card.book,
-				allLoreEntries: card.book,
-				state,
-				charName: card.name,
-				userName: "测试修士",
-			});
-			const switchEntry = out.entries.find((e) => e.comment?.includes("-内容控制开关-玄天界"));
-			assert.ok(switchEntry, "应找到玄天界开关条目");
-			assert.ok(!switchEntry!.content.includes("getwi("), "getwi 调用应已被编译展开");
-			assert.ok(switchEntry!.content.length > 1000, "应真实拉取出玄天界核心设定全文");
-		}
+	it("compiles conditional lorebooks, AGENTS templates, and dynamic entries via compileStagePromptTemplates", async () => {
+		const entries: LorebookEntry[] = [
+			{
+				uid: 1,
+				comment: "章节控制器",
+				content: "@@preprocessing\n<%_ globalThis._arc = 'arc1'; _%>",
+				keys: [],
+				secondaryKeys: [],
+				constant: true,
+				enabled: true,
+				selective: false,
+				order: 10,
+			},
+			{
+				uid: 2,
+				comment: "第一卷摘要",
+				content: "@@if (globalThis._arc === 'arc1')\n第一卷正文设定：青云山脉。\n@@endif",
+				keys: [],
+				secondaryKeys: [],
+				constant: true,
+				enabled: true,
+				selective: false,
+				order: 20,
+			},
+			{
+				uid: 3,
+				comment: "第二卷摘要",
+				content: "@@if (globalThis._arc === 'arc2')\n第二卷正文设定：沧海群岛。\n@@endif",
+				keys: [],
+				secondaryKeys: [],
+				constant: true,
+				enabled: true,
+				selective: false,
+				order: 30,
+			},
+			{
+				uid: 4,
+				comment: "隐藏档案",
+				content: "内部补充设定：主角当前境界 <%= getvar('stat_data.realm', { defaults: '筑基' }) %>",
+				keys: [],
+				secondaryKeys: [],
+				constant: false,
+				enabled: false,
+				selective: false,
+				order: 40,
+			},
+		];
+		const state = defaultState();
+		state.mvu = { realm: "金丹" };
+		const rawAgents = [
+			"# 角色档案",
+			"",
+			"## 第一卷摘要",
+			"@@if (globalThis._arc === 'arc1')",
+			"第一卷核心设定。",
+			"@@endif",
+			"",
+			"## 第二卷摘要",
+			"@@if (globalThis._arc === 'arc2')",
+			"第二卷核心设定。",
+			"@@endif",
+			"",
+			"## 态势",
+			"【时空经纬】：<%= getvar('stat_data.realm') %> · <%- await getwi(null, '隐藏档案') -%>",
+		].join("\n");
+		const out = await compileStagePromptTemplates({
+			cardAgentsRaw: rawAgents,
+			cardAgentsRendered: renderForModel(rawAgents),
+			entries,
+			allLoreEntries: entries,
+			state,
+			charName: "青梧",
+			userName: "沈舟",
+		});
+		assert.ok(!out.cardAgents.includes("<%"));
+		assert.ok(out.cardAgents.includes("第一卷核心设定"));
+		assert.ok(!out.cardAgents.includes("第二卷核心设定"));
+		assert.ok(out.cardAgents.includes("【时空经纬】：金丹 · 内部补充设定：主角当前境界 金丹"));
+		const kept = out.entries.filter((e) => e.enabled).map((e) => e.comment);
+		assert.ok(kept.includes("第一卷摘要"));
+		assert.ok(!kept.includes("第二卷摘要"));
 
-		// 2. 《凡人修仙传_v1》: 验证 126 个 @@if 章节段只保留当前 _fanrenSeg 对应的那 1 段
-		const fanrenPng = findCardPng("cards/凡人修仙传_v1");
-		if (fanrenPng && existsSync("cards/凡人修仙传_v1/AGENTS.md")) {
-			const card = loadCardFile(fanrenPng);
-			const agentsRaw = readFileSync("cards/凡人修仙传_v1/AGENTS.md", "utf8");
-			const state = seedMvuIfNeeded(defaultState(), card.book, "韩立", card.name, []) as WorldState;
-			const out = await compileStagePromptTemplates({
-				cardAgentsRaw: agentsRaw,
-				cardAgentsRendered: renderForModel(agentsRaw),
-				entries: card.book,
-				allLoreEntries: card.book,
-				state,
-				charName: card.name,
-				userName: "韩立",
-			});
-			assert.ok(!out.cardAgents.includes("@@if"), "编译后的 AGENTS.md 不应残留 @@if");
-			assert.ok(!out.cardAgents.includes("@@preprocessing"), "编译后的 AGENTS.md 不应残留 @@preprocessing");
-			assert.ok(!out.cardAgents.includes("<%"), "编译后的 AGENTS.md 不应残留未执行的 <% 标签");
-			// 原本 7300+ 行（含 126 个章节段），过滤后应仅剩当前 001-010 章节段，长度大幅收敛
-			assert.ok(out.cardAgents.length < agentsRaw.length * 0.25, `AGENTS.md 应大幅瘦身: ${out.cardAgents.length} vs ${agentsRaw.length}`);
-		}
-
-		// 3. 《世子很凶》: 验证 MVU 即时态势与动态人物 for 循环编译为干净中文态势
-		const shiziPng = findCardPng("cards/《世子很凶》");
-		if (shiziPng && existsSync("cards/《世子很凶》/AGENTS.md")) {
-			const card = loadCardFile(shiziPng);
-			const agentsRaw = readFileSync("cards/《世子很凶》/AGENTS.md", "utf8");
-			const state = seedMvuIfNeeded(defaultState(), card.book, "赵景行", card.name, []) as WorldState;
-			const out = await compileStagePromptTemplates({
-				cardAgentsRaw: agentsRaw,
-				cardAgentsRendered: renderForModel(agentsRaw),
-				entries: card.book,
-				allLoreEntries: card.book,
-				state,
-				charName: card.name,
-				userName: "赵景行",
-			});
-			assert.ok(!out.cardAgents.includes("<%"), "《世子很凶》AGENTS.md 不应残留 <% 代码");
-			assert.ok(out.cardAgents.includes("【时空经纬】："), "应输出编译后的【时空经纬】态势");
-		}
-
-		// 4. 《女尊宗门》: 验证绿灯人物条目在 lorebook_search 检索时动态编译境界字段
-		const nvzunPng = findCardPng("cards/在表面光鲜尊贵实际全是宗主母畜的女尊宗门被当成了被宗主夺舍的新主人，我能扮演好主人并活下去吗？！");
-		if (nvzunPng) {
-			const card = loadCardFile(nvzunPng);
-			const state = seedMvuIfNeeded(defaultState(), card.book, "谢普", card.name, []) as WorldState;
-			const ejsCtx = createEjsContext({ state, allLoreEntries: card.book, charName: card.name, userName: "谢普" });
-			const yewanjun = card.book.find((e) => e.comment === "叶婉君简介");
-			assert.ok(yewanjun, "应找到叶婉君简介条目");
-			const compiled = await evalLoreEntryContent(yewanjun!, ejsCtx, { charName: card.name, userName: "谢普" });
-			assert.ok(!compiled.includes("<%"), "检索返回的叶婉君简介不应残留 <% 标签");
-		}
+		const dynEntry: LorebookEntry = {
+			uid: 5,
+			comment: "NPC简介",
+			content: "当前状态：<%= getvar('stat_data.realm') %>",
+			keys: ["NPC"],
+			secondaryKeys: [],
+			constant: false,
+			enabled: true,
+			selective: false,
+			order: 50,
+		};
+		const ejsCtx = createEjsContext({ state, allLoreEntries: entries, charName: "青梧", userName: "沈舟" });
+		const compiled = await evalLoreEntryContent(dynEntry, ejsCtx, { charName: "青梧", userName: "沈舟" });
+		assert.equal(compiled.trim(), "当前状态：金丹");
 	});
 });

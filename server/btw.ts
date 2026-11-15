@@ -31,7 +31,10 @@ import {
 	type SandboxGrants,
 } from "../src/sandbox.ts";
 import { prependToFirstUser } from "../src/stage/btw.ts";
-import type { StageEngine } from "../src/stage/engine.ts";
+import type { StageEngine, StageStreamFn } from "../src/stage/engine.ts";
+import { loadStageConfig } from "../src/stage/materials.ts";
+import { applyRelayHeaders, applyRelayPayload, CARRIER_TOOL_NAME, type RelayModelLike } from "../src/stage/provider-relay.ts";
+import { wrapRelayStreamFn, type AttemptRelayOverlay } from "../src/stage/provider-relay-stream.ts";
 import type { WireBtwMsg } from "./wire.ts";
 
 export interface BtwRunnerDeps {
@@ -194,6 +197,8 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 	let activeKit: ReturnType<StageEngine["btwToolkit"]> | null = null;
 	let activeAssembly: ReturnType<StageEngine["btwAssembly"]> | null = null;
 	let activeToolNames: string[] = [];
+	let currentUserTurnText = "";
+	let btwRelayOverlay: AttemptRelayOverlay = {};
 	let lastError: string | undefined;
 	let transcript: WireBtwMsg[] = [];
 	let liveReply: WireBtwMsg | null = null;
@@ -272,13 +277,33 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 				},
 			});
 			activeKit = kit;
-			for (const tool of kit.tools) {
+			const policy = loadStageConfig(deps.cwd).relayPolicy;
+			const allTools =
+				policy?.contextPackMode === "tool-desc"
+					? [
+							{
+								name: CARRIER_TOOL_NAME,
+								description: "本轮设定与历史参考资料（静态只读 JSON 载体，无需调用）。", // i18n-ignore：模型工具描述
+								parameters: {
+									type: "object",
+									properties: { ack: { type: "string", description: "可选只读占位字段，本工具无需调用" } }, // i18n-ignore：模型工具参数
+								},
+							},
+							...kit.tools,
+						]
+					: kit.tools;
+			for (const tool of allTools) {
 				pi.registerTool({
 					...tool,
 					label: tool.name,
 					parameters: tool.parameters as never,
 					executionMode: "sequential",
 					async execute(id, input, signal) {
+						if (tool.name === CARRIER_TOOL_NAME) {
+							return {
+								content: [{ type: "text", text: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续回答当前问题。" }], // i18n-ignore：模型回执
+							};
+						}
 						const cur = activeKit ?? kit;
 						const result = await cur.execute(tool.name, id, input as Record<string, unknown>, signal);
 						if (result.isError) toolErrors.add(id);
@@ -290,7 +315,7 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 					},
 				});
 			}
-			activeToolNames = [...new Set([...kit.tools.map((x) => x.name), ...kit.nativeNames])];
+			activeToolNames = [...new Set([...allTools.map((x) => x.name), ...kit.nativeNames])];
 			if (applyActive) pi.setActiveTools(activeToolNames);
 		};
 
@@ -311,7 +336,28 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 				return { messages: prependToFirstUser(event.messages, stageBlock) as typeof event.messages };
 			});
 
+			pi.on("before_provider_headers", (event) => {
+				const policy = loadStageConfig(deps.cwd).relayPolicy;
+				applyRelayHeaders(event.headers, policy);
+			});
+
+			pi.on("before_provider_request", (event, ctx) => {
+				if (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) return undefined;
+				const policy = loadStageConfig(deps.cwd).relayPolicy;
+				const reqModel = (ctx.model ?? session?.model) as RelayModelLike | undefined;
+				return applyRelayPayload(event.payload, reqModel, {
+					policy,
+					forcedToolChoice: btwRelayOverlay.forcedToolChoice,
+					overrideShieldMode: btwRelayOverlay.overrideShieldMode,
+					overrideContextPackMode: btwRelayOverlay.overrideContextPackMode,
+					disableOpenAiSafetyField: btwRelayOverlay.disableOpenAiSafetyField,
+					currentTurnUserText: currentUserTurnText,
+					shieldSeed: btwRelayOverlay.shieldSeed,
+				});
+			});
+
 			pi.on("tool_call", async (event) => {
+				if (event.toolName === CARRIER_TOOL_NAME) return undefined;
 				if (!activeToolNames.includes(event.toolName)) {
 					return { block: true, reason: "此工具在旁路助手中不可用。" }; // i18n-ignore：模型回执
 				}
@@ -543,6 +589,11 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 			busy = true;
 			lastError = undefined;
 			activeAbort = new AbortController();
+			currentUserTurnText = trimmed;
+			const turnShieldSeed = (Math.floor(Math.random() * 0x7fffffff) + 1) >>> 0;
+			btwRelayOverlay = { shieldSeed: turnShieldSeed };
+			let wrappedHolder: { agent?: { streamFunction?: StageStreamFn } } | undefined;
+			let origStreamFn: StageStreamFn | undefined;
 			try {
 				const s = await ensureSession(false);
 				transcript.push({ role: "user", text: trimmed });
@@ -555,6 +606,20 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 				}
 				if (s.thinkingLevel !== thinkingLevel) {
 					s.setThinkingLevel(thinkingLevel);
+				}
+				const agentHolder = s as unknown as { agent?: { streamFunction?: StageStreamFn } };
+				if (agentHolder.agent?.streamFunction) {
+					origStreamFn = agentHolder.agent.streamFunction;
+					wrappedHolder = agentHolder;
+					agentHolder.agent.streamFunction = wrapRelayStreamFn(origStreamFn, {
+						policy: loadStageConfig(deps.cwd).relayPolicy,
+						isAgentTurn: true,
+						turnShieldSeed,
+						setAttemptOverlay: (overlay) => {
+							btwRelayOverlay = overlay;
+						},
+						onRecoveryActivity: (detail) => recordTool(detail),
+					});
 				}
 				await s.prompt(trimmed, { expandPromptTemplates: false });
 				if (liveReply?.tools?.length) {
@@ -583,6 +648,11 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 				deps.events?.onEnd?.(info);
 				return info;
 			} finally {
+				if (wrappedHolder?.agent && origStreamFn) {
+					wrappedHolder.agent.streamFunction = origStreamFn;
+				}
+				btwRelayOverlay = {};
+				currentUserTurnText = "";
 				liveReply = null;
 				busy = false;
 				activeAbort = null;

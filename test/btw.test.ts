@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +13,7 @@ import {
 	SettingsManager,
 	type AgentSession,
 } from "@liyuan/agent-runtime";
-import { registerFauxProvider, streamSimple } from "@liyuan/ai/compat";
+import { getModel, registerFauxProvider, streamSimple } from "@liyuan/ai/compat";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@liyuan/ai/providers/faux";
 
 import roleplayExtension from "../.liyuan/extensions/roleplay.ts";
@@ -528,6 +529,120 @@ test("btw 全链路：读干净台前视野 + 多轮改卡写记忆 + 叉掉即�
 		}
 	} finally {
 		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("createBtwRunner：旁路助手接入发包中转，真 HTTP 遇输入拦截 400 自动切 context-pack-scramble 并剥离台前剧情视野", async () => {
+	const zwsp = String.fromCharCode(0x200b);
+	const cwd = mkdtempSync(join(tmpdir(), "liyuan-btw-relay-"));
+	const requests: Array<{
+		safety_settings?: unknown;
+		messages?: Array<{ role?: string; content?: unknown }>;
+		tools?: Array<{ function?: { name?: string; description?: string } }>;
+	}> = [];
+	const srv = createServer(async (req, res) => {
+		let raw = "";
+		for await (const chunk of req) raw += chunk;
+		requests.push(JSON.parse(raw));
+		if (requests.length === 1) {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: { message: "Input rejected: PROHIBITED_CONTENT" } }));
+			return;
+		}
+		res.writeHead(200, { "Content-Type": "text/event-stream" });
+		const reply = "已结合台前剧情和角色设定为您拆解下一段剧情走向。".repeat(12);
+		res.write(`data: ${JSON.stringify({ id: "b1", object: "chat.completion.chunk", created: 1, model: "gemini-2.5-pro", choices: [{ index: 0, delta: { role: "assistant", content: reply }, finish_reason: null }] })}\n\n`);
+		res.write(`data: ${JSON.stringify({ id: "b1", object: "chat.completion.chunk", created: 1, model: "gemini-2.5-pro", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+		res.end("data: [DONE]\n\n");
+	});
+	await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+	try {
+		mkdirSync(join(cwd, "cards", "云澜"), { recursive: true });
+		writeFileSync(
+			join(cwd, "cards", "云澜", "card.json"),
+			JSON.stringify({ data: { name: "云澜", description: "包含特定禁忌设定正文的角色卡背景。", first_mes: "夜色微凉。" } }),
+		);
+		writeFileSync(
+			join(cwd, "liyuan.config.json"),
+			JSON.stringify({
+				card: "cards/云澜/card.json",
+				userName: "沈舟",
+				relayPolicy: { contextPackMode: "auto", googleSafetyOnOpenAi: true, refusalRetry: true },
+			}),
+		);
+		const port = (srv.address() as { port: number }).port;
+		const model = {
+			...getModel("openai", "gpt-4o-mini")!,
+			api: "openai-completions" as const,
+			provider: "aistudio",
+			id: "gemini-2.5-pro",
+			baseUrl: `http://127.0.0.1:${port}/v1`,
+		};
+		const agentDir = join(cwd, ".pi-agent");
+		mkdirSync(agentDir, { recursive: true });
+		const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null });
+		modelRuntime.registerProvider("aistudio", { api: model.api, baseUrl: model.baseUrl, apiKey: "test-key", models: [model as never] });
+		await modelRuntime.setRuntimeApiKey("aistudio", "test-key");
+		const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
+		const sm = SessionManager.inMemory(cwd);
+		const loader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			settingsManager,
+			noExtensions: true,
+			noSkills: true,
+			noPromptTemplates: true,
+			noThemes: true,
+			noContextFiles: true,
+			extensionFactories: [roleplayExtension],
+		});
+		await loader.reload();
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			modelRuntime,
+			settingsManager,
+			resourceLoader: loader,
+			sessionManager: sm,
+			model: model as never,
+			thinkingLevel: "off",
+			noTools: "builtin",
+		});
+		await session.bindExtensions({ mode: "rpc", onError: () => {} });
+		const stage = new StageEngine({
+			cwd,
+			getSession: () => session as never,
+			getModel: () => model as never,
+			getAuth: async () => ({ apiKey: "test-key" }),
+			getThinking: () => "off",
+			sideStreamFn: streamSimple as unknown as StageStreamFn,
+		});
+		const btw = createBtwRunner({
+			cwd,
+			agentDir,
+			stage,
+			getServices: () => ({ modelRuntime, settingsManager }),
+			getModelState: () => ({ model: model as never, thinkingLevel: "off" }),
+		});
+		try {
+			const res = await btw.prompt("帮我梳理接下来云澜如何推进这条支线剧情");
+			assert.equal(res.error, undefined);
+			assert.equal(requests.length, 2, "旁路助手遇输入 400 后应直跳 context-pack-scramble 恢复");
+			assert.ok(Array.isArray(requests[0]?.safety_settings), "旁路助手第 1 跳也应带上 safety_settings");
+			const req2Msgs = JSON.stringify(requests[1]?.messages ?? []);
+			const req2Carrier = requests[1]?.tools?.[0]?.function;
+			assert.equal(req2Carrier?.name, "liyuan_context_reference", "第 2 跳应将助手系统设定与台前剧情视野打包进载体工具");
+			assert.ok(!req2Msgs.includes("禁忌设定正文"), "第 2 跳 messages 不再含敏感卡背景");
+			assert.ok(!req2Msgs.includes("当前台前剧情"), "第 2 跳 messages 已将台前视野 stageBlock 迁入载体工具");
+			assert.ok(req2Msgs.includes(zwsp), "第 2 跳助手提问散文已完成 U+200B 打断");
+		} finally {
+			await btw.close();
+			await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			session.dispose();
+		}
+	} finally {
+		await new Promise<void>((r) => srv.close(() => r()));
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });

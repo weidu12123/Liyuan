@@ -19,11 +19,12 @@ import type { StageTool } from "./tools.ts";
 const shippedAgentRules = (): string => readFileSync(new URL("../../assets/AGENT_APPEND_SYSTEM.md", import.meta.url), "utf8");
 
 export function agentSystemPrompt(o: { cwd: string; cardPath: string; chatDir?: string | null; storyDir: string; userRules?: UserRules; chatMemoryIndex?: string; cardAgents?: string; macro: MacroContext }): string {
-	const sections = [(o.userRules?.agent?.trim() || shippedAgentRules()).trim()];
-	if (o.userRules?.card?.trim()) sections.push(o.userRules.card.trim());
-	if (o.userRules?.chat?.trim()) sections.push(o.userRules.chat.trim());
-	if (o.chatMemoryIndex?.trim()) sections.push(applyMacros(o.chatMemoryIndex.trim(), o.macro));
-	if (o.cardAgents?.trim()) sections.push(applyMacros(o.cardAgents.trim(), o.macro));
+	const m = (s: string) => applyMacros(s, o.macro);
+	const sections = [m((o.userRules?.agent?.trim() || shippedAgentRules()).trim())];
+	if (o.userRules?.card?.trim()) sections.push(m(o.userRules.card.trim()));
+	if (o.userRules?.chat?.trim()) sections.push(m(o.userRules.chat.trim()));
+	if (o.chatMemoryIndex?.trim()) sections.push(m(o.chatMemoryIndex.trim()));
+	if (o.cardAgents?.trim()) sections.push(m(o.cardAgents.trim()));
 	const envLines = o.chatDir
 		? [`当前项目资产目录（工作目录）：${o.chatDir}`, `稿子目录：${o.storyDir}`]
 		: [`工作目录：${o.cwd}`, `稿子目录：${o.storyDir}`];

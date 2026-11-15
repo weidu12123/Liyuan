@@ -222,7 +222,9 @@ function inputStamp(cwd: string, config: RpConfig): string {
 		parts.push(fileStamp(abs), fileStamp(declarationPathFor(abs)));
 	}
 	parts.push(fileStamp(join(cwd, ".liyuan", "preset-override.json")));
-	if (config.preset) parts.push(fileStamp(resolvePath(cwd, config.preset)));
+	if (config.preset) {
+		parts.push(fileStamp(resolvePath(cwd, config.preset)));
+	}
 	// 用户规矩两级文件（刀2）：改完下一拍即生效，靠的就是这两个指纹
 	parts.push(fileStamp(globalRulesPath()));
 	parts.push(fileStamp(agentRulesPath()));
@@ -352,6 +354,7 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		addHistoryStripTags(extractHistoryStripTagsFromRegexScripts(allRegexScripts));
 	}
 
+	const rawRules = readUserRules(dirname(cardAbs));
 	const materials: StageMaterials = {
 		config,
 		card,
@@ -364,7 +367,12 @@ export function loadStageMaterials(cwd: string): StageMaterials {
 		protocolDrops,
 		// 条目引擎只作用送模面：readUserRules 给原文（REST/编辑器往返要无损），
 		// 这里渲染成开启条目＋零注释的送模文本
-		userRules: ((r) => ({ global: renderForModel(r.global), agent: renderForModel(r.agent), btw: renderForModel(r.btw ?? ""), card: renderForModel(r.card) }))(readUserRules(dirname(cardAbs))),
+		userRules: {
+			global: renderForModel(rawRules.global),
+			agent: renderForModel(rawRules.agent),
+			btw: renderForModel(rawRules.btw ?? ""),
+			card: renderForModel(rawRules.card),
+		},
 		cardAgents,
 		// 送模侧作者正则：预设 + 卡（与 cardfront 显示侧同源；promptOnly/破坏性规则）
 		promptRules: promptRules(allRegexScripts),

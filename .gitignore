@@ -96,6 +96,7 @@ scripts/_*
 # dev scratch）——两处用同一套约定，别再各自点名。锚定根级 `/_*` 而非 `_*`，
 # 否则会波及已入库的 scripts/_privacy_scan.py。
 /_*
+/liyuan-design*
 /scratch/
 /summaries/
 /output/

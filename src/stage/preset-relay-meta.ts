@@ -4,7 +4,6 @@
  * 读取协议级字段：
  * - `squash_system_messages`（合并相邻 system 消息）
  * - `reasoning_effort`（思考配额透传）
- * - `assistant_prefill`（顶层末尾预填文本）
  * - `extensions.tavern_helper.scripts[].data.chat_history`（数据驱动的消息压平配置）
  */
 
@@ -25,7 +24,6 @@ export interface ChatHistorySquashRule {
 export interface PresetRelayMeta {
 	squashSystemMessages: boolean;
 	reasoningEffort?: string;
-	rawAssistantPrefill?: string;
 	chatHistorySquash?: ChatHistorySquashRule;
 }
 
@@ -68,13 +66,12 @@ export function extractPresetRelayMeta(presetDoc: PresetDoc | null): PresetRelay
 	const squashSystemMessages = raw.squash_system_messages === true;
 	const rawEffort = typeof raw.reasoning_effort === "string" ? raw.reasoning_effort.trim() : "";
 	const reasoningEffort = rawEffort && rawEffort.toLowerCase() !== "auto" ? rawEffort : undefined;
-	const prefillRaw = typeof raw.assistant_prefill === "string" ? raw.assistant_prefill.trim() : "";
 	const chatHistorySquash = parseChatHistorySquash(raw);
 
 	return {
 		squashSystemMessages,
 		...(reasoningEffort ? { reasoningEffort } : {}),
-		...(prefillRaw ? { rawAssistantPrefill: prefillRaw } : {}),
 		...(chatHistorySquash ? { chatHistorySquash } : {}),
 	};
 }
+

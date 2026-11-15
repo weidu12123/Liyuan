@@ -515,21 +515,21 @@ test("全集核销：内置原版 lodash / zod v4 / YAML、JS-Slash-Runner 4.12.
 	const schema = win.z.object({
 		状态: win.z
 			.object({
-				处女状态: win.z.boolean().prefault(true),
-				堕落值: win.z.coerce.number().prefault(55),
-				_堕落阶段: win.z.number().prefault(1),
+				护盾开启: win.z.boolean().prefault(true),
+				灵力值: win.z.coerce.number().prefault(55),
+				_境界阶段: win.z.number().prefault(1),
 			})
 			.transform((data: any) => {
-				data._堕落阶段 = data.堕落值 <= 40 ? 1 : data.堕落值 <= 80 ? 2 : 3;
+				data._境界阶段 = data.灵力值 <= 40 ? 1 : data.灵力值 <= 80 ? 2 : 3;
 				return data;
 			})
 			.prefault({}),
 	});
 	win.registerMvuSchema(schema);
 	const afterSchema = win.getAllVariables();
-	assert.equal(afterSchema.stat_data.状态.处女状态, true);
-	assert.equal(afterSchema.stat_data.状态.堕落值, 55);
-	assert.equal(afterSchema.stat_data.状态._堕落阶段, 2);
+	assert.equal(afterSchema.stat_data.状态.护盾开启, true);
+	assert.equal(afterSchema.stat_data.状态.灵力值, 55);
+	assert.equal(afterSchema.stat_data.状态._境界阶段, 2);
 
 	// 4. Mvu.events 真实常量与方法
 	assert.equal(win.Mvu.events.VARIABLE_INITIALIZED, "mag_variable_initialized");
@@ -718,18 +718,18 @@ test("全集核销：内置原版 lodash / zod v4 / YAML、JS-Slash-Runner 4.12.
 
 	// 7. Mvu.parseMessage 真实解析 _.set / _.add / _.insert / _.remove 与 JSONPatch
 	const parsedMvu = await win.Mvu.parseMessage(
-		`<UpdateVariable>\n_.set('状态.地点', '仙界');\n_.add('状态.堕落值', 15);\n</UpdateVariable>`,
-		{ stat_data: { 状态: { 地点: "玄天界", 堕落值: 55 } } },
+		`<UpdateVariable>\n_.set('状态.地点', '仙界');\n_.add('状态.灵力值', 15);\n</UpdateVariable>`,
+		{ stat_data: { 状态: { 地点: "玄天界", 灵力值: 55 } } },
 	);
 	assert.equal(parsedMvu.stat_data.状态.地点, "仙界");
-	assert.equal(parsedMvu.stat_data.状态.堕落值, 70);
+	assert.equal(parsedMvu.stat_data.状态.灵力值, 70);
 
 	const parsedJsonPatch = await win.Mvu.parseMessage(
-		`<JSONPatch>[{"op":"replace","path":"/状态/地点","value":"紫霄宫"},{"op":"delta","path":"/状态/堕落值","value":10}]</JSONPatch>`,
+		`<JSONPatch>[{"op":"replace","path":"/状态/地点","value":"紫霄宫"},{"op":"delta","path":"/状态/灵力值","value":10}]</JSONPatch>`,
 		parsedMvu,
 	);
 	assert.equal(parsedJsonPatch.stat_data.状态.地点, "紫霄宫");
-	assert.equal(parsedJsonPatch.stat_data.状态.堕落值, 80);
+	assert.equal(parsedJsonPatch.stat_data.状态.灵力值, 80);
 
 	// 8. 多脚本事件监听回调内 getScriptId() 保持注册时的脚本身份（防异步串台）
 	const seenSids: string[] = [];
@@ -914,7 +914,7 @@ test("禁用第5块：预设帧只保留只读查询，全面禁止写预设/预
 			regex_scripts: [
 				{
 					id: "r1",
-					scriptName: "TGbreak V2.1.6 校验",
+					scriptName: "Preset-A 校验",
 					findRegex: "/foo/g",
 					replaceString: "bar",
 					trimStrings: [],
@@ -942,8 +942,8 @@ test("禁用第5块：预设帧只保留只读查询，全面禁止写预设/预
 			sessionId: "sess-1",
 			mode: "roleplay",
 			streaming: false,
-			presetName: "TGbreak😺V2.1.6",
-			presetNames: ["TGbreak😺V2.1.6", "梦鲸思客V5-1030-exp"],
+			presetName: "Preset-A",
+			presetNames: ["Preset-A", "Preset-B"],
 			presetRaw,
 			worldbooks: [],
 			displayRules: [],
@@ -1002,8 +1002,8 @@ test("禁用第5块：预设帧只保留只读查询，全面禁止写预设/预
 	assert.equal(win.getVariables({ type: "preset" }).wave_mode, "novel");
 	assert.equal(win.getVariables({ type: "preset" }).preset_flag, "on");
 
-	assert.equal(win.getLoadedPresetName(), "TGbreak😺V2.1.6");
-	assert.deepEqual([...win.getPresetNames()], ["in_use", "TGbreak😺V2.1.6", "梦鲸思客V5-1030-exp"]);
+	assert.equal(win.getLoadedPresetName(), "Preset-A");
+	assert.deepEqual([...win.getPresetNames()], ["in_use", "Preset-A", "Preset-B"]);
 	const pView = win.getPreset("in_use");
 	assert.equal(pView.settings.temperature, 0.88);
 	assert.equal(pView.prompts.length, 4);
@@ -1012,11 +1012,11 @@ test("禁用第5块：预设帧只保留只读查询，全面禁止写预设/预
 		depth: 2,
 		order: 333,
 	});
-	assert.equal(pView.extensions.regex_scripts[0].script_name, "TGbreak V2.1.6 校验");
+	assert.equal(pView.extensions.regex_scripts[0].script_name, "Preset-A 校验");
 
 	const presetRegexes = win.getTavernRegexes({ type: "preset", name: "in_use" });
 	assert.equal(presetRegexes.length, 1);
-	assert.equal(presetRegexes[0].script_name, "TGbreak V2.1.6 校验");
+	assert.equal(presetRegexes[0].script_name, "Preset-A 校验");
 	assert.equal(presetRegexes[0].enabled, true);
 
 	const reasoningMgr = win.SillyTavern.getContext().getPresetManager("reasoning");
@@ -1049,10 +1049,10 @@ test("禁用第5块：预设帧只保留只读查询，全面禁止写预设/预
 	});
 	await win.replacePreset("in_use", { ...pView, prompts: [] });
 	await win.setPreset("in_use", { settings: { temperature: 0.1 } });
-	assert.equal(await win.loadPreset("梦鲸思客V5-1030-exp"), false);
+	assert.equal(await win.loadPreset("Preset-B"), false);
 	assert.equal(await win.createPreset("新预设", pView), false);
-	assert.equal(await win.deletePreset("梦鲸思客V5-1030-exp"), false);
-	assert.equal(await win.renamePreset("TGbreak😺V2.1.6", "新名"), false);
+	assert.equal(await win.deletePreset("Preset-B"), false);
+	assert.equal(await win.renamePreset("Preset-A", "新名"), false);
 	await win.replaceTavernRegexes([], { type: "preset" });
 
 	stCtx1.chatCompletionSettings.prompts[1].content = "试图偷偷篡改";

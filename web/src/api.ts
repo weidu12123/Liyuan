@@ -516,11 +516,23 @@ export interface PresetFileInfo {
 }
 
 export interface RelayPolicyView {
-	prefillMode?: "auto" | "on" | "off";
-	antiRouteShield?: "off" | "head" | "deep";
+	toolOutputMode?: "auto" | "on" | "off";
+	contextPackMode?: "off" | "auto" | "tool-desc";
+	antiRouteShield?: "off" | "head" | "deep" | "scramble";
 	googleSafetyOff?: boolean;
+	googleSafetyOnOpenAi?: boolean;
+	jitterSampling?: boolean;
 	squashSystemMessages?: boolean;
 	refusalRetry?: boolean;
+}
+
+export interface RelayRulesResponse {
+	path: string;
+	content: string;
+	rules: {
+		splits: string[];
+		replacements: Array<{ from: string; to: string }>;
+	};
 }
 
 export interface PresetsResponse {

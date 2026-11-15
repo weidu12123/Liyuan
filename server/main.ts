@@ -56,6 +56,7 @@ import { authorScriptManifest, extractAuthorScripts } from "../src/authorScripts
 import { ScriptApiService, type ScriptMessageItem, type ScriptTargetDescriptor } from "../src/script-api.ts";
 import { buildGreeting } from "../src/greeting.ts";
 import { StageEngine, type AssistantMsgLike, type StageModelLike, type StageStreamFn } from "../src/stage/engine.ts";
+import { wrapSideRelayStreamFn } from "../src/stage/provider-relay-stream.ts";
 import { displayConversationBranch, storyBranch, messageMode } from "../src/conversation-mode.ts";
 import { cardProjectOperation, previewCardProject } from "../src/card-authoring.ts";
 import { buildCardPreviewRequest, CardPreviewHub } from "./card-preview.ts";
@@ -80,6 +81,7 @@ import {
 	takeAgentMergeLog,
 } from "../src/paths.ts";
 import { seedBashDenylist } from "../src/bash-denylist.ts";
+import { seedRelayRules } from "../src/relay-rules.ts";
 import { applyPatch, loadState, saveState } from "../src/state.ts";
 import { DEFAULT_CONFIG, type RpConfig, type WorldState } from "../src/types.ts";
 import {
@@ -138,6 +140,7 @@ import {
 	thinkingLevelOfEntry,
 	writeMaybeGzip,
 	type CurrentModelInfo,
+	type PresetSyncResult,
 	type RestHost,
 } from "./rest.ts";
 
@@ -197,6 +200,7 @@ const productRoot = process.env.LIYUAN_PRODUCT_ROOT ?? cwd;
 // assets/SYSTEM.md 落到 <agentDir>/SYSTEM.md；已存在不覆盖——改了就是用户的。
 seedStageSystemPrompt(productRoot, agentHome);
 seedBashDenylist(agentHome);
+seedRelayRules(agentHome);
 seedBuiltinSkills(cwd);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const PORT = Number(process.env.PORT ?? 7620);
@@ -1539,6 +1543,11 @@ const btwEntryOf = (): { model: StageModelLike; thinking?: string; label?: strin
  * 跨会话记忆同步共用这一条——同 StageEngine.#sideText 的调用形状。
  * 走哪条模型由调用方给（剧情模型，或 sideEntryOf 解出的旁路条目）。
  */
+const sideStreamWithRelay = wrapSideRelayStreamFn(
+	((m, c, o) => session.modelRuntime.streamSimple(m as never, c as never, o as never)) as unknown as StageStreamFn,
+	{ getPolicy: () => loadConfig(cwd).relayPolicy },
+);
+
 const sideTextOnce = async (
 	model: StageModelLike | undefined,
 	systemPrompt: string,
@@ -1547,8 +1556,8 @@ const sideTextOnce = async (
 ): Promise<string | { error: string }> => {
 	if (!model) return { error: t("无可用模型") };
 	try {
-		const s = session.modelRuntime.streamSimple(
-			model as never,
+		const s = sideStreamWithRelay(
+			model,
 			{ systemPrompt, messages: [{ role: "user", content: [{ type: "text", text: userText }], timestamp: Date.now() }] },
 			{ maxTokens: opts?.maxTokens ?? 4096, reasoning: (opts?.reasoning ?? "off") as never, signal: opts?.signal },
 		);
@@ -1920,8 +1929,9 @@ const restHost: RestHost = {
 		resyncAll();
 	},
 	/** 身份/配置/世界书挂载等：走扩展 /rprefresh，不整会话 reload */
-	async softRefreshConfig() {
-		syncCardFilesNow();
+	async softRefreshConfig(opts?: { reprocessPreset?: boolean }) {
+		// 预设装载态同步（装载/卸载/拨开关/保存/还原/重新装载都经这里）：先把（预设）条目写进卡文件，再刷新装配
+		await syncPresetNow(opts?.reprocessPreset === true);
 		if (session.isStreaming) {
 			// 流式中改设定：排队到本轮结束，避免与 prompt 抢通道
 			void session
@@ -1946,7 +1956,10 @@ const restHost: RestHost = {
 	async switchToCard(opts?: { switchSession?: boolean }) {
 		await btw?.syncProject();
 		refreshNamesFromConfig(); // rest.ts 已写盘新 card，先让会话过滤对准新卡
-		syncCardFilesNow();
+		// 换卡：装载中的预设要按新卡（宏按卡求值）重新落条目；声明全局留档（assets/presets/.liyuan/），
+		// 换卡不再重复问模型。后台跑，不挡切会话：链条自带串行（presetSyncChain）与跑完通知；
+		// 开场白来自卡本体，不吃预设条目，紧接着的第一拍万一赶在转译落盘前，下一拍现读即生效。
+		void syncPresetNow();
 		// 清卡缓存：换卡后列表必须按新 cardPath 重读 rp-card
 		cardCache.clear();
 		const frame = await listSessions();
@@ -2339,17 +2352,62 @@ const restHost: RestHost = {
 };
 
 /**
- * 配置刷新时的卡文件对账：清理旧预设残留条目并同步世界书常驻镜像。
+ * 预设装载态同步（rest.ts syncPresetTranslation）：装载即转译、改开关即转译、卸载即剥净。
+ * 失败只通知不抛出——配置刷新不能因为旁路模型断供而卡死；产物有变/首次声明才提示。
  */
-const syncCardFilesNow = (): void => {
-	try {
-		const { lore } = syncCardFiles(cwd);
-		if (lore.state === "written") {
-			broadcast({ type: "notify", level: "info", text: t("卡档案已同步世界书常驻条目：{n} 条", { n: lore.entries }) });
+let presetSyncChain: Promise<PresetSyncResult | undefined> = Promise.resolve(undefined);
+const syncPresetNow = (reprocess = false): Promise<PresetSyncResult | undefined> => {
+	presetSyncChain = presetSyncChain.then(async () => {
+		try {
+			const cur = sideEntryOf()?.model ?? restHost.listModels().current;
+			const { preset: r, lore } = await syncCardFiles(
+				cwd,
+				{
+					runSideText: restHost.runSideText,
+					modelLabel: cur ? `${cur.provider}/${cur.id}` : undefined,
+				},
+				{ reprocess },
+			);
+			if (lore.state === "written") {
+				broadcast({ type: "notify", level: "info", text: t("卡档案已同步世界书常驻条目：{n} 条", { n: lore.entries }) });
+			}
+			if (r.declareError) {
+				broadcast({
+					type: "notify",
+					level: "error",
+					text: t("预设「{preset}」声明失败（{pending} 段先按保守方式全部保留）：{error}", {
+						preset: r.preset,
+						pending: r.pending,
+						error: r.declareError,
+					}),
+				});
+			}
+			if (r.state === "written" && r.preset) {
+				broadcast({
+					type: "notify",
+					level: "info",
+					text: t("预设「{preset}」已转译：活动条目 {active} 条、停用 {disabled} 条{declared}", {
+						preset: r.preset,
+						active: r.active,
+						disabled: r.disabled,
+						declared: r.declared ? t("（本次声明 {n} 段）", { n: r.declared }) : "",
+					}),
+				});
+			}
+			if (r.state === "stripped") {
+				broadcast({ type: "notify", level: "info", text: t("预设已卸载：卡文件里的（预设）条目已移除") });
+			}
+			return r;
+		} catch (err) {
+			broadcast({
+				type: "notify",
+				level: "error",
+				text: t("预设同步失败：{msg}", { msg: err instanceof Error ? err.message : String(err) }),
+			});
+			return undefined;
 		}
-	} catch (err) {
-		broadcast({ type: "notify", level: "error", text: t("卡档案同步失败：{msg}", { msg: err instanceof Error ? err.message : String(err) }) });
-	}
+	});
+	return presetSyncChain;
 };
 
 // 启动时：liyuan.agent.json → models.json，重绑模型 + 应用思考档（配置 → 当前生效）
@@ -3115,8 +3173,8 @@ const runScriptModelStream = async (
 	opts: { maxTokens?: number; reasoning?: string; signal: AbortSignal; onDelta?: (kind: "text" | "thinking", delta: string) => void },
 ): Promise<{ text: string; thinking: string; model: string; stopReason?: string }> => {
 	if (!model) throw new Error(t("无可用模型"));
-	const stream = session.modelRuntime.streamSimple(
-		model as never,
+	const stream = sideStreamWithRelay(
+		model,
 		context as never,
 		{
 			maxTokens: opts.maxTokens ?? 4096,
@@ -3810,6 +3868,60 @@ const handlePrompt = async (text: string) => {
 			return;
 		}
 		cli?.out("[assets] 用法：/assets [list | read <相对路径.md> | write <相对路径.md> <内容>]"); // i18n-ignore：CLI 终端输出
+		return;
+	}
+	const presetMatch = /^\/preset(?:[ \t]+([\s\S]*))?$/i.exec(trimmed);
+	if (presetMatch) {
+		const rawArgs = (presetMatch[1] ?? "").trim();
+		const tokens = rawArgs ? rawArgs.split(/\s+/) : [];
+		const sub = (tokens[0] ?? "status").toLowerCase();
+		if (sub === "status") {
+			const cfg = loadConfig(cwd);
+			const active = cfg.preset ?? "无"; // i18n-ignore：CLI 终端输出
+			const env = await scriptApi.invoke({ action: "preset.preview", params: { mode: "auto" } });
+			if (!env.ok) {
+				cli?.out(`[preset] 当前预设：${active}（读取预览失败：${env.error?.message ?? "未知错误"}）`); // i18n-ignore：CLI 终端输出
+				return;
+			}
+			const r = env.result as {
+				preset: string | null;
+				systemPrompt: string;
+				messages: Array<{ role: string; text: string }>;
+			};
+			cli?.out(`[preset] 活动预设：${r.preset ?? "无"}（${active}）｜system=${r.systemPrompt.length}字｜messages=${r.messages.length}条`); // i18n-ignore：CLI 终端输出
+			return;
+		}
+		if (sub === "redeclare" || sub === "reload") {
+			cli?.out("[preset] 正在重新声明并转译当前活动预设到卡文件…"); // i18n-ignore：CLI 终端输出
+			const res = await syncPresetNow(true);
+			if (!res) {
+				cli?.out("[preset] 重新装载失败（详见错误日志）"); // i18n-ignore：CLI 终端输出
+				return;
+			}
+			if (res.state === "none" || res.state === "stripped") {
+				cli?.out("[preset] 当前未装载活动预设"); // i18n-ignore：CLI 终端输出
+				return;
+			}
+			cli?.out(
+				`[preset] 已转译：${res.preset ?? ""}｜状态=${res.state}｜活动 ${res.active ?? 0} 条 / 停用 ${res.disabled ?? 0} 条｜本次声明 ${res.declared ?? 0} 段${res.declareError ? `｜声明错误：${res.declareError}` : ""}`, // i18n-ignore：CLI 终端输出
+			);
+			return;
+		}
+		if (sub === "preview") {
+			const env = await scriptApi.invoke({ action: "preset.preview", params: { mode: "auto" } });
+			if (!env.ok) {
+				cli?.out(`[preset] 预览失败：${env.error?.message ?? "未知错误"}`); // i18n-ignore：CLI 终端输出
+				return;
+			}
+			const r = env.result as {
+				preset: string | null;
+				systemPrompt: string;
+				messages: Array<{ role: string; text: string }>;
+			};
+			cli?.out(`[preset] 预览：${r.preset ?? "无"}｜system=${r.systemPrompt.length}字｜messages=${r.messages.length}条`); // i18n-ignore：CLI 终端输出
+			return;
+		}
+		cli?.out("[preset] 用法：/preset [status | redeclare | preview]"); // i18n-ignore：CLI 终端输出
 		return;
 	}
 	const scriptMatch = /^\/script(?:[ \t]+([\s\S]*))?$/i.exec(trimmed);

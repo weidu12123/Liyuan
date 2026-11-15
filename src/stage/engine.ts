@@ -43,16 +43,14 @@ import {
 	buildStageSystemPrompt,
 	detectsLanguageMismatch,
 	formatLoreIndex,
-	readShippedRpSystemProtocol,
 	rebuildHistory,
 	stateFromBranch,
 	type BranchEntryLike,
 	type PromptFragment,
 } from "./assemble.ts";
-import { assembleLiyuanPresetDynamic } from "./preset-dynamic.ts";
 import { extractPresetRelayMeta } from "./preset-relay-meta.ts";
-import { applyRelayHeaders, applyRelayPayload, type RelayModelLike } from "./provider-relay.ts";
-import { wrapRelayStreamFn, type AttemptRelayOverlay } from "./provider-relay-stream.ts";
+import { applyRelayHeaders, applyRelayPayload, CARRIER_TOOL_NAME, type RelayModelLike } from "./provider-relay.ts";
+import { wrapRelayStreamFn, wrapSideRelayStreamFn, type AttemptRelayOverlay } from "./provider-relay-stream.ts";
 import {
 	constantLoreOf,
 	loadStageConfig,
@@ -70,7 +68,6 @@ import {
 } from "./compact.ts";
 import { runScribeTurn, STATE_ENTRY_TYPE } from "./scribe-run.ts";
 import { seedMvuIfNeeded, findMvuRules } from "../mvu.ts";
-import { readScriptScopeVarsSync, writeScriptScopeVarUpdatesSync } from "../script-api.ts";
 import {
 	compileStagePromptTemplates,
 	createEjsContext,
@@ -1148,7 +1145,19 @@ export class StageEngine {
 			const mediaTools = this.#deps.media ? mediaStageTools(config.language, mediaOpts) : [];
 			const askEnabled = !!this.#deps.askUser;
 			const baseWriteTools = writeTools(config.language).filter((t) => t.name !== "ask" || askEnabled);
+			const carrierTools: StageTool[] =
+				config.relayPolicy?.contextPackMode === "tool-desc"
+					? [{
+							name: CARRIER_TOOL_NAME,
+							description: "本轮设定与历史参考资料（静态只读 JSON 载体，无需调用）。",
+							parameters: {
+								type: "object",
+								properties: { ack: { type: "string", description: "可选只读占位字段，本工具无需调用" } },
+							},
+						}]
+					: [];
 			const rpTools: StageTool[] = [
+				...carrierTools,
 				...stageTools(config.language, readDeps),
 				...(skillList.length > 0 ? [skillReadTool(config.language, skillList)] : []),
 				...baseWriteTools,
@@ -1159,6 +1168,7 @@ export class StageEngine {
 			nativeNames = config.backendControl === false ? [] : session.getAllTools().map((t) => t.name).filter((n) => AUTHORING_NATIVE_TOOLS.includes(n));
 			storyDir = agentTurn ? storyDirectory(chatDir!) : undefined;
 			const agentTools: StageTool[] = agentTurn ? [
+				...carrierTools,
 				...stageTools(config.language, readDeps).filter((t) => !t.name.startsWith("worldline_")),
 				...(skillList.length ? [skillReadTool(config.language, skillList)] : []),
 				...(askEnabled ? [AGENT_ASK_TOOL] : []),
@@ -1181,44 +1191,15 @@ export class StageEngine {
 				...runtimeFragments,
 			];
 			let fragments: PromptFragment[] = customFragments;
-			let trailingPrefillText: string | undefined;
 			let presetRelayMeta = extractPresetRelayMeta(materials.presetDoc);
-			let attemptRelayOverlay: AttemptRelayOverlay = { trailingPrefillActive: false };
-			if (!agentTurn && materials.presetDoc) {
-				const sessionId = sm.getSessionId();
-				const presetName = materials.presetDoc.name;
-				const chatVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "chat", presetName);
-				const globalVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "global", presetName);
-				const characterVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "character", presetName);
-				const presetVars = readScriptScopeVarsSync(cwd, chatDir, sessionId, config.card, "preset", presetName);
-				const dyn = await assembleLiyuanPresetDynamic({
-					card,
-					presetDoc: materials.presetDoc,
-					allLoreEntries: materials.allLoreEntries ?? materials.entries,
-					userName: config.userName,
-					history,
-					userText: lastUserText,
-					chatId: sessionId,
-					model: model.id,
-					chatVars,
-					globalVars,
-					characterVars,
-					presetVars,
-					extensionPrompts: customFragments,
-				});
-				fragments = dyn.fragments;
-				trailingPrefillText = dyn.trailingPrefillText;
-				presetRelayMeta = dyn.relayMeta;
-				writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "chat", dyn.dirtyLocal, presetName);
-				writeScriptScopeVarUpdatesSync(cwd, chatDir, sessionId, config.card, "global", dyn.dirtyGlobal, presetName);
-			}
+			const turnShieldSeed = (Math.floor(Math.random() * 0x7fffffff) + 1) >>> 0;
+			let attemptRelayOverlay: AttemptRelayOverlay = { shieldSeed: turnShieldSeed };
 			const extraSystemFragments = fragments.filter((f) => f.placement === "system" && f.text.trim()).map((f) => f.text);
 
 			systemPrompt = buildStageSystemPrompt({
 				card,
 				config,
 				constantLore: constantLoreOf({ ...materials, entries: effectiveEntries }),
-				...(!agentTurn ? { rpSystemProtocol: readShippedRpSystemProtocol() } : {}),
 				userRules,
 				chatMemoryIndex,
 				cardAgents: effectiveCardAgents,
@@ -1577,7 +1558,6 @@ export class StageEngine {
 				return projected.messages;
 			},
 			providerHeaders: (requestHeaders) => {
-				if (agentTurn) return;
 				applyRelayHeaders(requestHeaders, config.relayPolicy);
 			},
 			providerPayload: (payload, requestModel = model) => {
@@ -1593,17 +1573,19 @@ export class StageEngine {
 					});
 					mutated = true;
 				}
-				if (!agentTurn) {
-					const relayed = applyRelayPayload(next, requestModel as RelayModelLike, {
-						policy: config.relayPolicy,
-						presetMeta: presetRelayMeta,
-						trailingPrefillActive: attemptRelayOverlay.trailingPrefillActive,
-						overrideShieldMode: attemptRelayOverlay.overrideShieldMode,
-					});
-					if (relayed !== undefined) {
-						next = relayed;
-						mutated = true;
-					}
+				const relayed = applyRelayPayload(next, requestModel as RelayModelLike, {
+					policy: config.relayPolicy,
+					presetMeta: agentTurn ? undefined : presetRelayMeta,
+					forcedToolChoice: attemptRelayOverlay.forcedToolChoice,
+					overrideShieldMode: attemptRelayOverlay.overrideShieldMode,
+					overrideContextPackMode: attemptRelayOverlay.overrideContextPackMode,
+					disableOpenAiSafetyField: attemptRelayOverlay.disableOpenAiSafetyField,
+					currentTurnUserText: lastUserText,
+					shieldSeed: attemptRelayOverlay.shieldSeed,
+				});
+				if (relayed !== undefined) {
+					next = relayed;
+					mutated = true;
 				}
 				return mutated ? next : undefined;
 			},
@@ -1729,8 +1711,13 @@ export class StageEngine {
 			},
 			toolCall: async (name, input) => {
 				blog("tool_call", `${name}: ${JSON.stringify(input)}`);
-				let blockReason = !hooks.toolNames.includes(name) ? "此工具在当前会话模式不可用。" :
-					agentTurn ? undefined : workspaceToolBlock(ws, name, tools.find((t) => t.name === name)?.mode);
+				let blockReason = name === CARRIER_TOOL_NAME
+					? undefined
+					: !hooks.toolNames.includes(name)
+						? "此工具在当前会话模式不可用。"
+						: agentTurn
+							? undefined
+							: workspaceToolBlock(ws, name, tools.find((t) => t.name === name)?.mode);
 				if (!blockReason && nativeNames.includes(name)) {
 					if (
 						(name === "ls" || name === "find" || name === "grep") &&
@@ -1804,6 +1791,11 @@ export class StageEngine {
 				}
 			},
 			execute: async (name, id, input, signal) => {
+				if (name === CARRIER_TOOL_NAME) {
+					return {
+						content: [{ type: "text", text: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续执行当前轮任务。" }],
+					};
+				}
 				if (agentTurn) {
 					return this.#executeCollaboratorTool(
 						{
@@ -1848,14 +1840,14 @@ export class StageEngine {
 		};
 		const agentHolder = session as unknown as { agent?: { streamFunction?: StageStreamFn } };
 		const origStreamFn = agentHolder.agent?.streamFunction;
-		const wrappedRelay = !agentTurn && agentHolder.agent && origStreamFn;
+		const wrappedRelay = Boolean(agentHolder.agent && origStreamFn);
 		if (wrappedRelay && agentHolder.agent && origStreamFn) {
 			agentHolder.agent.streamFunction = wrapRelayStreamFn(origStreamFn, {
 				policy: config.relayPolicy,
-				presetMeta: presetRelayMeta,
-				hasActivePreset: Boolean(materials.presetDoc),
-				trailingPrefillText,
-				hasThinking: (this.#deps.getThinking?.() ?? "off") !== "off",
+				presetMeta: agentTurn ? undefined : presetRelayMeta,
+				hasActivePreset: agentTurn ? false : Boolean(materials.presetDoc),
+				isAgentTurn: agentTurn,
+				turnShieldSeed,
 				setAttemptOverlay: (overlay) => {
 					attemptRelayOverlay = overlay;
 				},
@@ -2141,6 +2133,11 @@ export class StageEngine {
 		args: Record<string, unknown>,
 		signal?: AbortSignal,
 	): Promise<StageToolResult> {
+		if (name === CARRIER_TOOL_NAME) {
+			return {
+				content: [{ type: "text", text: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续执行当前轮任务。" }],
+			};
+		}
 		const { ws, ev } = o;
 		let result: ToolRunResult | MediaStageResult;
 		if (name === "ask" && this.#deps.askUser) {
@@ -2554,10 +2551,14 @@ export class StageEngine {
 		)?.settingsManager?.getRetrySettings?.();
 		const maxRetries = retryCfg ? (retryCfg.enabled ? retryCfg.maxRetries : 0) : 5;
 		const baseDelayMs = retryCfg?.baseDelayMs ?? 2000;
+		const sideRelayFn = wrapSideRelayStreamFn(this.#deps.sideStreamFn, {
+			getPolicy: () => loadStageConfig(this.#deps.cwd).relayPolicy,
+			onRecoveryActivity: (detail) => this.#deps.events?.onActivity?.(detail),
+		});
 		for (let attempt = 0; ; attempt++) {
 			thinkChars = 0;
 			try {
-				const s = this.#deps.sideStreamFn(
+				const s = sideRelayFn(
 					chosen,
 					{
 						systemPrompt,

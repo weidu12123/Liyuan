@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { seedStageSystemPrompt } from "../src/paths.ts";
+import { parsePromptEntries, renderForModel, toggleEntry } from "../src/prompt-entries.ts";
 
 const repoRoot = process.cwd();
 
@@ -116,4 +117,33 @@ test("旁路助手追加槽：全新环境播种 BTW_APPEND_SYSTEM.md；用户�
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("迁移：99cab45 缩水版默认 APPEND_SYSTEM.md 自动升级回完整合并协议；用户已改的不动", () => {
+	const { root, agentDir } = makeEnv();
+	try {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			join(agentDir, "APPEND_SYSTEM.md"),
+			"# 角色扮演\n\n你担任角色扮演 agent。\n\n## 个人写作规矩（可自由编辑）\n\n占位说明。",
+			"utf8",
+		);
+		seedStageSystemPrompt(root, agentDir);
+		const upgraded = readFileSync(join(agentDir, "APPEND_SYSTEM.md"), "utf8");
+		assert.ok(upgraded.includes("## 正文是工件") && upgraded.includes("draft_write"), "默认缩水版应平滑恢复完整工具协议");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("APPEND_SYSTEM.md 内置「优先用稿纸工具交稿」条目可独立识别并一键关闭", () => {
+	const raw = readFileSync(join(repoRoot, "assets", "APPEND_SYSTEM.md"), "utf8");
+	const entries = parsePromptEntries(raw);
+	const target = entries.find((e) => e.name === "优先用稿纸工具交稿");
+	assert.ok(target && target.enabled === true, "默认包含启用态「优先用稿纸工具交稿」条目");
+	const disabledMd = toggleEntry(raw, "优先用稿纸工具交稿", false);
+	assert.ok(disabledMd !== null, "应可通过标准 toggleEntry 关闭该条目");
+	const rendered = renderForModel(disabledMd!);
+	assert.ok(!rendered.includes("优先用稿纸工具交稿"), "关闭后不进送模文本");
+	assert.ok(rendered.includes("正文是工件"), "同文件其余协议条目保持生效");
 });

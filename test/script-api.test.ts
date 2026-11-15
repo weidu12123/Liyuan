@@ -790,8 +790,11 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 				child.stdin.write('/script preset.update {"patch":{"blocks":[{"id":"b1","enabled":true,"content":"新文风"}]}}\n');
 				child.stdin.write("/script preset.get\n");
 				child.stdin.write('/script preset.preview {"userText":"推门进去"}\n');
-				child.stdin.write('/script preset.preview {"userText":"推门进去","simulateRelay":true,"includePrefill":true,"api":"openai-completions","provider":"deepseek","model":"deepseek-chat"}\n');
-				child.stdin.write('/script preset.preview {"userText":"推门进去","simulateRelay":true,"includePrefill":true,"api":"google-generative-ai","provider":"google","model":"gemini-2.5-pro"}\n');
+				child.stdin.write('/script preset.preview {"userText":"推门进去","simulateRelay":true,"api":"openai-completions","provider":"deepseek","model":"deepseek-chat"}\n');
+				child.stdin.write('/script preset.preview {"userText":"推门进去","simulateRelay":true,"api":"google-generative-ai","provider":"google","model":"gemini-2.5-pro"}\n');
+				child.stdin.write('/script preset.preview {"userText":"推门进去","simulateRelay":true,"contextPackMode":"tool-desc","antiRouteShield":"scramble","googleSafetyOnOpenAi":true,"api":"openai-completions","provider":"aistudio","model":"gemini-2.5-pro"}\n');
+				child.stdin.write("/preset status\n");
+				child.stdin.write("/preset preview\n");
 				child.stdin.write("/exit\n");
 				child.stdin.end();
 			});
@@ -805,8 +808,16 @@ test("REST 路由与 CLI：/api/script 与 server/main.ts --cli /script 端到�
 			assert.ok(cliOutput.includes('"dirty":true') && cliOutput.includes("新文风"), "CLI 再次读取应拿到草稿中已开启的新内容");
 			assert.ok(cliOutput.includes('"action":"preset.preview"'), "CLI 应返回 preset.preview 报文");
 			assert.ok(cliOutput.includes("新文风") && cliOutput.includes("推门进去"), "CLI preset.preview 应实时体现新开启的预设内容与用户输入");
-			assert.ok(cliOutput.includes('"trailingPrefillText":"OUTPUT<think>"') && cliOutput.includes('"partial":true'), "CLI simulateRelay 应正确展示 DeepSeek 预填报文");
+			assert.ok(cliOutput.includes('"simulatedPayload"'), "CLI simulateRelay 应返回模拟发包报文");
 			assert.ok(cliOutput.includes("HARM_CATEGORY_DANGEROUS_CONTENT") && cliOutput.includes("BLOCK_NONE"), "CLI simulateRelay 应对 Google 原生注入 BLOCK_NONE");
+			assert.ok(
+				cliOutput.includes('"packedIntoToolDescription":true') &&
+					cliOutput.includes("liyuan_context_reference") &&
+					cliOutput.includes('"safety_settings"'),
+				"CLI preset.preview 应返回 tool-desc 搬运统计、载体工具名与 OpenAI 兼容 Gemini safety_settings",
+			);
+			assert.ok(cliOutput.includes("[preset] 活动预设：test_preset"), "CLI /preset status 应展示当前活动预设");
+			assert.ok(cliOutput.includes("[preset] 预览：test_preset"), "CLI /preset preview 应返回装配概览");
 		} finally {
 			rmSync(cliRoot, { recursive: true, force: true });
 			rmSync(cliAgent, { recursive: true, force: true });

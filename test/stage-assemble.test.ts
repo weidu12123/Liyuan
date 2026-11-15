@@ -6,11 +6,9 @@ import { test } from "node:test";
 
 import {
 	applyHistoryInjections,
-	buildLiyuanOutputOverrideFragment,
 	buildStageInjection,
 	buildStageSystemPrompt,
 	detectsLanguageMismatch,
-	readShippedRpSystemProtocol,
 	rebuildHistory,
 	stateFromBranch,
 	type BranchEntryLike,
@@ -383,34 +381,33 @@ test("刀1 · applyHistoryInjections：空片段保持原序列；depth=0/1/2/�
 	assert.equal(out.some((m) => m.text.includes("after末尾assistant预填")), false, "末尾 assistant 预填已剥除");
 });
 
-test("第4步刀1 · rpSystemProtocol 置前、preHistory 落于摘要前、after 按 order 升序且先剥预填再追加覆盖块", () => {
-	const protocol = readShippedRpSystemProtocol();
-	assert.ok(protocol.includes("梨园扮演 Agent 引擎协议"), "随包 RP_SYSTEM.md 可读");
+test("三层 .md 装配 · userRules 置前（含宏求值）、preHistory 落于摘要前、after 按 order 升序并剥除末尾预填", () => {
+	const shippedAppend = readFileSync(join(process.cwd(), "assets", "APPEND_SYSTEM.md"), "utf8");
+	assert.ok(shippedAppend.includes("正文是工件"), "随包 APPEND_SYSTEM.md 含完整扮演协议");
 
 	const sp = buildStageSystemPrompt({
 		card,
 		config,
 		constantLore: [],
-		rpSystemProtocol: protocol,
-		extraSystemFragments: ["【预设前置系统段】"],
+		userRules: { global: shippedAppend, agent: "", card: "卡级规矩：只用{{char}}名。" },
+		extraSystemFragments: ["【运行时附加系统段】"],
 	});
-	const idxProto = sp.indexOf("梨园扮演 Agent 引擎协议");
-	const idxPreset = sp.indexOf("【预设前置系统段】");
+	const idxPreset = sp.indexOf("【运行时附加系统段】");
+	const idxGlobal = sp.indexOf("正文是工件");
+	const idxCardRule = sp.indexOf("卡级规矩：只用云澜名。");
 	const idxRules = sp.indexOf("# 消息流约定");
-	assert.ok(idxProto >= 0 && idxPreset > idxProto && idxRules > idxPreset, "system 顺序为：梨园扮演协议 → 预设前置 → 梨园约定");
+	assert.ok(idxPreset >= 0 && idxGlobal > idxPreset && idxCardRule > idxGlobal && idxRules > idxCardRule, "system 顺序为：额外前置 → 全局APPEND → 卡级APPEND → 梨园约定");
 
 	const past = [
 		{ role: "user" as const, text: "旧user" },
 		{ role: "assistant" as const, text: "旧asst" },
 	];
-	const overrideFrag = buildLiyuanOutputOverrideFragment();
 	const frags: PromptFragment[] = [
 		{ id: "pre-u", placement: "preHistory", role: "user", text: "破限唤醒" },
 		{ id: "pre-a", placement: "preHistory", role: "assistant", text: "破限承诺" },
-		{ id: "a-hi", placement: "after", role: "user", text: "预设after高权重", order: 200 },
-		{ id: "a-lo", placement: "after", role: "system", text: "预设after低权重", order: 10 },
+		{ id: "a-hi", placement: "after", role: "user", text: "after高权重", order: 200 },
+		{ id: "a-lo", placement: "after", role: "system", text: "after低权重", order: 10 },
 		{ id: "a-prefill", placement: "after", role: "assistant", text: "OUTPUT <think_fox~>", order: 500 },
-		overrideFrag,
 	];
 
 	const out = applyHistoryInjections(past, "本拍注入+用户输入", frags, {
@@ -431,10 +428,9 @@ test("第4步刀1 · rpSystemProtocol 置前、preHistory 落于摘要前、afte
 	const tail = out[out.length - 1]!;
 	assert.equal(tail.role, "user");
 	assert.equal(tail.isTail, true);
-	assert.ok(!tail.text.includes("OUTPUT <think_fox~>"), "预设末尾 assistant 预填必须在追加梨园覆盖块前被剥除");
-	const iLow = tail.text.indexOf("预设after低权重");
-	const iHigh = tail.text.indexOf("预设after高权重");
-	const iOver = tail.text.indexOf("【梨园引擎输出协议｜最高优先级】");
-	assert.ok(iLow > 0 && iHigh > iLow && iOver > iHigh, "after 按 order 升序排列，且梨园覆盖片稳居全包最末端");
+	assert.ok(!tail.text.includes("OUTPUT <think_fox~>"), "末尾 assistant 预填必须在消息注入层剥除");
+	const iLow = tail.text.indexOf("after低权重");
+	const iHigh = tail.text.indexOf("after高权重");
+	assert.ok(iLow > 0 && iHigh > iLow, "after 按 order 升序排列");
 });
 

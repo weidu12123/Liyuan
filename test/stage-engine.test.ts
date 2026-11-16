@@ -1854,3 +1854,43 @@ test("刀1 · getPromptFragments 经 StageEngine 真实送模链路精确注入 
 	}
 });
 
+test("引擎：外语卡连续两拍经真实送模链路不注入【语言】或【语言纠正】", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		writeFileSync(
+			join(cwd, "card.json"),
+			JSON.stringify({
+				data: {
+					name: "Анна",
+					description: "Русская карточка персонажа.",
+					first_mes: "Привет. Сегодня холодный вечер.",
+				},
+			}),
+		);
+		const captured: any[] = [];
+		const ruReply =
+			"Анна тихо закрыла тяжёлую деревянную дверь и посмотрела в тёмное окно, где за стеклом уже кружился первый ноябрьский снег.";
+		reg.setResponses([
+			(ctx) => { captured.push(ctx); return fauxAssistantMessage(ruReply); },
+			fauxScribeEmpty(),
+			(ctx) => { captured.push(ctx); return fauxAssistantMessage("Она улыбнулась и налила горячий чай."); },
+			fauxScribeEmpty(),
+		] as never);
+		const engine = await makePiEngine(piDeps(cwd, sm, reg.getModel("faux-rp")));
+		await engine.performTurn("Я вошёл в комнату.");
+		await engine.performTurn("Что происходит за окном?");
+
+		assert.equal(captured.length, 2);
+		for (const ctx of captured) {
+			const payload = JSON.stringify({ sys: ctx.systemPrompt, messages: ctx.messages, tools: ctx.tools });
+			assert.ok(!payload.includes("【语言】"), "不得向送模消息注入【语言】");
+			assert.ok(!payload.includes("【语言纠正】"), "非中文卡上一拍不得触发【语言纠正】");
+			assert.ok(!payload.includes("以中文写叙事与对白"), "不得强制要求中文叙事");
+		}
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+

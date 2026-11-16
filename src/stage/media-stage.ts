@@ -72,7 +72,7 @@ function importToMedia(cwd: string, source: string, allowed: string[]): { src: s
  * 媒体工具清单。tts 需要服务端 TTS 环境——**未配置就不上清单**
  * （依赖缺失的工具不上清单：工具存在却恒回「本环境不支持」是最糟形态，模型会反复试）。
  */
-export function mediaStageTools(language: string, opts?: { tts?: boolean }): MediaStageTool[] {
+export function mediaStageTools(_language: string, opts?: { tts?: boolean }): MediaStageTool[] {
 	const tools: MediaStageTool[] = [
 		{
 			name: "show_image",
@@ -141,7 +141,7 @@ export function mediaStageTools(language: string, opts?: { tts?: boolean }): Med
 		tools.push({
 			name: "tts",
 			description:
-				`文字转语音：把一段台词/旁白合成语音，并在对话里放出播放器（${language}）。` +
+				`文字转语音：把一段台词/旁白合成语音，并在对话里放出播放器。` +
 				`用户要求配音/朗读/生成语音时用。一次给一段话，别把整章丢进来。`,
 			parameters: {
 				type: "object",

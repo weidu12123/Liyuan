@@ -54,7 +54,8 @@ test("别名提示词与解析", () => {
 		[{ uid: 1, keys: ["gloomhound", "beast"], comment: "gloomhound", excerpt: "beasts of darkness..." }],
 		"中文",
 	);
-	assert.ok(systemPrompt.includes("中文"));
+	assert.ok(!systemPrompt.includes("生成中文检索别名"), "不再强制指定中文别名");
+	assert.ok(systemPrompt.includes("与条目原文及叙事相匹配的语言"), "跟随原文与叙事语言");
 	assert.ok(userText.includes("uid=1"));
 
 	const map = parseLoreAliases('```json\n{"1": ["幽影犬", "暗影兽", ""], "x": ["无效键"], "2": "非数组"}\n```');

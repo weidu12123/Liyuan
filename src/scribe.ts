@@ -220,9 +220,9 @@ interface AliasEntryInput {
 
 export function buildLoreAliasPrompt(
 	entries: AliasEntryInput[],
-	language: string,
+	_language?: string,
 ): { systemPrompt: string; userText: string } {
-	const systemPrompt = `你为角色扮演世界书条目生成${language}检索别名。这些别名用于在${language}叙事文本中做关键词匹配，因此要覆盖该事物在${language}叙事中最可能被写出的称呼：常见意译、音译、职称（每条目 2~5 个，单个别名 2~6 字为宜）。不要生成过于宽泛的词（如「建筑」「怪物」这类单独出现会误触发的通用词，除非条目本身就是该范畴）。
+	const systemPrompt = `你为角色扮演世界书条目生成检索别名（使用与条目原文及叙事相匹配的语言）。这些别名用于在叙事文本中做关键词匹配，因此要覆盖该事物在叙事中最可能被写出的称呼：常见意译、音译、职称（每条目 2~5 个，单个别名 2~6 字为宜）。不要生成过于宽泛的词（如「建筑」「怪物」这类单独出现会误触发的通用词，除非条目本身就是该范畴）。
 只输出 JSON 对象：{ "<uid>": ["别名1", "别名2", ...], ... }，不要输出任何其他文字。`;
 
 	const userText = entries
@@ -274,11 +274,11 @@ export interface RpSummaryPrompt {
 }
 
 export function buildRpSummaryPrompt(input: RpSummaryPromptInput): RpSummaryPrompt {
-	const { conversationText, stateSnapshot, previousSummary, language, userName } = input;
+	const { conversationText, stateSnapshot, previousSummary, userName } = input;
 
 	const systemPrompt = `你是一场长篇角色扮演的场记。你的任务是为即将从上下文中裁掉的早期剧情写一份接力摘要——它将成为主演模型唯一能看到的「前情」，后续剧情将基于「本摘要 + 保留的最近对话」继续演出。
 
-用${language}输出，按以下结构：
+用与对话原文相同的语言输出，按以下结构：
 
 ## 前情提要
 按时间顺序概述关键事件（谁做了什么、结果如何）。保留剧内时间刻度（如「第一天黄昏」「第三天清晨」）。

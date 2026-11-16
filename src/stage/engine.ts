@@ -41,7 +41,6 @@ import {
 	applyHistoryInjections,
 	buildStageInjection,
 	buildStageSystemPrompt,
-	detectsLanguageMismatch,
 	formatLoreIndex,
 	rebuildHistory,
 	stateFromBranch,
@@ -1017,7 +1016,7 @@ export class StageEngine {
 			card.name,
 			materials.cardAuthorScripts,
 		) as WorldState;
-		const { history, lastNarrativeText, summary: branchSummary } = rebuildHistory(branch, materials.promptRules, {
+		const { history, summary: branchSummary } = rebuildHistory(branch, materials.promptRules, {
 			charName: card.name,
 			userName: config.userName,
 		});
@@ -1031,10 +1030,6 @@ export class StageEngine {
 			ev.onNotify?.("error", "没有可开演的用户输入。");
 			return { aborted: false, error: "no-user-input" };
 		}
-
-		const languageMismatch = lastNarrativeText
-			? detectsLanguageMismatch(lastNarrativeText, config.language)
-			: false;
 
 		let systemPrompt = "";
 		let tools: StageTool[] = [];
@@ -1213,7 +1208,6 @@ export class StageEngine {
 				activatedLore: activated,
 				card,
 				config,
-				languageMismatch,
 				cardAgentsActive: effectiveCardAgents.trim().length > 0,
 				panelIndex,
 				loreIndex: formatLoreIndex(effectiveEntries),

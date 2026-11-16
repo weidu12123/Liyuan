@@ -24,8 +24,10 @@ test("工具清单：不注入写侧依赖时只有读侧三件；schema 合法"
 		assert.ok(t.description.length > 20, `${t.name} 要有像样的描述`);
 		assert.equal((t.parameters as { type: string }).type, "object");
 	}
-	// 语言写进描述
-	assert.ok(stageTools("English", makeDeps()).some((t) => t.description.includes("English")));
+	// 工具描述不再强制注入配置语言，检索顺应正文/设定原文语言
+	const enTools = stageTools("English", makeDeps());
+	assert.ok(!enTools.some((t) => t.description.includes("English")));
+	assert.ok(enTools.some((t) => t.description.includes("原文")));
 });
 
 test("工具清单：注入世界书写侧依赖后，写侧/列举/启停才上清单（M-D2）", () => {

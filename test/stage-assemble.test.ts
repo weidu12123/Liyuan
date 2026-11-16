@@ -8,7 +8,6 @@ import {
 	applyHistoryInjections,
 	buildStageInjection,
 	buildStageSystemPrompt,
-	detectsLanguageMismatch,
 	rebuildHistory,
 	stateFromBranch,
 	type BranchEntryLike,
@@ -63,7 +62,7 @@ test("rebuildHistory：开场白→assistant、补丁套用、过程条目蒸发
 	assert.ok(history[2].text.includes("「起来吧。」"), "同角色相邻合并");
 	assert.ok(!history[2].text.includes("内心盘算"), "thinking 不进历史");
 	assert.equal(lastUserText, "说明来意。");
-	assert.ok(lastNarrativeText.includes("夜霜"), "语言检测源=最后台上叙事（含补丁）");
+	assert.ok(lastNarrativeText.includes("夜霜"), "最后台上叙事（含补丁）");
 });
 
 test("rebuildHistory：送模侧作者正则（promptOnly/破坏性）剥「作者不想让模型看」的块", () => {
@@ -141,7 +140,7 @@ test("rebuildHistory：深度按合并后的历史条目数，一拍多条 messa
 	assert.ok(history[1].text.includes("本拍栏"), "本拍整体 depth 0，状态栏必须留着");
 });
 
-test("rebuildHistory：幕后轮的回复不作语言检测源；rp-import 记为 user 侧", () => {
+test("rebuildHistory：幕后轮的回复不计入台上叙事；rp-import 记为 user 侧", () => {
 	const branch: BranchEntryLike[] = [
 		{ type: "custom_message", customType: "rp-import", content: "【前情提要】旧事一段。" },
 		userE("我环顾四周。"),
@@ -152,7 +151,7 @@ test("rebuildHistory：幕后轮的回复不作语言检测源；rp-import 记�
 	const { history, lastNarrativeText } = rebuildHistory(branch);
 	assert.equal(history[0].role, "user");
 	assert.ok(history[0].text.includes("前情提要"));
-	assert.ok(lastNarrativeText.includes("烛影"), "幕后轮回复跳过，检测源回溯到台上叙事");
+	assert.ok(lastNarrativeText.includes("烛影"), "幕后轮回复跳过，回溯到台上叙事");
 });
 
 test("stateFromBranch：最近快照生效；无快照=初始", () => {
@@ -207,7 +206,6 @@ test("末端注入：事实块——数据带标注送达，语义归 system；�
 		activatedLore: [],
 		card: { ...card, postHistoryInstructions: "卡作者的末端叮嘱。" },
 		config,
-		languageMismatch: true,
 	});
 	assert.ok(inj.startsWith("【世界状态】\n"), "世界状态最前，纯数据无解说");
 	assert.ok(!inj.includes("正文不得与之矛盾"), "语义解说不再逐拍复述（在 system 语义表）");
@@ -218,9 +216,9 @@ test("末端注入：事实块——数据带标注送达，语义归 system；�
 	assert.ok(!inj.includes("【导演备注】"), "D5：导演备注容器解散");
 	assert.ok(!inj.includes("【状态栏】"), "D6：状态栏注入块已删（谢幕注入替代）");
 	assert.ok(!inj.includes("【思考的用法】"), "D7：rehearsalGuard 注入整体删除");
-	assert.ok(inj.includes("【语言】以中文写叙事与对白（专有名词可保留原文）。"), "语言一行（config 事实）");
+	assert.ok(!inj.includes("【语言】"), "叙事语言交还角色卡与提示词，引擎不再注入");
 	assert.ok(!inj.includes("演完本拍即停"), "「演完即停」句删——时序由判定/谢幕日程表达");
-	assert.ok(inj.includes("【语言纠正】"), "语言自愈事实保留");
+	assert.ok(!inj.includes("【语言纠正】"), "不再注入语言纠正");
 	assert.ok(!inj.includes("【登场名录】"), "无名录不出块");
 });
 
@@ -250,14 +248,6 @@ test("末端注入：导演备注——有则成末块（紧贴原话之前）�
 	assert.equal(withNote.slice(0, base.length), base, "有备注时其余输出与无备注逐字一致");
 	const blank = buildStageInjection({ state: defaultState(), activatedLore: [], card, config, directorNote: "   " });
 	assert.equal(blank, base, "空白备注视同无备注");
-});
-
-test("detectsLanguageMismatch：中文目标才判、样本要够长", () => {
-	const en = "The moon hangs over the courtyard while she waits in silence for a long time tonight.";
-	assert.equal(detectsLanguageMismatch(en, "中文"), true);
-	assert.equal(detectsLanguageMismatch("殿内烛影摇动，她伏案未眠，窗外霜色渐重，更漏声一声一声敲在瓦上，夜风穿堂而过带起纸页。", "中文"), false);
-	assert.equal(detectsLanguageMismatch("short", "中文"), false);
-	assert.equal(detectsLanguageMismatch(en, "English"), false);
 });
 
 // ---------------- 素材装载 ----------------

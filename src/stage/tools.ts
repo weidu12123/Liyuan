@@ -82,12 +82,12 @@ export function stageTools(language: string, deps?: StageToolDeps): StageTool[] 
  * 关键性质：工具结果**不落历史**（rebuildHistory 只留定稿正文）——内容只活在当拍，
  * 谢幕即蒸发＝按需加载、用完即走。skills 为空时不要注册本工具（不凭空点名）。
  */
-export function skillReadTool(language: string, skills: Array<{ name: string; description: string }>): StageTool {
+export function skillReadTool(_language: string, skills: Array<{ name: string; description: string }>): StageTool {
 	return {
 		name: "skill_read",
 		mode: "read",
 		description:
-			`按名读取一个 skill 的全文（${language}）。可读：\n` +
+			`按名读取一个 skill 的全文。可读：\n` +
 			skills.map((s) => `- ${s.name}：${s.description}`).join("\n"),
 		parameters: {
 			type: "object",
@@ -106,7 +106,7 @@ export function skillReadTool(language: string, skills: Array<{ name: string; de
  * 本拍稿件、上一拍修订、可选计划与用户提问的工具协议。
  * 记账归封笔后的场记旁路（scribe-run.ts），台上零世界写入工具。
  */
-export function writeTools(language: string): StageTool[] {
+export function writeTools(_language: string): StageTool[] {
 	const version = { type: "integer", minimum: 0, description: "最近读取/写入回执的版本；空稿初始为 0。版本冲突时重新读取。" };
 	// Gateways may pad objects with no required fields. Surplus root keys have no effect;
 	// declared fields, nested plan items, and all versioned writes still undergo native validation.
@@ -162,7 +162,7 @@ export function writeTools(language: string): StageTool[] {
 				"先问用户定下来再演。一次一问，多个变量只问最关键的。" +
 				"判断是**动态的**：变量不因「新」而重要——新人物的性格/身份不是全都要问，洞府里不是每件资源" +
 				"都值得问；不分岔的自己顺着演，不事事上报。禁止代写用户身份的完整档案、禁止替用户定重大变量。\n" +
-				`给出 2~4 个具体、可落地、彼此不同的选项（${language}），用户作答后按答案继续演。\n` +
+				`给出 2~4 个具体、可落地、彼此不同的选项，用户作答后按答案继续演。\n` +
 				"用户点了停止 = 笔还给用户，本拍就此收束。\n" +
 				"**选择框分流**：用户预设自带选择框格式（如 <w2g>）时，岔路与回合末选项**按预设格式写进正文**，" +
 				"不要调本工具；只有预设没有选择框格式时才用 ask。",

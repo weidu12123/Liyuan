@@ -63,7 +63,7 @@ interface RebuiltHistory {
 	history: BeatMsg[];
 	/** 最后一条用户消息原文（postHistory 宏 / 求方向判定用） */
 	lastUserText: string;
-	/** 最后一条台上叙事文本（语言自愈检测源；开场白计入，幕后轮的回复不计） */
+	/** 最后一条台上叙事文本（开场白计入，幕后轮的回复不计） */
 	lastNarrativeText: string;
 	/** 前情提要：被摘要覆盖的早期剧情（rp-summary / 旧 compaction 条目）；无则 undefined */
 	summary?: string;
@@ -224,7 +224,7 @@ export function rebuildHistory(
 		}
 	}
 
-	// 4) 最后用户原文 + 最后台上叙事（幕后轮的回复不作语言检测源）
+	// 4) 最后用户原文 + 最后台上叙事（幕后轮的回复不计）
 	let lastUserText = "";
 	for (let i = history.length - 1; i >= 0; i--) {
 		if (history[i].role === "user") {
@@ -431,8 +431,6 @@ interface StageInjectionOptions {
 	 * 却零工具调用），只能用被动供料兜底——这正是酒馆原生的做法。thinking 挡不受影响。
 	 */
 	passiveLore?: boolean;
-	/** 上一拍台上叙事语言与配置不符（harness 检测） */
-	languageMismatch?: boolean;
 	/** 卡档案在场（刀3）：postHistoryInstructions 已在卡 AGENTS.md 里，注入块让位（B8） */
 	cardAgentsActive?: boolean;
 	/** 活跃面板全文快照（formatPanelSnapshot 产出）或一行速览 */
@@ -464,7 +462,6 @@ export function buildStageInjection({
 	activatedLore,
 	card,
 	config,
-	languageMismatch,
 	cardAgentsActive,
 	panelIndex,
 	wordRange,
@@ -525,17 +522,9 @@ export function buildStageInjection({
 		blocks.push(`【卡作者末端指令】\n${applyMacros(card.postHistoryInstructions, macro)}`);
 	}
 
-	blocks.push(`【语言】以${config.language}写叙事与对白（专有名词可保留原文）。`);
-
 	// 字数一行：纯事实（无「朝这个量落笔」类指令）；无目标不出行
 	if (wordRange) {
 		blocks.push(`本拍约 ${wordRange.min}–${wordRange.max} 字`);
-	}
-
-	if (languageMismatch) {
-		blocks.push(
-			`【语言纠正】你上一拍使用了错误的语言。从本拍起，全部叙事与对白必须使用${config.language}（专有名词可保留原文）。这是硬性要求，立即纠正。`,
-		);
 	}
 
 	// 导演备注（PLAN-DIRECTOR-NOTE）：末块——紧贴用户原话之前，对当拍演出的指示权重最大。
@@ -707,17 +696,5 @@ export function applyHistoryInjections(
 	}
 	result.push(...tailMerged);
 	return result;
-}
-
-/**
- * 检测文本语言是否与目标语言失配。v0 只实现中文目标的检测
- * （其他语言返回 false，不误报）。用于 harness 级语言自愈。
- */
-export function detectsLanguageMismatch(text: string, language: string): boolean {
-	if (!/中文|汉语|chinese/i.test(language)) return false;
-	const letters = text.match(/\p{L}/gu) ?? [];
-	if (letters.length < 40) return false; // 样本太短不判定
-	const cjk = letters.filter((ch) => /\p{Script=Han}/u.test(ch)).length;
-	return cjk / letters.length < 0.3;
 }
 import { applyDraftRevisions } from "./draft-projection.ts";

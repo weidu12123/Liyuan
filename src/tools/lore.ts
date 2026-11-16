@@ -120,9 +120,9 @@ export const lorebookSearch: ToolSpec<LoreDeps> = {
 		ctx.surface === "stage"
 			? `检索设定集（世界书与补充设定集）：地点、族群、历史、人物、法术等设定细节。` +
 				`正文将涉及你没有十足把握的世界细节时，先查再写——查不到才是「未被写下」。` +
-				`用设定原文的语言检索（多为${ctx.language}或英文）。`
+				`用设定原文的语言检索。`
 			: `检索本项目的世界书与补充设定集，用于诊断设定内容（含被台上按外部插件协议剥离的条目）。` +
-				`用设定原文的语言检索（多为${ctx.language}或英文）。`,
+				`用设定原文的语言检索。`,
 	parameters: (ctx) => {
 		const query = {
 			type: "string",

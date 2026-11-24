@@ -5,6 +5,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { getUiLocale } from "./i18n/index.ts";
 import { readJsonFile } from "./jsonio.ts";
 import type { CharacterState, StateRoster, WorldState } from "./types.ts";
 
@@ -87,9 +88,12 @@ export function canonicalizeCharacterKeys(
  */
 export function applyPatch(state: WorldState, patch: Record<string, unknown>): PatchResult {
 	const next: WorldState = structuredClone(state);
+	const prevLocation = state.location;
+	const explicitAtChars = new Set<string>();
 	const applied: string[] = [];
 	const warnings: string[] = [];
 
+	const en = getUiLocale() === "en";
 	for (const [key, value] of Object.entries(patch)) {
 		switch (key) {
 			case "time":
@@ -97,7 +101,7 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 				if (typeof value === "string") {
 					next[key] = value;
 					applied.push(`${key} → ${value}`);
-				} else warnings.push(`${key} 需要字符串，已忽略`);
+				} else warnings.push(en ? `${key} must be a string; ignored` : `${key} 需要字符串，已忽略`);
 				break;
 			}
 			case "characters": {
@@ -105,11 +109,11 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 					for (const [name, cs] of Object.entries(value as Record<string, unknown>)) {
 						if (cs === null) {
 							delete next.characters[name];
-							applied.push(`characters.${name} 已移除`);
+							applied.push(en ? `characters.${name} removed` : `characters.${name} 已移除`);
 							continue;
 						}
 						if (!cs || typeof cs !== "object") {
-							warnings.push(`characters.${name} 需要对象或 null，已忽略`);
+							warnings.push(en ? `characters.${name} must be an object or null; ignored` : `characters.${name} 需要对象或 null，已忽略`);
 							continue;
 						}
 						const cur: CharacterState = next.characters[name] ?? { affinity: 0, status: "", notes: "" };
@@ -117,11 +121,14 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 						if (typeof p.affinity === "number") cur.affinity = clamp(Math.round(p.affinity), -100, 100);
 						if (typeof p.status === "string") cur.status = p.status;
 						if (typeof p.notes === "string") cur.notes = p.notes;
-						if (typeof p.at === "string") cur.at = p.at;
+						if (typeof p.at === "string") {
+							cur.at = p.at.trim();
+							explicitAtChars.add(name);
+						}
 						next.characters[name] = cur;
-						applied.push(`characters.${name} 已更新`);
+						applied.push(en ? `characters.${name} updated` : `characters.${name} 已更新`);
 					}
-				} else warnings.push("characters 需要对象，已忽略");
+				} else warnings.push(en ? "characters must be an object; ignored" : "characters 需要对象，已忽略");
 				break;
 			}
 			case "flags": {
@@ -129,70 +136,150 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 					for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
 						if (v === null) {
 							delete next.flags[k];
-							applied.push(`flags.${k} 已移除`);
+							applied.push(en ? `flags.${k} removed` : `flags.${k} 已移除`);
 						} else if (typeof v === "string") {
 							next.flags[k] = v;
 							applied.push(`flags.${k} → ${v}`);
 						} else {
 							next.flags[k] = JSON.stringify(v);
-							applied.push(`flags.${k} 已更新`);
+							applied.push(en ? `flags.${k} updated` : `flags.${k} 已更新`);
 						}
 					}
-				} else warnings.push("flags 需要对象，已忽略");
+				} else warnings.push(en ? "flags must be an object; ignored" : "flags 需要对象，已忽略");
 				break;
 			}
 			case "inventory":
 			case "plot_threads": {
 				if (Array.isArray(value)) {
-					// 非字符串元素**不静默丢弃**：模型常传 [{name,数量}] 这类对象，
-					// 旧实现 filter 掉后仍回报「成功」（applied 里是空数组），模型只能反复试错。
 					const kept = value.filter((x): x is string => typeof x === "string");
 					const dropped = value.filter((x) => typeof x !== "string");
 					if (dropped.length > 0) {
 						warnings.push(
-							`${key} 有 ${dropped.length} 项不是字符串已丢弃（${dropped
-								.slice(0, 2)
-								.map((d) => JSON.stringify(d))
-								.join("、")}${dropped.length > 2 ? "…" : ""}）——` +
-								`本字段是字符串数组，请写成 ["补气丹（已服用）"] 这样的一句话条目。`,
+							en
+								? `${key} had ${dropped.length} non-string item(s) dropped (${dropped.slice(0, 2).map((d) => JSON.stringify(d)).join(", ")}${dropped.length > 2 ? "…" : ""}) — this field is a string array, e.g. ["Healing potion (consumed)"].`
+								: `${key} 有 ${dropped.length} 项不是字符串已丢弃（${dropped
+										.slice(0, 2)
+										.map((d) => JSON.stringify(d))
+										.join("、")}${dropped.length > 2 ? "…" : ""}）——` +
+										`本字段是字符串数组，请写成 ["补气丹（已服用）"] 这样的一句话条目。`,
 						);
 					}
 					next[key] = kept;
-					applied.push(`${key} → [${kept.join("、")}]`);
-				} else warnings.push(`${key} 需要完整数组（整体替换语义），已忽略`);
+					applied.push(`${key} → [${kept.join(en ? ", " : "、")}]`);
+				} else {
+					warnings.push(
+						en
+							? `${key} must be a complete array (full replacement semantics); ignored`
+							: `${key} 需要完整数组（整体替换语义），已忽略`,
+					);
+				}
 				break;
 			}
 			case "roster": {
-				// 登场名录编辑（用户主权，REST 侧用；模型工具 schema 不含此键）：
-				// {characters/places/items/events: {名称: null(删除) | 字符串(改登场时间)}}。
-				// 注意：删除**活跃**条目会被本函数末尾的 registerRoster 立即重新登记——名录必须覆盖在场条目。
 				if (value && typeof value === "object" && !Array.isArray(value)) {
 					const roster: StateRoster = next.roster ?? { characters: {}, items: {}, events: {} };
 					if (!roster.places) roster.places = {};
+					const rawMerge = (value as Record<string, unknown>).merge;
+					if (rawMerge !== undefined) {
+						if (!Array.isArray(rawMerge)) {
+							warnings.push(en ? "roster.merge must be an array; ignored" : "roster.merge 需要数组，已忽略");
+						} else {
+							const validTables = new Set(["characters", "places", "items", "events"]);
+							for (const item of rawMerge) {
+								if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+								const rec = item as Record<string, unknown>;
+								const table = typeof rec.table === "string" && validTables.has(rec.table)
+									? (rec.table as "characters" | "places" | "items" | "events")
+									: null;
+								const from = typeof rec.from === "string" ? rec.from.trim() : "";
+								const to = typeof rec.to === "string" ? rec.to.trim() : "";
+								if (!table || !from || !to || from === to) {
+									warnings.push(
+										en
+											? "roster.merge entry requires valid, distinct table/from/to; ignored"
+											: "roster.merge 条目需要有效的 table、from、to（且不同），已忽略",
+									);
+									continue;
+								}
+								const dest = table === "places" ? roster.places : roster[table];
+								const fromBlurb = dest[from];
+								if (from in dest) {
+									if (!(to in dest) || (!dest[to] && fromBlurb)) dest[to] = fromBlurb ?? "";
+									delete dest[from];
+								}
+								if (table === "characters" && from in next.characters) {
+									const srcChar = next.characters[from]!;
+									if (!(to in next.characters)) {
+										next.characters[to] = srcChar;
+									} else {
+										const dstChar = next.characters[to]!;
+										if (!dstChar.status && srcChar.status) dstChar.status = srcChar.status;
+										if (!dstChar.notes && srcChar.notes) dstChar.notes = srcChar.notes;
+										if (!dstChar.at && srcChar.at) dstChar.at = srcChar.at;
+									}
+									delete next.characters[from];
+								} else if (table === "places") {
+									if (next.location === from) next.location = to;
+									for (const c of Object.values(next.characters)) {
+										if (c.at === from) c.at = to === next.location ? "" : to;
+									}
+								} else if (table === "items") {
+									const mapped = next.inventory.map((x) => (x === from ? to : x));
+									next.inventory = [...new Set(mapped)];
+								} else if (table === "events") {
+									const mapped = next.plot_threads.map((x) => (x === from ? to : x));
+									next.plot_threads = [...new Set(mapped)];
+								}
+								applied.push(en ? `roster.${table}.${from} merged into ${to}` : `roster.${table}.${from} 已合并到 ${to}`);
+							}
+						}
+					}
 					for (const table of ["characters", "places", "items", "events"] as const) {
 						const patchTable = (value as Record<string, unknown>)[table];
 						if (patchTable === undefined) continue;
 						if (!patchTable || typeof patchTable !== "object" || Array.isArray(patchTable)) {
-							warnings.push(`roster.${table} 需要对象，已忽略`);
+							warnings.push(en ? `roster.${table} must be an object; ignored` : `roster.${table} 需要对象，已忽略`);
 							continue;
 						}
 						const dest = table === "places" ? roster.places : roster[table];
 						for (const [name, v] of Object.entries(patchTable as Record<string, unknown>)) {
 							if (v === null) {
 								delete dest[name];
-								applied.push(`roster.${table}.${name} 已移除`);
+								applied.push(en ? `roster.${table}.${name} removed` : `roster.${table}.${name} 已移除`);
 							} else if (typeof v === "string") {
 								dest[name] = v.slice(0, 60);
-								applied.push(`roster.${table}.${name} 已更新`);
-							} else warnings.push(`roster.${table}.${name} 需要字符串或 null，已忽略`);
+								applied.push(en ? `roster.${table}.${name} updated` : `roster.${table}.${name} 已更新`);
+							} else {
+								warnings.push(
+									en
+										? `roster.${table}.${name} must be a string or null; ignored`
+										: `roster.${table}.${name} 需要字符串或 null，已忽略`,
+								);
+							}
 						}
 					}
 					next.roster = roster;
-				} else warnings.push("roster 需要对象，已忽略");
+				} else warnings.push(en ? "roster must be an object; ignored" : "roster 需要对象，已忽略");
 				break;
 			}
 			default:
-				warnings.push(`未知字段 ${key}，允许的顶层字段：${TOP_KEYS.join(", ")}`);
+				warnings.push(
+					en
+						? `Unknown field ${key}; allowed top-level fields: ${TOP_KEYS.join(", ")}`
+						: `未知字段 ${key}，允许的顶层字段：${TOP_KEYS.join(", ")}`,
+				);
+		}
+	}
+	// 在场位置归一：
+	// 1) 若本轮场景 location 变化，原本在场（at === "" 或 at === prevLocation）且本轮未显式指定离场的角色，
+	//    自动归空 at（跟随当前场景），防止旧存档或地名措辞微调导致同行角色全员掉成「已离场」。
+	// 2) 若角色显式写了与当前 location 逐字一致的 at，统一归空 "" 表示在场，减少 places 表变体噪声。
+	const locationChanged = typeof patch.location === "string" && next.location !== prevLocation;
+	for (const [name, c] of Object.entries(next.characters)) {
+		if (c.at && next.location && c.at === next.location) {
+			c.at = "";
+		} else if (locationChanged && !explicitAtChars.has(name) && prevLocation && c.at === prevLocation) {
+			c.at = "";
 		}
 	}
 	registerRoster(next);
@@ -201,28 +288,51 @@ export function applyPatch(state: WorldState, patch: Record<string, unknown>): P
 
 /** 注入用的紧凑可读格式 */
 export function formatState(state: WorldState): string {
+	const en = getUiLocale() === "en";
 	const lines: string[] = [];
-	if (state.time) lines.push(`时间：${state.time}`);
-	if (state.location) lines.push(`地点：${state.location}`);
+	if (state.time) lines.push(en ? `Time: ${state.time}` : `时间：${state.time}`);
+	if (state.location) lines.push(en ? `Location: ${state.location}` : `地点：${state.location}`);
 	for (const [name, c] of Object.entries(state.characters)) {
-		const parts = [`好感 ${c.affinity}`];
-		if (c.status) parts.push(`状态：${c.status}`);
-		// 位置：与 location 相同＝在场，不同＝人在别处。给的是两个地名这条事实，
-		// 「他能不能看见这边」由模型自己判断（不替它下结论）。
-		if (c.at) parts.push(c.at === state.location ? "在场" : `在：${c.at}`);
-		if (c.notes) parts.push(`备注：${c.notes}`);
-		lines.push(`${name}：${parts.join("；")}`);
+		const parts = [en ? `affinity ${c.affinity}` : `好感 ${c.affinity}`];
+		if (c.status) parts.push(en ? `status: ${c.status}` : `状态：${c.status}`);
+		// 位置：空串或与 location 相同＝在场，其余＝人在别处。
+		if (c.at && c.at !== state.location) parts.push(en ? `at: ${c.at}` : `在：${c.at}`);
+		else if (state.location || c.at === "") parts.push(en ? "present" : "在场");
+		if (c.notes) parts.push(en ? `notes: ${c.notes}` : `备注：${c.notes}`);
+		lines.push(en ? `${name}: ${parts.join("; ")}` : `${name}：${parts.join("；")}`);
 	}
-	if (state.inventory.length) lines.push(`物品：${state.inventory.join("、")}`);
-	for (const [k, v] of Object.entries(state.flags)) lines.push(`${k}：${v}`);
-	if (state.plot_threads.length) lines.push(`剧情线：${state.plot_threads.map((t) => `「${t}」`).join(" ")}`);
-	return lines.length ? lines.join("\n") : "（尚无记录）";
+	if (state.inventory.length) lines.push(en ? `Inventory: ${state.inventory.join(", ")}` : `物品：${state.inventory.join("、")}`);
+	for (const [k, v] of Object.entries(state.flags)) lines.push(en ? `${k}: ${v}` : `${k}：${v}`);
+	if (state.plot_threads.length) {
+		lines.push(
+			en
+				? `Plot threads: ${state.plot_threads.map((t) => `"${t}"`).join(" ")}`
+				: `剧情线：${state.plot_threads.map((t) => `「${t}」`).join(" ")}`,
+		);
+	}
+	return lines.length ? lines.join("\n") : en ? "(No records yet)" : "（尚无记录）";
 }
 
 // ---------- 登场名录（agent 索引表） ----------
 
-/** 名录各表容量上限（超出丢最旧——Record 保持插入序）。防剧情线改写措辞导致的近重复无限累积。 */
-const ROSTER_CAPS = { characters: 100, items: 100, events: 60, places: 60 } as const;
+export type RosterTableKey = "characters" | "places" | "items" | "events";
+
+/** 名录各表容量上限（超出丢最旧——Record 保持插入序）。防地点/剧情线改写措辞导致的近重复无限累积。 */
+const ROSTER_CAPS = { characters: 100, items: 100, events: 60, places: 30 } as const;
+
+/** 计算当前各名录表的活跃条目集合（与前端 RosterPanel 同口径） */
+export function activeRosterSets(state: WorldState): Record<RosterTableKey, Set<string>> {
+	return {
+		characters: new Set(
+			Object.entries(state.characters ?? {})
+				.filter(([, c]) => !c.at || c.at === state.location)
+				.map(([name]) => name),
+		),
+		places: new Set(state.location ? [state.location] : []),
+		items: new Set(state.inventory ?? []),
+		events: new Set(state.plot_threads ?? []),
+	};
+}
 
 /** 名录登记时给条目的标记预算（存首次登场的剧情时间，自由文本如「第二天清晨」） */
 const ROSTER_BLURB_MAX = 30;
@@ -290,15 +400,15 @@ function registerRoster(next: WorldState): void {
  */
 const ROSTER_SECTION_MAX_CHARS = 1200;
 
-function rosterSection(label: string, entries: Array<[string, string]>): string | undefined {
+function rosterSection(label: string, entries: Array<[string, string]>, en: boolean): string | undefined {
 	if (entries.length === 0) return undefined;
-	const withBlurb = entries.map(([name, blurb]) => (blurb ? `${name}（${blurb}）` : name));
+	const withBlurb = entries.map(([name, blurb]) => (blurb ? (en ? `${name} (${blurb})` : `${name}（${blurb}）`) : name));
 	// 名字必须全量出：「名录之外的名字才是新登场」这条推断只有在名录完整时才成立，
 	// 按条目截断会让被截掉的角色变成「新人」。装不下就整节退成纯名字，牺牲简述不牺牲完整性。
 	// 规模有界：ROSTER_CAPS 已把条目数封在 100/100/60。
 	const total = withBlurb.reduce((n, t) => n + t.length + 1, 0);
 	const titles = total <= ROSTER_SECTION_MAX_CHARS ? withBlurb : entries.map(([name]) => name);
-	return `${label}：${titles.join("、")}`;
+	return en ? `${label}: ${titles.join(", ")}` : `${label}：${titles.join("、")}`;
 }
 
 /**
@@ -311,14 +421,15 @@ function rosterSection(label: string, entries: Array<[string, string]>): string 
  * 空着不出块，模型根本不知道有这回事。给的是通道状态这条事实，不是「你去查」这条指令。
  */
 export function formatRosterIndex(state: WorldState): string {
+	const en = getUiLocale() === "en";
 	const r = state.roster;
 	const sections = r
 		? [
-				rosterSection("人物", Object.entries(r.characters)),
-				rosterSection("地点", Object.entries(r.places ?? {})),
-				rosterSection("物品", Object.entries(r.items)),
-				rosterSection("剧情线", Object.entries(r.events)),
+				rosterSection(en ? "Characters" : "人物", Object.entries(r.characters), en),
+				rosterSection(en ? "Places" : "地点", Object.entries(r.places ?? {}), en),
+				rosterSection(en ? "Items" : "物品", Object.entries(r.items), en),
+				rosterSection(en ? "Plot threads" : "剧情线", Object.entries(r.events), en),
 			].filter((s): s is string => Boolean(s))
 		: [];
-	return sections.length ? sections.join("；") : "（尚无登记）";
+	return sections.length ? sections.join(en ? "; " : "；") : en ? "(None registered yet)" : "（尚无登记）";
 }

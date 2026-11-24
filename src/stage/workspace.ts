@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { applyDraftEdits, locateEdit, searchDraft, type DraftEditItem, type DraftRules } from "../draft.ts";
+import { getUiLocale } from "../i18n/index.ts";
 
 type BeatMode = "explore" | "write";
 type BeatPhase = "exploring" | "writing" | "waiting" | "sealed" | "stopped" | "error";
@@ -258,9 +259,12 @@ function editTimeline(ws: TurnWorkspace, text: string, edits: DraftEditItem[]): 
 
 /** User-only operation. Never registered as a model tool. */
 export function restoreDraftVersion(ws: TurnWorkspace, deps: WorkspaceDeps, version: number, expectedVersion: number): void {
-	if (expectedVersion !== ws.version) throw new Error(`稿件版本已变为 v${ws.version}，请刷新后再恢复。`);
+	const en = getUiLocale() === "en";
+	if (expectedVersion !== ws.version) {
+		throw new Error(en ? `Draft version is now v${ws.version}; refresh before restoring.` : `稿件版本已变为 v${ws.version}，请刷新后再恢复。`);
+	}
 	const prior = ws.revisions.find((r) => r.version === version);
-	if (!prior) throw new Error("该稿件版本不存在。");
+	if (!prior) throw new Error(en ? "That draft version does not exist." : "该稿件版本不存在。");
 	const next = structuredClone(ws);
 	reviseDraft(next, prior.text, `user_restore:v${version}`, true);
 	next.timeline = next.timeline.filter((s) => s.kind !== "text" || s.draft);
@@ -269,10 +273,17 @@ export function restoreDraftVersion(ws: TurnWorkspace, deps: WorkspaceDeps, vers
 }
 
 export function workspaceToolBlock(ws: TurnWorkspace, name: string, mode?: "read" | "write"): string | undefined {
-	if (ws.revision && (mode !== "read" || name === "ask")) return "上一拍修订已完成，本次请求不能继续写入或提问。";
+	const en = getUiLocale() === "en";
+	if (ws.revision && (mode !== "read" || name === "ask")) {
+		return en ? "Previous-beat revision is complete; cannot write or ask further in this request." : "上一拍修订已完成，本次请求不能继续写入或提问。";
+	}
 	if (name === "beat_plan" || name === "ask") return undefined;
-	if (ws.mode === "explore" && mode !== "read") return "当前为探索阶段；beat_plan(mode=write) 后才能写入。";
-	if (ws.sealed && mode !== "read") return "当前稿已收笔，不能继续写入。";
+	if (ws.mode === "explore" && mode !== "read") {
+		return en ? "Currently in explore mode; call beat_plan(mode=write) before writing." : "当前为探索阶段；beat_plan(mode=write) 后才能写入。";
+	}
+	if (ws.sealed && mode !== "read") {
+		return en ? "Current draft is already sealed and cannot be modified." : "当前稿已收笔，不能继续写入。";
+	}
 	return undefined;
 }
 
@@ -283,6 +294,7 @@ export function runWriteTool(
 	args: Record<string, unknown>,
 	internal: boolean | "capture" = false,
 ): WriteToolResult {
+	const en = getUiLocale() === "en";
 	const fail = (text: string): WriteToolResult => ({ text, ok: false, isError: true, details: { draftId: ws.id, version: ws.version } });
 	const receipt = (text: string, activity?: string): WriteToolResult => ({ text, activity, ok: true,
 		details: { draftId: ws.id, version: ws.version, phase: ws.phase, ...(deps.file ? { file: deps.file } : {}) } });
@@ -290,50 +302,58 @@ export function runWriteTool(
 		if ((name === "draft_read" || name === "draft_search") && deps.reload) {
 			const latest = deps.reload();
 			if (latest) {
-				if (latest.id !== ws.id || latest.sessionId !== ws.sessionId) return fail("稿件身份不匹配。");
+				if (latest.id !== ws.id || latest.sessionId !== ws.sessionId) return fail(en ? "Draft identity mismatch." : "稿件身份不匹配。");
 				Object.assign(ws, latest);
 			}
 		}
 		if (name === "draft_read") {
 			const start = args.start === undefined ? 0 : Number(args.start);
 			const end = args.end === undefined ? ws.draft.length : Number(args.end);
-			if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > ws.draft.length) return fail("start/end 必须是稿件范围内的字符偏移（从 0 开始，end 不含）。");
-			return receipt(JSON.stringify({ version: ws.version, start, end, total: ws.draft.length, content: ws.draft.slice(start, end) }), "读现稿");
+			if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > ws.draft.length) {
+				return fail(en ? "start/end must be 0-based character offsets within the draft (end exclusive)." : "start/end 必须是稿件范围内的字符偏移（从 0 开始，end 不含）。");
+			}
+			return receipt(JSON.stringify({ version: ws.version, start, end, total: ws.draft.length, content: ws.draft.slice(start, end) }), en ? "Read draft" : "读现稿");
 		}
 		if (name === "draft_search") {
-			if (typeof args.query !== "string" || !args.query.trim()) return fail("query 不能为空。");
+			if (typeof args.query !== "string" || !args.query.trim()) return fail(en ? "query cannot be empty." : "query 不能为空。");
 			const result = searchDraft(ws.draft, args.query, Math.max(1, Math.min(50, Number(args.limit) || 8)));
-			return receipt(JSON.stringify({ version: ws.version, ...result }), "查现稿");
+			return receipt(JSON.stringify({ version: ws.version, ...result }), en ? "Searched draft" : "查现稿");
 		}
 		if (name === "beat_plan") {
 			const next = structuredClone(ws);
 			if (args.mode !== undefined) {
-				if (args.mode !== "explore" && args.mode !== "write") return fail("mode 须为 explore 或 write。");
-				if (ws.sealed) return fail("当前稿已收笔。");
+				if (args.mode !== "explore" && args.mode !== "write") return fail(en ? "mode must be explore or write." : "mode 须为 explore 或 write。");
+				if (ws.sealed) return fail(en ? "Current draft is already sealed." : "当前稿已收笔。");
 				next.mode = args.mode;
 				next.phase = args.mode === "explore" ? "exploring" : "writing";
 			}
 			if (args.steps !== undefined) {
-				if (!Array.isArray(args.steps) || args.steps.length > 20) return fail("steps 须为不超过 20 项的数组。");
+				if (!Array.isArray(args.steps) || args.steps.length > 20) return fail(en ? "steps must be an array of at most 20 items." : "steps 须为不超过 20 项的数组。");
 				const ids = new Set<string>();
 				next.plan = args.steps.map((s: Record<string, unknown>, i: number) => {
-					if (!s || typeof s.text !== "string" || !s.text.trim()) throw new Error("计划项 text 不能为空。");
+					if (!s || typeof s.text !== "string" || !s.text.trim()) throw new Error(en ? "Plan step text cannot be empty." : "计划项 text 不能为空。");
 					const id = typeof s.id === "string" && s.id ? s.id : String(i + 1);
-					if (ids.has(id)) throw new Error("计划项 id 不可重复。");
+					if (ids.has(id)) throw new Error(en ? "Plan step ids must be unique." : "计划项 id 不可重复。");
 					ids.add(id);
 					const status = s.status ?? "pending";
-					if (!["pending", "in_progress", "done", "cancelled"].includes(String(status))) throw new Error("计划项 status 无效。");
+					if (!["pending", "in_progress", "done", "cancelled"].includes(String(status))) throw new Error(en ? "Invalid plan step status." : "计划项 status 无效。");
 					return { id, text: s.text, status: status as BeatStep["status"] };
 				});
 			}
 			commitWorkspace(ws, deps, next);
-			return receipt(JSON.stringify({ mode: ws.mode, steps: ws.plan, version: ws.version }), "更新本拍计划");
+			return receipt(JSON.stringify({ mode: ws.mode, steps: ws.plan, version: ws.version }), en ? "Updated beat plan" : "更新本拍计划");
 		}
-		if (!["draft_write", "draft_append", "draft_edit", "draft_seal"].includes(name)) return fail(`未知稿件工具 ${name}。`);
+		if (!["draft_write", "draft_append", "draft_edit", "draft_seal"].includes(name)) return fail(en ? `Unknown draft tool ${name}.` : `未知稿件工具 ${name}。`);
 		if (!internal) {
 			const block = workspaceToolBlock(ws, name, "write");
 			if (block) return fail(block);
-			if (args.version !== ws.version) return fail(`版本冲突：当前为 v${ws.version}，收到 ${String(args.version)}。本次未修改；draft_read 可读取当前版本。`);
+			if (args.version !== ws.version) {
+				return fail(
+					en
+						? `Version conflict: current is v${ws.version}, received ${String(args.version)}. No changes applied; call draft_read to read the current version.`
+						: `版本冲突：当前为 v${ws.version}，收到 ${String(args.version)}。本次未修改；draft_read 可读取当前版本。`,
+				);
+			}
 		}
 		const next = structuredClone(ws);
 		let activity = "";
@@ -342,26 +362,26 @@ export function runWriteTool(
 			if (internal) next.directWrites++; else next.explicitWrites++;
 		}
 		if (name === "draft_seal") {
-			if (!ws.draft.trim()) return fail("工作区还没有稿件。");
-			next.sealed = true; next.phase = "sealed"; activity = "收笔";
+			if (!ws.draft.trim()) return fail(en ? "No draft in workspace yet." : "工作区还没有稿件。");
+			next.sealed = true; next.phase = "sealed"; activity = en ? "Sealed beat" : "收笔";
 		} else if (name === "draft_edit") {
-			if (!Array.isArray(args.edits)) return fail("edits 须为 old/new 数组。");
+			if (!Array.isArray(args.edits)) return fail(en ? "edits must be an array of { old, new } items." : "edits 须为 old/new 数组。");
 			const result = applyDraftEdits(ws.draft, args.edits as DraftEditItem[]);
 			if (!result.ok) return fail(result.details.join("\n"));
 			editTimeline(next, result.text!, args.edits as DraftEditItem[]);
 			reviseDraft(next, result.text!, name); next.edits++;
-			activity = `改稿 ${args.edits.length} 处`; detail = result.details.join("\n");
+			activity = en ? `Edited draft (${args.edits.length})` : `改稿 ${args.edits.length} 处`; detail = result.details.join("\n");
 		} else {
-			if (typeof args.content !== "string" || !args.content.trim()) return fail("content 不能为空。");
+			if (typeof args.content !== "string" || !args.content.trim()) return fail(en ? "content cannot be empty." : "content 不能为空。");
 			if (name === "draft_append") {
 				const separator = ws.draft ? (typeof args.separator === "string" ? args.separator : "\n\n") : "";
 				const chunk = separator + args.content;
 				reviseDraft(next, ws.draft + chunk, name); next.appends++;
 				next.timeline.push({ kind: "text", text: chunk, draft: true });
-				activity = "续写一段";
+				activity = en ? "Appended to draft" : "续写一段";
 			} else {
 				reviseDraft(next, args.content, internal ? "direct" : name); next.writes++;
-				replaceDraftSegment(next, args.content); activity = internal ? "直出正文已保存" : "写入现稿";
+				replaceDraftSegment(next, args.content); activity = internal ? (en ? "Saved direct prose" : "直出正文已保存") : (en ? "Wrote draft" : "写入现稿");
 			}
 			if (internal === true) { next.sealed = true; next.phase = "sealed"; }
 		}
@@ -369,6 +389,11 @@ export function runWriteTool(
 		if (name !== "draft_seal") next.timeline = next.timeline.filter((s) => s.kind !== "text" || s.draft);
 		delete next.preview;
 		commitWorkspace(ws, deps, next);
-		return receipt(`${activity}，v${ws.version}（${ws.phase}）。${detail ? "\n" + detail : ""}`, activity);
+		return receipt(
+			en
+				? `${activity}, v${ws.version} (${ws.phase}).${detail ? "\n" + detail : ""}`
+				: `${activity}，v${ws.version}（${ws.phase}）。${detail ? "\n" + detail : ""}`,
+			activity,
+		);
 	} catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
 }

@@ -59,7 +59,7 @@ import {
 	setSkinEnabled,
 	type CardFrontSnapshot,
 } from "../src/cardfront.ts";
-import { RP_COMMANDS } from "../src/commands.ts";
+import { localizedCommands, RP_COMMANDS } from "../src/commands.ts";
 import { setUiLocale, t } from "../src/i18n/index.ts";
 import {
 	getMemoryStatus,
@@ -154,9 +154,11 @@ import {
 	btwRulesPath,
 	cardRulesPath,
 	globalRulesPath,
+	readLocalizedGlobalSlot,
 	readUserRules,
 	rulesAgentDir,
 	systemPromptPath,
+	type ShippedSlotName,
 } from "../src/user-rules.ts";
 import { denylistContent, denylistPath, parseDenylist } from "../src/bash-denylist.ts";
 import { parseRelayRules, relayRulesContent, relayRulesPath } from "../src/relay-rules.ts";
@@ -320,6 +322,8 @@ export interface RestHost {
 	searchSessions(q: string): Promise<SessionSearchHit[]>;
 	/** 世界状态用户主权编辑（applyPatch 语义，落盘+ await statesync） */
 	applyStatePatch(patch: Record<string, unknown>): Promise<{ applied: string[]; warnings: string[] }>;
+	/** 手动触发一轮场记刷新状态栏与世界状态 */
+	refreshState(): Promise<{ kind: string; applied?: string[]; reason?: string; error?: string }>;
 	notify(level: "info" | "warning" | "error", text: string): void;
 	/** 世界线时间线视图（会话树 rp-save + 旁路 meta） */
 	worldlineView(): import("../src/worldline.ts").WorldlineView;
@@ -517,6 +521,7 @@ const CONFIG_EDITABLE = new Set([
 	"samplers",
 	"disabledLore",
 	"backendControl",
+	"turboMode",
 	"creationMode",
 	"sideModel",
 	"compactEveryNTurns",
@@ -548,6 +553,8 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 	next.greeting = next.greeting === true;
 	// 决策门禁档位：只认 ask / silent；非法值删除（扩展缺省按 silent）
 	if (next.creationMode !== "ask" && next.creationMode !== "silent") delete next.creationMode;
+	if (next.turboMode === true) next.turboMode = true;
+	else delete next.turboMode;
 	// 后端中转策略：严格白名单校验各字段
 	if (next.relayPolicy !== undefined) {
 		const rawRp = next.relayPolicy as Record<string, unknown> | null;
@@ -666,6 +673,7 @@ export function applyConfigPatch(config: RpConfig, patch: Record<string, unknown
 export function saveConfig(cwd: string, patch: Record<string, unknown>): RpConfig {
 	const next = applyConfigPatch(loadConfig(cwd), patch);
 	writeJsonWithBackup(configPath(cwd), next);
+	setUiLocale(next.uiLanguage);
 	return next;
 }
 
@@ -2243,7 +2251,9 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 		switch (route) {
 			// ---- 命令清单（输入框补全用；单一来源 src/commands.ts） ----
 			case "GET /api/commands": {
-				sendJson(res, 200, { commands: RP_COMMANDS });
+				const lang = query.get("lang");
+				const loc = lang === "en" || lang === "zh" ? lang : undefined;
+				sendJson(res, 200, { commands: localizedCommands(loc) });
 				return true;
 			}
 			// ---- 命令桥（agent 自操作 / 脚本化入口；PLAN-PHASE3 §6.3 三入口之一） ----
@@ -3419,6 +3429,12 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				sendJson(res, 200, r);
 				return true;
 			}
+			case "POST /api/state/refresh": {
+				if (refuseWhileStreaming()) return true;
+				const r = await host.refreshState();
+				sendJson(res, 200, r);
+				return true;
+			}
 
 			// ---- 用户角色 persona（PLAN-PANELS-V2 §2.5）：多身份清单/创建/选择/编辑/删除/按卡锁定 ----
 			case "GET /api/personas": {
@@ -3776,16 +3792,8 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				const config = loadConfig(host.cwd);
 				const cardDir = dirname(resolvePath(host.cwd, config.card));
 				const rules = readUserRules(cardDir);
-				const readGlobalSlot = (p: string, shippedName: string): string => {
-					if (existsSync(p)) return readFileSync(p, "utf8");
-					const shippedAbs = resolvePath(host.cwd, `assets/${shippedName}`);
-					if (existsSync(shippedAbs)) return readFileSync(shippedAbs, "utf8");
-					try {
-						return readFileSync(new URL(`../assets/${shippedName}`, import.meta.url), "utf8");
-					} catch {
-						return "";
-					}
-				};
+				const readGlobalSlot = (p: string, shippedName: ShippedSlotName): string =>
+					readLocalizedGlobalSlot(p, shippedName, { fallbackToShipped: true });
 				sendJson(res, 200, {
 					global: { content: readGlobalSlot(globalRulesPath(), "APPEND_SYSTEM.md"), path: globalRulesPath() },
 					agent: { content: readGlobalSlot(agentRulesPath(), "AGENT_APPEND_SYSTEM.md"), path: agentRulesPath() },
@@ -4723,6 +4731,7 @@ async function routeApiRequest(req: IncomingMessage, res: ServerResponse, host: 
 				const patch = JSON.parse(await readBody(req)) as Record<string, unknown>;
 				const next = applyConfigPatch(loadConfig(host.cwd), patch);
 				writeJsonWithBackup(configPath(host.cwd), next);
+				setUiLocale(next.uiLanguage);
 				await host.softRefreshConfig();
 				sendJson(res, 200, { config: next });
 				return true;

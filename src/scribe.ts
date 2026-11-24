@@ -5,6 +5,7 @@
  * 连续性/代打等事后审查已移除（费 token 且用户反馈无用）。
  */
 
+import { getUiLocale } from "./i18n/index.ts";
 import type { WorldState } from "./types.ts";
 import { formatMvuTree, type MvuTree } from "./mvu.ts";
 
@@ -59,16 +60,29 @@ export interface ScribeResult {
 }
 
 export function buildScribeTurnPrompt(input: ScribePromptInput): { systemPrompt: string; userText: string } {
+	const en = getUiLocale() === "en";
 	const { state, userText, assistantText, charName, userName, mvu } = input;
 	const panels = input.panels?.filter((p) => p.tree && typeof p.tree === "object") ?? [];
 	const knownCharacters = Object.keys(state.characters);
-	const nameGuide = knownCharacters.length
-		? `名字必须使用账本中已有的写法（当前已有：${knownCharacters.join("、")}；用户角色「${userName}」）`
-		: `用户角色写作「${userName}」`;
+	const nameGuide = en
+		? knownCharacters.length
+			? `Names must match the exact spelling already in the ledger (currently present: ${knownCharacters.join(", ")}; user character: "${userName}")`
+			: `Write the user character as "${userName}"`
+		: knownCharacters.length
+			? `名字必须使用账本中已有的写法（当前已有：${knownCharacters.join("、")}；用户角色「${userName}」）`
+			: `用户角色写作「${userName}」`;
 
 	// MVU 段：仅 MVU 卡追加。非 MVU 卡两处均为空串 → prompt 与旧版逐字一致（守回归）。
 	const mvuSystemSection = mvu
-		? `
+		? en
+			? `
+
+This card also has a **state tree** (driving its status bar panel). Output an additional field:
+"mvu_patch": extract updates to this tree from the turn, shaped as { "dot.separated.path": newValue } (e.g. {"user.inventory.gold":480,"world.location":"Riften"}).
+- Copy paths verbatim from [State Tree · Current Values] below; include only paths that **actually changed**, with the complete new value (numbers as numbers, strings as strings, objects for whole-subtree replacement).
+- Base every change on what **actually happened** in this turn, not speculation; output {} for "mvu_patch" if nothing changed.
+- Output only path -> new value pairs; do not emit op/JSONPatch/UpdateVariable syntax.`
+			: `
 
 这张卡另有一棵**状态树**（驱动卡上的状态栏面板）。多输出一个字段：
 "mvu_patch"：从本轮对话提取该树需要更新的值，形如 { "路径.用点分隔": 新值 }（如 {"user.背包.金币":480,"世界.当前地点":"裂谷城"}）。
@@ -79,7 +93,14 @@ export function buildScribeTurnPrompt(input: ScribePromptInput): { systemPrompt:
 
 	// 面板段：仅在有「声明了数据的面板」时追加。没有则为空串 → prompt 与旧版逐字一致（守回归）。
 	const panelSystemSection = panels.length
-		? `
+		? en
+			? `
+
+There are also ${panels.length} display panel(s) with data trees (their layout is fixed and displayed values come from these trees). Output an additional field:
+"panel_patch": shaped as { "panelName": { "dot.separated.path": newValue } }.
+- Copy panel names and paths verbatim from [Panel Data · Current Values] below; include only panels and paths that **actually changed**.
+- Base every change on what actually happened in this turn; output {} for "panel_patch" if nothing changed.`
+			: `
 
 剧中还有 ${panels.length} 个展示面板，各自带一棵数据树（面板的外观是写死的模板，屏幕上显示的值来自这些树）。多输出一个字段：
 "panel_patch"：形如 { "面板名": { "路径.用点分隔": 新值 } }。
@@ -87,12 +108,25 @@ export function buildScribeTurnPrompt(input: ScribePromptInput): { systemPrompt:
 - 判断依据同上：本轮剧情真的发生了什么；无变化则 "panel_patch" 为 {}。`
 		: "";
 
-	const systemPrompt = `你是一场角色扮演的场记。阅读【当前账本】与【本轮对话】，只做一件事：输出 JSON，更新需要记账的持久变化。
+	const systemPrompt = en
+		? `You are the scribe for a roleplay session. Read [Current Ledger] and [This Turn's Exchange], and do one thing only: output JSON updating durable changes that should be recorded.
+
+Output field:
+"patch": durable changes extracted from this turn. Field semantics:
+- "time" / "location": string, full replacement. Always update time when in-story time advances (nightfall, next morning, days later).
+- "characters": { "name": { "affinity"?, "status"?, "notes"?, "at"? } }, merged per field. affinity is an integer -100..100 toward ${userName}, adjusted in small steps (usually ±1..10) from the current ledger value. Set "at" ONLY when the character is not at the current location; leave "" when present in the current scene. ${nameGuide}; create a new entry only for newly introduced characters using their in-story name — do not add work/scenario titles (such as "${charName}" if it is not a person's name) as characters.
+- "inventory": string array, full replacement — provide the full updated list only when ownership changes, noting who holds each item (e.g. "Brass pocket watch (held by ${userName})").
+- "flags": key-value map, merged by key (string values).
+- "plot_threads": string array, full replacement — provide the full list when adding or resolving plot threads.
+Notes: record negative outcomes too (rejected gift -> item stays with original owner; broken promise -> record in flags); add new promises, appointments, and foreshadowing to plot_threads; omit unchanged fields from patch; if nothing changed at all, set "patch" to {}.${mvuSystemSection}${panelSystemSection}
+
+Output ONLY a JSON object, e.g. {"patch":{...}${mvu ? `,"mvu_patch":{...}` : ""}${panels.length ? `,"panel_patch":{...}` : ""}} or {"patch":{}${mvu ? `,"mvu_patch":{}` : ""}${panels.length ? `,"panel_patch":{}` : ""}}. Do not output warnings or any other text.`
+		: `你是一场角色扮演的场记。阅读【当前账本】与【本轮对话】，只做一件事：输出 JSON，更新需要记账的持久变化。
 
 输出唯一字段：
 "patch"：从本轮对话中提取需要记账的持久变化。字段语义：
 - "time" / "location"：字符串，整体替换。剧内时间推移（入夜、次日清晨、数日后）必须更新 time。
-- "characters"：{ "名字": { "affinity"?, "status"?, "notes"?, "at"? } }，按字段合并。affinity 为 -100..100 的对${userName}态度值，基于账本当前值小步调整（通常 ±1~10）。"at" 是该角色此刻所在地，与 location 同一写法；离开当前场景的人写他去了哪。${nameGuide}；只有全新出场的人物才建新条目，键用正文中的人名——不要把作品/剧本标题（如「${charName}」这类非人名）当作角色。
+- "characters"：{ "名字": { "affinity"?, "status"?, "notes"?, "at"? } }，按字段合并。affinity 为 -100..100 的对${userName}态度值，基于账本当前值小步调整（通常 ±1~10）。"at" 仅在角色不在当前 location 时填写去向；在当前场景则留空 ""。${nameGuide}；只有全新出场的人物才建新条目，键用正文中的人名——不要把作品/剧本标题（如「${charName}」这类非人名）当作角色。
 - "inventory"：字符串数组，整体替换——只在物品归属变化时给出变化后的完整清单，条目注明归属（如「黄铜怀表（${userName}持有）」）。
 - "flags"：键值对，按键合并（值为字符串）。
 - "plot_threads"：字符串数组，整体替换——新增或了结剧情线时给出完整清单。
@@ -102,7 +136,12 @@ export function buildScribeTurnPrompt(input: ScribePromptInput): { systemPrompt:
 
 	// MVU 树当前值 + 更新规则：放 user 段（数据不是指令），供场记判断哪些值该动。
 	const mvuUserSection = mvu
-		? `
+		? en
+			? `
+
+[State Tree · Current Values]
+${formatMvuTree(mvu.tree)}${mvu.rules ? `\n\n[State Tree · Update Rules (by Card Author)]\n${mvu.rules.trim()}` : ""}`
+			: `
 
 【状态树·当前值】
 ${formatMvuTree(mvu.tree)}${mvu.rules ? `\n\n【状态树·更新规则（卡作者所写）】\n${mvu.rules.trim()}` : ""}`
@@ -110,16 +149,38 @@ ${formatMvuTree(mvu.tree)}${mvu.rules ? `\n\n【状态树·更新规则（卡作
 
 	// 面板当前值同样放 user 段（数据不是指令）
 	const panelUserSection = panels.length
-		? `
+		? en
+			? `
+
+[Panel Data · Current Values]
+${panels.map((p) => `[${p.name}]\n${formatMvuTree(p.tree)}`).join("\n\n")}`
+			: `
 
 【面板数据·当前值】
 ${panels.map((p) => `〔${p.name}〕\n${formatMvuTree(p.tree)}`).join("\n\n")}`
 		: "";
 
+	// 只把场记有权修改的 6 个账本字段送模：roster 由 applyPatch 自动派生、mvu/panelData 已在下方单独格式化，
+	// 避免长会话把整份 roster 与重复状态树塞进场记输入推爆上下文与回复上限。
+	const ledgerState = {
+		time: state.time,
+		location: state.location,
+		characters: state.characters,
+		inventory: state.inventory,
+		flags: state.flags,
+		plot_threads: state.plot_threads,
+	};
 	// agent 模式（章写入触发）没有「用户这一拍的话」——讨论不是剧情，不进场记；只给章原文。
-	const exchange = userText.trim() ? `${userName}：${userText}\n\n${charName}：${assistantText}` : assistantText;
-	const user = `【当前账本】
-${JSON.stringify(state, null, 2)}${mvuUserSection}${panelUserSection}
+	const sep = en ? ": " : "：";
+	const exchange = userText.trim() ? `${userName}${sep}${userText}\n\n${charName}${sep}${assistantText}` : assistantText;
+	const user = en
+		? `[Current Ledger]
+${JSON.stringify(ledgerState, null, 2)}${mvuUserSection}${panelUserSection}
+
+[This Turn's Exchange]
+${exchange}`
+		: `【当前账本】
+${JSON.stringify(ledgerState, null, 2)}${mvuUserSection}${panelUserSection}
 
 【本轮对话】
 ${exchange}`;
@@ -222,11 +283,19 @@ export function buildLoreAliasPrompt(
 	entries: AliasEntryInput[],
 	_language?: string,
 ): { systemPrompt: string; userText: string } {
-	const systemPrompt = `你为角色扮演世界书条目生成检索别名（使用与条目原文及叙事相匹配的语言）。这些别名用于在叙事文本中做关键词匹配，因此要覆盖该事物在叙事中最可能被写出的称呼：常见意译、音译、职称（每条目 2~5 个，单个别名 2~6 字为宜）。不要生成过于宽泛的词（如「建筑」「怪物」这类单独出现会误触发的通用词，除非条目本身就是该范畴）。
+	const en = getUiLocale() === "en";
+	const systemPrompt = en
+		? `You generate search aliases for roleplay lorebook entries (in the language matching the entry text and narrative). These aliases are used for keyword matching in story text, so cover the terms most likely to appear in prose: common translations, transliterations, titles, and epithets (2–5 aliases per entry, concise terms preferred). Avoid overly broad words (such as "building" or "monster") that would false-trigger on their own unless the entry itself is about that category.
+Output ONLY a JSON object: { "<uid>": ["alias1", "alias2", ...], ... }. Do not output any other text.`
+		: `你为角色扮演世界书条目生成检索别名（使用与条目原文及叙事相匹配的语言）。这些别名用于在叙事文本中做关键词匹配，因此要覆盖该事物在叙事中最可能被写出的称呼：常见意译、音译、职称（每条目 2~5 个，单个别名 2~6 字为宜）。不要生成过于宽泛的词（如「建筑」「怪物」这类单独出现会误触发的通用词，除非条目本身就是该范畴）。
 只输出 JSON 对象：{ "<uid>": ["别名1", "别名2", ...], ... }，不要输出任何其他文字。`;
 
 	const userText = entries
-		.map((e) => `uid=${e.uid} keys=[${e.keys.join(", ")}] 标题=${e.comment || "（无）"}\n摘要：${e.excerpt}`)
+		.map((e) =>
+			en
+				? `uid=${e.uid} keys=[${e.keys.join(", ")}] title=${e.comment || "(none)"}\nexcerpt: ${e.excerpt}`
+				: `uid=${e.uid} keys=[${e.keys.join(", ")}] 标题=${e.comment || "（无）"}\n摘要：${e.excerpt}`,
+		)
 		.join("\n\n");
 
 	return { systemPrompt, userText };
@@ -274,9 +343,31 @@ export interface RpSummaryPrompt {
 }
 
 export function buildRpSummaryPrompt(input: RpSummaryPromptInput): RpSummaryPrompt {
+	const en = getUiLocale() === "en";
 	const { conversationText, stateSnapshot, previousSummary, userName } = input;
 
-	const systemPrompt = `你是一场长篇角色扮演的场记。你的任务是为即将从上下文中裁掉的早期剧情写一份接力摘要——它将成为主演模型唯一能看到的「前情」，后续剧情将基于「本摘要 + 保留的最近对话」继续演出。
+	const systemPrompt = en
+		? `You are the scribe for a long-form roleplay session. Your task is to write a continuity recap for earlier beats about to be trimmed from context — this recap will be the only earlier history the main model sees, and the story will continue from "this recap + kept recent beats".
+
+Write in the same language as the source dialogue, following this structure:
+
+## Recap
+Summarize key events in chronological order (who did what and the outcome), preserving in-story time markers (e.g. "Day 1 dusk", "Day 3 morning").
+
+## Characters
+For each character who appeared: personality traits, speech habits, how they address ${userName}, and their relationship warmth and trajectory with ${userName}.
+
+## Promises & Foreshadowing
+List every unfulfilled promise, one-off clue, and unresolved question. Err on the side of keeping rather than omitting — anything dropped here is permanently lost to later beats.
+
+## Fact Sheet
+Item ownership (who holds what), injuries and physical condition, important stats/numbers, and timeline (which in-story day it is now).
+
+## Current Scene
+Right now in-story: which day, time of day, location, who is present, and what action is underway. Base this strictly on the **latest** scene in the dialogue — this is the continuation point, and writing an earlier scene causes plot regression.
+
+Rules: record only what actually occurred in the dialogue; do not invent, comment, or continue the story; preserve in-story spelling of character and place names.`
+		: `你是一场长篇角色扮演的场记。你的任务是为即将从上下文中裁掉的早期剧情写一份接力摘要——它将成为主演模型唯一能看到的「前情」，后续剧情将基于「本摘要 + 保留的最近对话」继续演出。
 
 用与对话原文相同的语言输出，按以下结构：
 
@@ -300,11 +391,17 @@ export function buildRpSummaryPrompt(input: RpSummaryPromptInput): RpSummaryProm
 	const parts: string[] = [`<conversation>\n${conversationText}\n</conversation>`];
 	if (previousSummary) {
 		parts.push(
-			`<previous-summary>\n${previousSummary}\n</previous-summary>\n\n（上面是更早剧情的既有摘要：把它的内容合并进本次摘要，不要丢弃其中的承诺、伏笔与事实。）`,
+			en
+				? `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n(Above is the existing recap of earlier beats: merge its content into this recap without dropping any promises, clues, or facts.)`
+				: `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n（上面是更早剧情的既有摘要：把它的内容合并进本次摘要，不要丢弃其中的承诺、伏笔与事实。）`,
 		);
 	}
-	parts.push(`【工具账本快照】（辅助参考；记账可能滞后于正文，与对话记录冲突时以对话记录为准）\n${stateSnapshot}`);
-	parts.push("请按系统指令输出接力摘要。");
+	parts.push(
+		en
+			? `[Ledger Snapshot] (Reference only; bookkeeping may lag behind prose — if it conflicts with the dialogue transcript, trust the transcript.)\n${stateSnapshot}`
+			: `【工具账本快照】（辅助参考；记账可能滞后于正文，与对话记录冲突时以对话记录为准）\n${stateSnapshot}`,
+	);
+	parts.push(en ? "Output the continuity recap following the system instructions." : "请按系统指令输出接力摘要。");
 
 	return { systemPrompt, userText: parts.join("\n\n") };
 }

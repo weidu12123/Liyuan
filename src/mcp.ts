@@ -19,6 +19,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Type, type TSchema } from "typebox";
+import { getUiLocale } from "./i18n/index.ts";
 
 // ---------- 类型 ----------
 
@@ -297,12 +298,13 @@ export function builtinMcpServers(): McpCatalogEntry[] {
 		const v = process.env[k];
 		if (v) env[k] = v;
 	}
+	if (getUiLocale() === "en") env.LIYUAN_UI_LOCALE = "en";
 	// Electron 宿主：execPath 是应用二进制不是 node，不带此标记会 spawn 出第二个应用窗口
 	if (process.versions?.electron) env.ELECTRON_RUN_AS_NODE = "1";
 	return [
 		{
 			id: BUILTIN_VISION_ID,
-			name: "视觉识图",
+			name: getUiLocale() === "en" ? "Vision" : "视觉识图",
 			enabled: false,
 			transport: "stdio",
 			command: process.execPath,

@@ -82,7 +82,7 @@ import {
 } from "../src/paths.ts";
 import { seedBashDenylist } from "../src/bash-denylist.ts";
 import { seedRelayRules } from "../src/relay-rules.ts";
-import { applyPatch, loadState, saveState } from "../src/state.ts";
+import { activeRosterSets, applyPatch, loadState, saveState, type RosterTableKey } from "../src/state.ts";
 import { DEFAULT_CONFIG, type RpConfig, type WorldState } from "../src/types.ts";
 import {
 	loadTtsConfig,
@@ -164,7 +164,7 @@ import { chapterTitle, listStoryFiles, STORY_CHECKPOINT_TYPE, StoryHistory, stor
 import { DISCUSSION_SUMMARY_TYPE } from "../src/stage/discussion.ts";
 import { chatDirOf, chatSessionsDirOf, insidePath, sameCardPath } from "../src/paths.ts";
 import { readSessionCardInfo } from "../src/session-scan.ts";
-import { t } from "../src/i18n/index.ts";
+import { getUiLocale, t } from "../src/i18n/index.ts";
 import { cardFileIn, chatDataPath, chatDirOfSessionDir, chatModeOfSessionDir, isInternalChatWorkspacePath, listChatMarkdownAssets, loadCardConfig, mergeCardConfig, resolveCardSpace } from "../src/cardspace.ts";
 import { chatSessionsOf, chatsOfCard, ensureStorySessionDir, newChatSessionDir, storySessionTarget } from "../src/story-guide.ts";
 import { alreadyMigrated, applyCardMigration, migrateLegacyCardMemoryToChatAssets, planCardMigration, planOrphanSessions, promoteStagedCard } from "../src/migrate-cards.ts";
@@ -572,9 +572,30 @@ const safeStats = (): WireStats | null => {
 		// 引擎自算优先：压缩刚发生、下一拍真实 usage 还没落地时，pi 的数还停在压缩前
 		// （压缩条目是 custom entry，不进 pi 的消息列表）。其余时刻仍用 pi 的实测值。
 		const cu = stage?.contextUsage?.() ?? s.contextUsage;
+		// 消息数按当前活动分支统计（不含重 roll 废弃变体与其他世界线分支），与压缩拍数口径一致
+		const rawBranch = session.sessionManager.getBranch() as Array<{
+			type?: string;
+			customType?: string;
+			message?: { role?: string };
+		}>;
+		const isAgent = chatModeOfSessionDir(session.sessionManager.getSessionDir?.()) === "agent";
+		const activeBranch = isAgent
+			? rawBranch
+			: applyDraftRevisions(storyBranch(rawBranch as never) as never, { omitEditRequests: true }) as typeof rawBranch;
+		let userMessages = 0;
+		let assistantMessages = 0;
+		for (const e of activeBranch) {
+			if (e.type === "message") {
+				if (e.message?.role === "user") userMessages++;
+				else if (e.message?.role === "assistant") assistantMessages++;
+			} else if (e.type === "custom_message") {
+				if (e.customType === "rp-import") userMessages++;
+				else if (e.customType === "rp-edited-reply") assistantMessages++;
+			}
+		}
 		return {
-			userMessages: s.userMessages,
-			assistantMessages: s.assistantMessages,
+			userMessages,
+			assistantMessages,
 			totalTokens: s.tokens.total,
 			cost: s.cost,
 			contextPercent: cu?.percent ?? null,
@@ -1555,11 +1576,12 @@ const sideTextOnce = async (
 	opts?: { maxTokens?: number; reasoning?: string; signal?: AbortSignal },
 ): Promise<string | { error: string }> => {
 	if (!model) return { error: t("无可用模型") };
+	const modelMax = typeof model.maxTokens === "number" && model.maxTokens > 0 ? Math.floor(model.maxTokens) : undefined;
 	try {
 		const s = sideStreamWithRelay(
 			model,
 			{ systemPrompt, messages: [{ role: "user", content: [{ type: "text", text: userText }], timestamp: Date.now() }] },
-			{ maxTokens: opts?.maxTokens ?? 4096, reasoning: (opts?.reasoning ?? "off") as never, signal: opts?.signal },
+			{ maxTokens: opts?.maxTokens ?? modelMax ?? 8192, reasoning: (opts?.reasoning ?? "off") as never, signal: opts?.signal },
 		);
 		let final: AssistantMsgLike | null = null;
 		for await (const e of s) {
@@ -2059,6 +2081,9 @@ const restHost: RestHost = {
 		syncStoryStateFromDisk();
 		return { applied: r.applied, warnings: r.warnings };
 	},
+	async refreshState() {
+		return await hostRescribe({ silentToast: true });
+	},
 	// ---- agent 模式：稿子（正文/ 文件）与快照仓 ----
 	storyView() {
 		const chatDir = agentChatDir();
@@ -2337,7 +2362,7 @@ const restHost: RestHost = {
 	// 预设声明与场记共用旁路模型选择；未配置旁路时才跟随剧情模型。
 	runSideText: (systemPrompt, userText, opts) =>
 		sideTextOnce((sideEntryOf()?.model ?? session.model) as StageModelLike | undefined, systemPrompt, userText, {
-			maxTokens: opts?.maxTokens ?? 4096,
+			maxTokens: opts?.maxTokens,
 			reasoning: opts?.reasoning ?? "off",
 			signal: opts?.signal,
 		}),
@@ -2897,7 +2922,11 @@ stage = new StageEngine({
 			const config = loadConfig(cwd);
 			const targetBook = input.book?.trim() || mountedLorebookPaths(config)[0];
 			if (!targetBook) {
-				throw new Error("当前尚未挂载任何独立世界书，请先调用 lorebook_create 新建世界书，或传入 book 指定目标世界书。"); // i18n-ignore：模型回执
+				throw new Error(
+					getUiLocale() === "en"
+						? "No standalone lorebook is currently mounted. Call lorebook_create first or pass book to specify a target lorebook."
+						: "当前尚未挂载任何独立世界书，请先调用 lorebook_create 新建世界书，或传入 book 指定目标世界书。", // i18n-ignore：模型回执
+				);
 			}
 			const [abs] = loreWriteTargets(cwd, config, targetBook);
 			const entry = appendLorebookFileEntry(abs, {
@@ -3120,7 +3149,11 @@ const scriptLoreHost = {
 		const config = loadConfig(cwd);
 		const targetBook = input.book?.trim() || mountedLorebookPaths(config)[0];
 		if (!targetBook) {
-			throw new Error("当前尚未挂载任何独立世界书，请先调用 lorebook_create 新建世界书，或传入 book 指定目标世界书。"); // i18n-ignore：脚本回执
+			throw new Error(
+				getUiLocale() === "en"
+					? "No standalone lorebook is currently mounted. Call lorebook_create first or pass book to specify a target lorebook."
+					: "当前尚未挂载任何独立世界书，请先调用 lorebook_create 新建世界书，或传入 book 指定目标世界书。", // i18n-ignore：脚本回执
+			);
 		}
 		const [abs] = loreWriteTargets(cwd, config, targetBook);
 		const entry = appendLorebookFileEntry(abs, {
@@ -3173,11 +3206,12 @@ const runScriptModelStream = async (
 	opts: { maxTokens?: number; reasoning?: string; signal: AbortSignal; onDelta?: (kind: "text" | "thinking", delta: string) => void },
 ): Promise<{ text: string; thinking: string; model: string; stopReason?: string }> => {
 	if (!model) throw new Error(t("无可用模型"));
+	const modelMax = typeof model.maxTokens === "number" && model.maxTokens > 0 ? Math.floor(model.maxTokens) : undefined;
 	const stream = sideStreamWithRelay(
 		model,
 		context as never,
 		{
-			maxTokens: opts.maxTokens ?? 4096,
+			maxTokens: opts.maxTokens ?? modelMax ?? 8192,
 			reasoning: (opts.reasoning ?? "off") as never,
 			signal: opts.signal,
 		},
@@ -3459,6 +3493,45 @@ const scriptApi = new ScriptApiService({
 	listModels: () => restHost.listModels(),
 	notify: (level, text) => restHost.notify(level, text),
 });
+
+/**
+ * 手动补跑场记（/scribe 与 POST /api/state/refresh 共用）：基于当前分支最新一拍或最新一章刷新世界状态。
+ */
+const hostRescribe = async (opts?: { silentToast?: boolean }): Promise<{ kind: string; applied?: string[]; reason?: string; error?: string }> => {
+	const r = await stage.rescribeNow();
+	if (r.kind === "applied") {
+		broadcast({ type: "state", state: r.state });
+		if (!opts?.silentToast) {
+			broadcast({ type: "notify", level: "info", text: t("状态栏已更新（{n} 项变更）", { n: r.applied.length }) });
+		}
+		return { kind: "applied", applied: r.applied };
+	}
+	if (r.kind === "failed") {
+		if (!opts?.silentToast) {
+			broadcast({ type: "notify", level: "error", text: t("状态更新失败：{error}", { error: r.error }) });
+		}
+		return { kind: "failed", error: r.error };
+	}
+	if (r.kind === "stale") {
+		if (!opts?.silentToast) {
+			broadcast({ type: "notify", level: "warning", text: t("状态更新已丢弃（期间切换了分支）") });
+		}
+		return { kind: "stale" };
+	}
+	if (!opts?.silentToast) {
+		broadcast({
+			type: "notify",
+			level: "info",
+			text:
+				r.reason === "busy"
+					? t("正在演出中，稍后再更新状态")
+					: r.reason === "empty-patch"
+						? t("当前状态已是最新，无需更新")
+						: t("尚无可供分析的正文"),
+		});
+	}
+	return { kind: "skipped", reason: r.reason };
+};
 
 /**
  * 手动压缩（/compact 与 WS compact 帧共用）：走台上引擎自管压缩（M4）。
@@ -4015,6 +4088,116 @@ const handlePrompt = async (text: string) => {
 		}
 		const dir = (swipeMatch[1]?.toLowerCase() ?? "next") as "prev" | "next" | "new";
 		await handleSwipe(dir);
+		return;
+	}
+	// /scribe：手动触发一轮场记，基于当前分支最新正文刷新状态栏与世界状态
+	if (/^\/scribe\b/i.test(trimmed)) {
+		if (storyStreaming()) {
+			broadcast({ type: "notify", level: "warning", text: t("请等当前回复完成（或先停止），再{what}", { what: t("刷新状态栏") }) });
+			return;
+		}
+		await hostRescribe();
+		return;
+	}
+	// /roster：查看、清理非活跃或合并登场名录条目（CLI 与前端共用 applyStatePatch 通道）
+	const rosterMatch = /^\/roster(?:\s+([\s\S]*))?$/i.exec(trimmed);
+	if (rosterMatch) {
+		const args = (rosterMatch[1] ?? "").trim();
+		const parseTable = (raw: string): RosterTableKey | null => {
+			const s = raw.trim().toLowerCase();
+			if (s === "characters" || s === "char" || s === "人物") return "characters"; // i18n-ignore：命令中文别名
+			if (s === "places" || s === "place" || s === "地点") return "places"; // i18n-ignore：命令中文别名
+			if (s === "items" || s === "item" || s === "物品") return "items"; // i18n-ignore：命令中文别名
+			if (s === "events" || s === "event" || s === "事件" || s === "剧情线") return "events"; // i18n-ignore：命令中文别名
+			return null;
+		};
+		const st = loadState(stateFileOf());
+		const roster = st.roster ?? { characters: {}, places: {}, items: {}, events: {} };
+		const activeSets = activeRosterSets(st);
+		if (!args || /^list$/i.test(args)) {
+			const labels: Array<[RosterTableKey, string]> = [
+				["characters", t("人物")],
+				["places", t("地点")],
+				["items", t("物品")],
+				["events", t("事件")],
+			];
+			const lines = labels.map(([k, label]) => {
+				const entries = Object.entries(roster[k] ?? {});
+				if (!entries.length) return `${label}：${t("（无）")}`;
+				const body = entries
+					.map(([n, blurb]) => `${n}${blurb ? `(${blurb})` : ""}${activeSets[k].has(n) ? "*" : ""}`)
+					.join("、");
+				return `${label}（${entries.length}）：${body}`;
+			});
+			broadcast({ type: "notify", level: "info", text: lines.join("\n") });
+			return;
+		}
+		if (storyStreaming()) {
+			broadcast({ type: "notify", level: "warning", text: t("请等当前回复完成（或先停止），再{what}", { what: t("编辑登场名录") }) });
+			return;
+		}
+		const clearMatch = /^clear-gone(?:\s+(\S+))?$/i.exec(args);
+		if (clearMatch) {
+			const one = clearMatch[1] ? parseTable(clearMatch[1]) : null;
+			if (clearMatch[1] && !one) {
+				broadcast({ type: "notify", level: "warning", text: t("未知的名录分类：{table}", { table: clearMatch[1] }) });
+				return;
+			}
+			const keys: RosterTableKey[] = one ? [one] : ["characters", "places", "items", "events"];
+			const patchRoster: Record<string, Record<string, null>> = {};
+			let removed = 0;
+			for (const k of keys) {
+				const del: Record<string, null> = {};
+				for (const name of Object.keys(roster[k] ?? {})) {
+					if (!activeSets[k].has(name)) {
+						del[name] = null;
+						removed++;
+					}
+				}
+				if (Object.keys(del).length) patchRoster[k] = del;
+			}
+			if (removed === 0) {
+				broadcast({ type: "notify", level: "info", text: t("没有可清理的非活跃名录条目") });
+				return;
+			}
+			await restHost.applyStatePatch({ roster: patchRoster });
+			broadcast({ type: "notify", level: "info", text: t("已清理 {n} 条非活跃名录条目", { n: removed }) });
+			return;
+		}
+		const delMatch = /^del\s+(\S+)\s+([\s\S]+)$/i.exec(args);
+		if (delMatch) {
+			const table = parseTable(delMatch[1]!);
+			if (!table) {
+				broadcast({ type: "notify", level: "warning", text: t("未知的名录分类：{table}", { table: delMatch[1]! }) });
+				return;
+			}
+			const name = delMatch[2]!.trim();
+			await restHost.applyStatePatch({ roster: { [table]: { [name]: null } } });
+			broadcast({ type: "notify", level: "info", text: t("已处理名录移除：{name}", { name }) });
+			return;
+		}
+		const mergeMatch = /^merge\s+(\S+)\s+(.+?)\s*=>\s*(.+)$/i.exec(args);
+		if (mergeMatch) {
+			const table = parseTable(mergeMatch[1]!);
+			if (!table) {
+				broadcast({ type: "notify", level: "warning", text: t("未知的名录分类：{table}", { table: mergeMatch[1]! }) });
+				return;
+			}
+			const from = mergeMatch[2]!.trim();
+			const to = mergeMatch[3]!.trim();
+			const r = await restHost.applyStatePatch({ roster: { merge: [{ table, from, to }] } });
+			if (r.warnings.length) {
+				broadcast({ type: "notify", level: "warning", text: r.warnings.join("；") });
+			} else {
+				broadcast({ type: "notify", level: "info", text: t("已将「{from}」合并到「{to}」", { from, to }) });
+			}
+			return;
+		}
+		broadcast({
+			type: "notify",
+			level: "info",
+			text: t("用法：/roster [list | del <表> <名称> | clear-gone [表] | merge <表> <旧名> => <目标名>]"),
+		});
 		return;
 	}
 	// /compact：台上引擎自管压缩（PLAN-RP-HARNESS M4）。

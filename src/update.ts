@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
+import { t } from "./i18n/index.ts";
 import { DIRS } from "./paths.ts";
 import { extractZipFile } from "./ziplite.ts";
 
@@ -108,7 +109,7 @@ export async function checkLatestRelease(currentVersion: string): Promise<Update
 			assets?: Array<{ name?: string; browser_download_url?: string; size?: number }>;
 		};
 		const latest = (rel.tag_name ?? "").replace(/^v/, "");
-		if (!latest) return { ...base, error: "release 无 tag_name" };
+		if (!latest) return { ...base, error: t("release 无 tag_name") };
 		const hasUpdate = compareVersions(currentVersion, latest) < 0;
 		const wantAsset = platformAssetName(latest);
 		const assets = rel.assets ?? [];
@@ -128,8 +129,8 @@ export async function checkLatestRelease(currentVersion: string): Promise<Update
 			...(sums?.browser_download_url ? { checksumsUrl: sums.browser_download_url } : {}),
 		};
 	} catch (err) {
-		const msg = err instanceof Error ? (err.name === "AbortError" ? `超时（${CHECK_TIMEOUT_MS / 1000}s）` : err.message) : String(err);
-		return { ...base, error: `无法连接 GitHub：${msg}` };
+		const msg = err instanceof Error ? (err.name === "AbortError" ? t("超时（{sec}s）", { sec: CHECK_TIMEOUT_MS / 1000 }) : err.message) : String(err);
+		return { ...base, error: t("无法连接 GitHub：{msg}", { msg }) };
 	}
 }
 
@@ -166,7 +167,7 @@ export async function downloadAndStage(opts: {
 	signal?: AbortSignal;
 }): Promise<PendingUpdate> {
 	const { cwd, check, mirror, onProgress, signal } = opts;
-	if (!check.latestVersion || !check.asset) throw new Error("没有可下载的更新资产");
+	if (!check.latestVersion || !check.asset) throw new Error(t("没有可下载的更新资产"));
 	const version = check.latestVersion;
 	const updRoot = join(cwd, UPDATE_DIR);
 	// 重下前清场：同目录只保留一份暂存
@@ -186,9 +187,9 @@ export async function downloadAndStage(opts: {
 				headers: { "user-agent": "liyuan-updater" },
 				signal: ctrl.signal,
 			});
-			if (!resp.ok || !resp.body) throw new Error(`下载失败 HTTP ${resp.status}`);
+			if (!resp.ok || !resp.body) throw new Error(t("下载失败 HTTP {status}", { status: resp.status }));
 			const total = Number.parseInt(resp.headers.get("content-length") ?? "0", 10) || check.asset.size || 0;
-			if (total > MAX_ZIP_BYTES) throw new Error(`更新包过大（${total} 字节），拒绝下载`);
+			if (total > MAX_ZIP_BYTES) throw new Error(t("更新包过大（{bytes} 字节），拒绝下载", { bytes: total }));
 			let received = 0;
 			const counter = new TransformStreamCounter((n) => {
 				received += n;
@@ -212,11 +213,11 @@ export async function downloadAndStage(opts: {
 			const sumsResp = await fetch(withMirror(check.checksumsUrl, mirror), {
 				headers: { "user-agent": "liyuan-updater" },
 			});
-			if (!sumsResp.ok) throw new Error(`校验清单下载失败 HTTP ${sumsResp.status}`);
+			if (!sumsResp.ok) throw new Error(t("校验清单下载失败 HTTP {status}", { status: sumsResp.status }));
 			const expected = expectedHashFromSums(await sumsResp.text(), check.asset.name);
-			if (!expected) throw new Error(`SHA256SUMS.txt 里没有 ${check.asset.name} 的条目`);
+			if (!expected) throw new Error(t("SHA256SUMS.txt 里没有 {name} 的条目", { name: check.asset.name }));
 			if (expected !== actual) {
-				throw new Error(`SHA256 校验不符：期望 ${expected.slice(0, 12)}…，实际 ${actual.slice(0, 12)}…`);
+				throw new Error(t("SHA256 校验不符：期望 {expected}…，实际 {actual}…", { expected: expected.slice(0, 12), actual: actual.slice(0, 12) }));
 			}
 			verified = "sha256sums";
 		}
@@ -226,10 +227,10 @@ export async function downloadAndStage(opts: {
 		await extractZip(zipPath, stagedRoot);
 		const stagedDir = join(stagedRoot, "Liyuan");
 		if (!existsSync(join(stagedDir, "package.json")) || !existsSync(join(stagedDir, "server", "main.ts"))) {
-			throw new Error("更新包结构异常（缺 package.json / server/main.ts），已丢弃");
+			throw new Error(t("更新包结构异常（缺 package.json / server/main.ts），已丢弃"));
 		}
 		if (!existsSync(join(stagedDir, ".liyuan", "extensions", "roleplay.ts"))) {
-			throw new Error("更新包缺扮演接线层（roleplay.ts），拒绝应用");
+			throw new Error(t("更新包缺扮演接线层（roleplay.ts），拒绝应用"));
 		}
 
 		// 4) 写待应用标记（启动脚本读它决定是否覆盖）

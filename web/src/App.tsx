@@ -266,7 +266,7 @@ function loadPanelPrefs(): { left: PanelId | null; right: PanelId | null; lastSe
 }
 
 export default function App() {
-	useLocale(); // 顶层订阅界面语言：切换时整棵树重渲染
+	const uiLocale = useLocale(); // 顶层订阅界面语言：切换时整棵树重渲染
 	const [conn, setConn] = useState<ConnState>("connecting");
 	const [charName, setCharName] = useState("梨园"); // i18n-ignore：hello 到达前的占位，随即被卡名覆盖
 	const [userName, setUserName] = useState("");
@@ -1434,7 +1434,10 @@ export default function App() {
 						setCompacting(null);
 						setToolNote(null);
 						if (frame.ok === false) pushToast("warning", frame.detail?.trim() || t("压缩失败"));
-						else if (frame.detail?.trim()) pushToast("info", frame.detail.trim());
+						else {
+							setChatAssetTick((n) => n + 1);
+							if (frame.detail?.trim()) pushToast("info", frame.detail.trim());
+						}
 					}
 					break;
 				case "sessions":
@@ -2049,16 +2052,24 @@ export default function App() {
 
 	// ---- `/` 命令补全（清单来自 GET /api/commands，单一来源 src/commands.ts） ----
 	const [commands, setCommands] = useState<CommandMeta[] | null>(null);
+	const [commandsLocale, setCommandsLocale] = useState<string>("");
 	const [cmdIndex, setCmdIndex] = useState(0);
 	const [cmdDismissed, setCmdDismissed] = useState(false);
 
 	useEffect(() => {
-		if (input.startsWith("/") && commands === null) {
-			apiGet<{ commands: CommandMeta[] }>("/api/commands")
-				.then((r) => setCommands(r.commands))
-				.catch(() => setCommands([]));
+		if (input.startsWith("/") && (commands === null || commandsLocale !== uiLocale)) {
+			const lang = uiLocale;
+			apiGet<{ commands: CommandMeta[] }>(`/api/commands?lang=${lang}`)
+				.then((r) => {
+					setCommands(r.commands);
+					setCommandsLocale(lang);
+				})
+				.catch(() => {
+					setCommands([]);
+					setCommandsLocale(lang);
+				});
 		}
-	}, [input, commands]);
+	}, [input, commands, commandsLocale, uiLocale]);
 
 	const activeCommands = useMemo(() => {
 		if (!commands) return [];

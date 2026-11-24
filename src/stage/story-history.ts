@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { getUiLocale, t } from "../i18n/index.ts";
 import { CHAT_HISTORY_DIR, CHAT_STORY_DIR } from "../paths.ts";
 
 const HISTORY_OBJECTS_DIR = "对象";
@@ -53,14 +54,23 @@ export function chapterTitle(name: string): string {
 
 /** 项目状态块里的【正文目录】：数据，不带正文，不带指令。 */
 export function formatStoryIndex(files: StoryFile[]): string {
-	if (!files.length) return `【正文目录】${CHAT_STORY_DIR}/ 尚无文件。`;
+	const en = getUiLocale() === "en";
+	if (!files.length) return en ? `[Manuscript Index] ${CHAT_STORY_DIR}/ has no files yet.` : `【正文目录】${CHAT_STORY_DIR}/ 尚无文件。`;
 	const total = files.reduce((n, f) => n + f.chars, 0);
 	const fmt = (ms: number) => {
 		const d = new Date(ms);
 		const p = (n: number) => String(n).padStart(2, "0");
 		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 	};
-	return [`【正文目录】${CHAT_STORY_DIR}/ 共 ${files.length} 个文件 ${total} 字（按文件名排序）`, ...files.map((f) => `${f.name}　${f.chars} 字　${fmt(f.mtime)}`)].join("\n");
+	return en
+		? [
+				`[Manuscript Index] ${CHAT_STORY_DIR}/ — ${files.length} file(s), ${total} chars (sorted by filename)`,
+				...files.map((f) => `${f.name}  ${f.chars} chars  ${fmt(f.mtime)}`),
+			].join("\n")
+		: [
+				`【正文目录】${CHAT_STORY_DIR}/ 共 ${files.length} 个文件 ${total} 字（按文件名排序）`,
+				...files.map((f) => `${f.name}　${f.chars} 字　${fmt(f.mtime)}`),
+			].join("\n");
 }
 
 // ---------------- 快照仓 ----------------
@@ -96,12 +106,13 @@ export const isEmptyChange = (c: ChangeSet): boolean => !c.added.length && !c.mo
 
 /** 一句话说清一次改动（过程条 / 卡片用） */
 export function describeChange(c: ChangeSet): string {
+	const sep = t("、");
 	const parts: string[] = [];
-	if (c.added.length) parts.push(`新增 ${c.added.join("、")}`);
-	if (c.modified.length) parts.push(`修改 ${c.modified.join("、")}`);
-	if (c.renamed.length) parts.push(`改名 ${c.renamed.map(([a, b]) => `${a}→${b}`).join("、")}`);
-	if (c.removed.length) parts.push(`删除 ${c.removed.join("、")}`);
-	return parts.join("；") || "无改动";
+	if (c.added.length) parts.push(t("新增 {files}", { files: c.added.join(sep) }));
+	if (c.modified.length) parts.push(t("修改 {files}", { files: c.modified.join(sep) }));
+	if (c.renamed.length) parts.push(t("改名 {files}", { files: c.renamed.map(([a, b]) => `${a}→${b}`).join(sep) }));
+	if (c.removed.length) parts.push(t("删除 {files}", { files: c.removed.join(sep) }));
+	return parts.join(t("；")) || t("无改动");
 }
 
 /** 两份清单的差。改名＝同一哈希在旧清单里消失、在新清单里出现（一对一，多出的算增删）。 */
@@ -209,7 +220,7 @@ export class StoryHistory {
 	 */
 	restore(id: string, author: Checkpoint["author"] = "user"): Checkpoint | undefined {
 		const target = this.get(id);
-		if (!target) throw new Error("没有这个检查点。");
+		if (!target) throw new Error(t("没有这个检查点。"));
 		mkdirSync(this.storyDir, { recursive: true });
 		for (const f of listStoryFiles(this.storyDir)) if (!(f.name in target.files)) rmSync(join(this.storyDir, f.name));
 		for (const [name, sha] of Object.entries(target.files)) {
@@ -217,7 +228,7 @@ export class StoryHistory {
 			const abs = join(this.storyDir, name);
 			if (!existsSync(abs) || readFileSync(abs, "utf8") !== text) writeFileSync(abs, text, "utf8");
 		}
-		return this.commit({ author, message: `恢复到「${target.message}」`, restoredFrom: id });
+		return this.commit({ author, message: t("恢复到「{message}」", { message: target.message }), restoredFrom: id });
 	}
 
 	/** 按这轮 user 条目找检查点（一轮至多一条） */
@@ -229,7 +240,7 @@ export class StoryHistory {
 	diff(id: string): FileDiff[] {
 		const all = this.list();
 		const at = all.findIndex((c) => c.id === id);
-		if (at < 0) throw new Error("没有这个检查点。");
+		if (at < 0) throw new Error(t("没有这个检查点。"));
 		const cur = all[at]!;
 		const prev = at > 0 ? all[at - 1]!.files : {};
 		const out: FileDiff[] = [];

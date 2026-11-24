@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { getUiLocale } from "./i18n/index.ts";
 import { dir } from "./paths.ts";
 
 export interface TtsConfig {
@@ -35,7 +36,9 @@ export function loadTtsConfig(env: NodeJS.ProcessEnv = process.env): TtsConfig |
 }
 
 export function ttsConfigHint(): string {
-	return "未配置文生音。请设置环境变量 LIYUAN_TTS_API_KEY（或 OPENAI_API_KEY），可选 LIYUAN_TTS_BASE_URL / LIYUAN_TTS_MODEL / LIYUAN_TTS_VOICE。也可用外部技能生成音频文件后调用 show_audio 交付。";
+	return getUiLocale() === "en"
+		? "TTS is not configured. Set LIYUAN_TTS_API_KEY (or OPENAI_API_KEY), and optionally LIYUAN_TTS_BASE_URL / LIYUAN_TTS_MODEL / LIYUAN_TTS_VOICE. You can also generate audio via an external skill and deliver it with show_audio."
+		: "未配置文生音。请设置环境变量 LIYUAN_TTS_API_KEY（或 OPENAI_API_KEY），可选 LIYUAN_TTS_BASE_URL / LIYUAN_TTS_MODEL / LIYUAN_TTS_VOICE。也可用外部技能生成音频文件后调用 show_audio 交付。";
 }
 
 /** 调用 OpenAI 兼容 speech API，返回音频二进制（默认 mp3） */
@@ -44,9 +47,10 @@ export async function synthesizeSpeech(
 	text: string,
 	opts?: { voice?: string; model?: string },
 ): Promise<{ buffer: Buffer; ext: string }> {
+	const en = getUiLocale() === "en";
 	const input = text.trim();
-	if (!input) throw new Error("配音文本为空");
-	if (input.length > 4096) throw new Error("配音文本过长（最多约 4096 字），请分段");
+	if (!input) throw new Error(en ? "Speech text is empty" : "配音文本为空");
+	if (input.length > 4096) throw new Error(en ? "Speech text is too long (max ~4096 chars); split into smaller segments" : "配音文本过长（最多约 4096 字），请分段");
 
 	const url = `${config.baseUrl}/audio/speech`;
 	const res = await fetch(url, {
@@ -64,7 +68,11 @@ export async function synthesizeSpeech(
 	});
 	if (!res.ok) {
 		const errText = await res.text().catch(() => "");
-		throw new Error(`TTS 请求失败 HTTP ${res.status}${errText ? `：${errText.slice(0, 200)}` : ""}`);
+		throw new Error(
+			en
+				? `TTS request failed (HTTP ${res.status})${errText ? `: ${errText.slice(0, 200)}` : ""}`
+				: `TTS 请求失败 HTTP ${res.status}${errText ? `：${errText.slice(0, 200)}` : ""}`,
+		);
 	}
 	const ab = await res.arrayBuffer();
 	return { buffer: Buffer.from(ab), ext: ".mp3" };

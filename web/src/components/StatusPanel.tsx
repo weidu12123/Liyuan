@@ -4,9 +4,9 @@
  * 杜绝细碎气泡与悬浮框，采用优雅的文人长卷章节排版。
  */
 
-import { apiPut, type StatePatchResult } from "../api.ts";
+import { apiPost, apiPut, type StatePatchResult } from "../api.ts";
 import type { WorldState } from "../wire.ts";
-import { IconTrash } from "./icons.tsx";
+import { IconRefresh, IconTrash } from "./icons.tsx";
 import { ConfirmButton, useAction } from "./kit.tsx";
 import { Editable, isEmptyState } from "./StatusStrip.tsx";
 import { t } from "../i18n/index.ts";
@@ -17,12 +17,30 @@ export interface StatusPanelProps {
 }
 
 export function StatusPanel({ state, toast }: StatusPanelProps) {
-	const { run } = useAction(toast);
+	const { busy, run } = useAction(toast);
 
 	const patch = (p: Record<string, unknown>) =>
 		run(async () => {
 			const r = await apiPut<StatePatchResult>("/api/state", { patch: p });
 			for (const w of r.warnings) toast("warning", w);
+		});
+
+	const refresh = () =>
+		run(async () => {
+			const r = await apiPost<{ kind: string; applied?: string[]; reason?: string; error?: string }>("/api/state/refresh", {});
+			if (r.kind === "applied") {
+				toast("info", t("状态栏已更新（{n} 项变更）", { n: r.applied?.length ?? 0 }));
+			} else if (r.kind === "failed") {
+				toast("error", t("状态更新失败：{error}", { error: r.error ?? "" }));
+			} else if (r.kind === "stale") {
+				toast("warning", t("状态更新已丢弃（期间切换了分支）"));
+			} else if (r.reason === "empty-patch") {
+				toast("info", t("当前状态已是最新，无需更新"));
+			} else if (r.reason === "busy") {
+				toast("info", t("正在演出中，稍后再更新状态"));
+			} else {
+				toast("info", t("尚无可供分析的正文"));
+			}
 		});
 
 	const num = (v: string, fallback: number): number => {
@@ -48,6 +66,16 @@ export function StatusPanel({ state, toast }: StatusPanelProps) {
 			<section className="sp-section">
 				<div className="sp-section-head">
 					<span className="sp-section-title">{t("戏境时空")}</span>
+					<button
+						type="button"
+						className="sp-refresh-btn"
+						disabled={busy}
+						onClick={refresh}
+						title={t("基于最新剧情重新运行一轮场记以更新状态栏")}
+					>
+						<IconRefresh size={12} />
+						<span>{busy ? t("更新中…") : t("手动更新")}</span>
+					</button>
 				</div>
 				<div className="sp-section-body">
 					<div className="sp-kv-row">

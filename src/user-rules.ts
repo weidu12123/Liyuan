@@ -13,12 +13,76 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { getUiLocale, type UiLocale } from "./i18n/index.ts";
+
 /** 用户规矩文件名（两级同名，对齐 pi 的 APPEND_SYSTEM.md 习惯） */
 export const USER_RULES_FILE = "APPEND_SYSTEM.md";
 /** agent 模式的全局追加槽：与 APPEND_SYSTEM.md 平级、二选一——扮演轮读前者，agent 轮读本文件 */
 const AGENT_RULES_FILE = "AGENT_APPEND_SYSTEM.md";
 /** 旁路助手（/btw）的全局追加槽：与 APPEND_SYSTEM.md、AGENT_APPEND_SYSTEM.md 平级 */
 export const BTW_RULES_FILE = "BTW_APPEND_SYSTEM.md";
+
+export type ShippedSlotName = "SYSTEM.md" | "APPEND_SYSTEM.md" | "AGENT_APPEND_SYSTEM.md" | "BTW_APPEND_SYSTEM.md";
+
+const EN_SLOT_FILE: Record<ShippedSlotName, string> = {
+	"SYSTEM.md": "SYSTEM.en.md",
+	"APPEND_SYSTEM.md": "APPEND_SYSTEM.en.md",
+	"AGENT_APPEND_SYSTEM.md": "AGENT_APPEND_SYSTEM.en.md",
+	"BTW_APPEND_SYSTEM.md": "BTW_APPEND_SYSTEM.en.md",
+};
+
+const normText = (s: string): string => s.replace(/\r\n/g, "\n").trim();
+
+/** 读取随包内置提示词正本（按 locale 取中文或英文；缺英文文件时回落中文） */
+export function shippedSlotPrompt(slot: ShippedSlotName, locale: UiLocale = getUiLocale()): string {
+	const readAsset = (name: string): string => {
+		try {
+			return readFileSync(new URL(`../assets/${name}`, import.meta.url), "utf8");
+		} catch {
+			return "";
+		}
+	};
+	if (locale === "en") {
+		const enText = readAsset(EN_SLOT_FILE[slot]);
+		if (enText.trim()) return enText;
+	}
+	return readAsset(slot);
+}
+
+/** 判断某段文本是否仍等于随包默认正本（中文版或英文版任一匹配即视为未手改） */
+export function isShippedSlotDefault(slot: ShippedSlotName, content: string): boolean {
+	const n = normText(content);
+	if (!n) return false;
+	const zh = normText(shippedSlotPrompt(slot, "zh"));
+	if (zh && n === zh) return true;
+	const en = normText(shippedSlotPrompt(slot, "en"));
+	return Boolean(en && n === en);
+}
+
+/**
+ * 读取全局提示词槽位：
+ * - 文件存在且已被用户手改 → 原样返回，绝不覆盖；
+ * - 文件内容仍为未手改的随包默认正本（中或英）→ 自动按目标 locale 返回对应语言正本；
+ * - 文件缺失 → 可选回落随包正本（fallbackToShipped 默认 false，与历史 readUserRules 行为兼容）。
+ */
+export function readLocalizedGlobalSlot(
+	filePath: string,
+	slot: ShippedSlotName,
+	opts?: { locale?: UiLocale; fallbackToShipped?: boolean },
+): string {
+	const locale = opts?.locale ?? getUiLocale();
+	if (existsSync(filePath)) {
+		try {
+			const raw = readFileSync(filePath, "utf-8");
+			if (!raw.trim()) return opts?.fallbackToShipped ? shippedSlotPrompt(slot, locale) : raw;
+			if (isShippedSlotDefault(slot, raw)) return shippedSlotPrompt(slot, locale);
+			return raw;
+		} catch {
+			return opts?.fallbackToShipped ? shippedSlotPrompt(slot, locale) : "";
+		}
+	}
+	return opts?.fallbackToShipped ? shippedSlotPrompt(slot, locale) : "";
+}
 
 /** agentDir：与 paths.ts preferLiyuanAgentHome 同一约定（启动时写 env；只认 LIYUAN_*，PI_* 不当输入） */
 export function rulesAgentDir(): string {
@@ -76,9 +140,9 @@ export function readUserRules(cardDir: string, chatDir?: string | null): UserRul
 		}
 	};
 	return {
-		global: read(globalRulesPath()),
-		agent: read(agentRulesPath()),
-		btw: read(btwRulesPath()),
+		global: readLocalizedGlobalSlot(globalRulesPath(), "APPEND_SYSTEM.md"),
+		agent: readLocalizedGlobalSlot(agentRulesPath(), "AGENT_APPEND_SYSTEM.md"),
+		btw: readLocalizedGlobalSlot(btwRulesPath(), "BTW_APPEND_SYSTEM.md"),
 		card: read(cardRulesPath(cardDir)),
 		...(chatDir ? { chat: read(chatRulesPath(chatDir)) } : {}),
 	};

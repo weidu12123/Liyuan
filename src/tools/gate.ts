@@ -66,6 +66,8 @@ function signalMatches(toolName: string, text: string): boolean {
 	return WRITE_REQUEST_RE.test(text);
 }
 
+import { getUiLocale } from "../i18n/index.ts";
+
 /** 门禁判定结果：allow=放行；block 带 reason（原样回给模型，别让它转头去问用户） */
 type GateVerdict = { allow: true } | { allow: false; reason: string };
 
@@ -73,6 +75,8 @@ type GateVerdict = { allow: true } | { allow: false; reason: string };
 const GATE_BLOCK_REASON =
 	"写入设定集需用户明确要求：本轮用户并未要求记录，本次写入已拒绝。" +
 	"不要写、也不要询问「是否写入」；若用户后续明确要求再执行。";
+const GATE_BLOCK_REASON_EN =
+	"Writing to persistent lore/memory requires an explicit user request: the user did not ask to save anything this turn, so this write was refused. Do not write and do not ask whether to save; act only if the user explicitly asks later.";
 
 /**
  * 删除被拦时的话术（M-D3）。与写入同一条纪律（不要转头问用户），
@@ -81,6 +85,8 @@ const GATE_BLOCK_REASON =
 const GATE_DELETE_BLOCK_REASON =
 	"删除记忆条目需用户明确要求：本轮用户并未要求删除，本次删除已拒绝。" +
 	"不要删、也不要询问「是否删除」；记忆有误就在正文里绕开它，若用户后续明确要求再执行。";
+const GATE_DELETE_BLOCK_REASON_EN =
+	"Deleting a memory entry requires an explicit user request: the user did not ask to delete anything this turn, so this deletion was refused. Do not delete and do not ask whether to delete; work around inaccurate memories in prose and delete only if the user explicitly asks later.";
 
 export interface GateInput {
 	toolName: string;
@@ -100,8 +106,11 @@ export function checkWriteGate(input: GateInput): GateVerdict {
 	if (input.creationMode !== "ask") return { allow: true };
 	if (!(GATED_TOOLS as readonly string[]).includes(input.toolName)) return { allow: true };
 	if (signalMatches(input.toolName, input.lastUserText)) return { allow: true };
+	const en = getUiLocale() === "en";
 	return {
 		allow: false,
-		reason: /_delete$/.test(input.toolName) ? GATE_DELETE_BLOCK_REASON : GATE_BLOCK_REASON,
+		reason: /_delete$/.test(input.toolName)
+			? (en ? GATE_DELETE_BLOCK_REASON_EN : GATE_DELETE_BLOCK_REASON)
+			: (en ? GATE_BLOCK_REASON_EN : GATE_BLOCK_REASON),
 	};
 }

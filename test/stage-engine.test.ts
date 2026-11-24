@@ -18,7 +18,9 @@ import { authoringHistory, conversationMode, CONVERSATION_MODE_TYPE, CONVERSATIO
 import { cardProjectOperation } from "../src/card-authoring.ts";
 import { loadCardConfig } from "../src/cardspace.ts";
 import { loadCardFile } from "../src/card.ts";
+import { setUiLocale } from "../src/i18n/index.ts";
 import { listReplyVariants } from "../src/swipe.ts";
+import { shippedSlotPrompt } from "../src/user-rules.ts";
 
 /** 沙箱每拍读 <agentDir>/BASH_DENYLIST.txt：把 agentDir 指到临时目录，测试不读用户本机 */
 const SANDBOX_AGENT_DIR = realpathSync(mkdtempSync(join(tmpdir(), "liyuan-eng-agent-")));
@@ -1893,4 +1895,182 @@ test("引擎：外语卡连续两拍经真实送模链路不注入【语言】�
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
+
+test("引擎：旁路场记遵循模型条目 maxTokens（不再硬锁 2048），解析失败通过 onActivity 可见", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }, { id: "faux-side" }] });
+	try {
+		reg.setResponses([
+			fauxAssistantMessage("云澜垂眸受了半礼。"),
+			fauxAssistantMessage('{"patch":{"time":"次日"'), // 模拟被截断的不完整 JSON
+		] as never);
+		const sideMaxTokens: Array<unknown> = [];
+		const activities: string[] = [];
+		const recording = ((model: { id: string }, ctx: unknown, options: { maxTokens?: unknown }) => {
+			if (model.id === "faux-side") sideMaxTokens.push(options?.maxTokens);
+			return (streamSimple as unknown as StageStreamFn)(model as never, ctx as never, options as never);
+		}) as unknown as StageStreamFn;
+
+		const sideBase = reg.getModel("faux-side") as Record<string, unknown>;
+		const engine = await makePiEngine({
+			cwd,
+			sessionManager: sm,
+			getModel: () => reg.getModel("faux-rp") as never,
+			getSideEntry: () => ({ model: { ...sideBase, maxTokens: 16000 } as never, thinking: "off", label: "flash 16k" }),
+			getAuth: async () => ({}),
+			sideStreamFn: recording,
+			events: { onActivity: (d) => activities.push(d) },
+		});
+		await engine.performTurn("我上前行礼。");
+
+		assert.equal(sideMaxTokens.length, 1);
+		assert.equal(sideMaxTokens[0], 16000, "场记应遵循模型配置的 maxTokens，而非硬编码 2048");
+		assert.ok(
+			activities.some((a) => a.includes("记账跳过：")),
+			"场记解析失败时应通过活动条反馈给用户",
+		);
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("引擎：rescribeNow 手动补跑场记可刷新最新拍状态，无历史时跳过", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	try {
+		const cfgPath = join(cwd, "liyuan.config.json");
+		const origCfg = readFileSync(cfgPath, "utf8");
+		writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(origCfg), greeting: false }));
+		const emptySm = SessionManager.inMemory();
+		const emptyEngine = await makePiEngine(piDeps(cwd, emptySm, reg.getModel("faux-rp")));
+		const emptyOut = await emptyEngine.rescribeNow();
+		assert.equal(emptyOut.kind, "skipped");
+		writeFileSync(cfgPath, origCfg);
+
+		const engine = await makePiEngine(piDeps(cwd, sm, reg.getModel("faux-rp")));
+		reg.setResponses([
+			fauxAssistantMessage("众人踏入铁王座大厅，夜色渐深。"),
+			fauxAssistantMessage('{"patch":{"time":"第一夜"'), // 首轮场记模拟截断失败
+			fauxAssistantMessage('{"patch":{"time":"第一夜","location":"铁王座大厅"}}'), // 手动补跑成功
+		] as never);
+		await engine.performTurn("我推开大门走进去。");
+		assert.equal(stateFromBranch(sm.getBranch() as never).location, "", "首轮截断时状态未更新");
+
+		const refreshed = await engine.rescribeNow();
+		assert.equal(refreshed.kind, "applied");
+		assert.equal(stateFromBranch(sm.getBranch() as never).location, "铁王座大厅");
+		assert.equal(stateFromBranch(sm.getBranch() as never).time, "第一夜");
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("引擎压缩：compactEveryNTurns=0 时，上下文吃紧自动触发被动压缩（且次拍不重复误触）", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp", contextWindow: 2400 }] });
+	try {
+		const cfgPath = join(cwd, "liyuan.config.json");
+		writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(readFileSync(cfgPath, "utf8")), compactEveryNTurns: 0 }));
+		const model = { ...(reg.getModel("faux-rp") as Record<string, unknown>), contextWindow: 2400 };
+		const longReply = "风雪压城，群臣于殿中议事。".repeat(320); // 约 4160 字 ≈ 1040+ token
+		reg.setResponses([
+			fauxAssistantMessage(longReply),
+			fauxScribeEmpty(),
+			fauxAssistantMessage("第二拍：群臣商议北境军情。".repeat(200)),
+			fauxScribeEmpty(),
+			fauxAssistantMessage("## 前情提要\n第一拍群臣殿中议事。"),
+		] as never);
+		const engine = await makePiEngine(piDeps(cwd, sm, model));
+		await engine.performTurn("第一拍：走进大厅。");
+		assert.equal(
+			sm.getBranch().some((e) => e.type === "custom" && e.customType === "rp-summary"),
+			false,
+			"第一拍尚未吃紧不压缩",
+		);
+
+		await engine.performTurn("第二拍：询问战报。");
+		const summaries = sm.getBranch().filter((e) => e.type === "custom" && e.customType === "rp-summary");
+		assert.equal(summaries.length, 1, "上下文吃紧应自动落一条 rp-summary");
+		assert.ok(engine.contextUsage(), "压缩后应刷新估算 contextUsage");
+	} finally {
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("引擎：uiLanguage=en 下真实送模链路（主请求+工具+场记+活动条）全程零中文残留", async () => {
+	const { cwd, sm } = makeStage();
+	const reg = registerFauxProvider({ models: [{ id: "faux-rp" }] });
+	const sysPath = join(SANDBOX_AGENT_DIR, "SYSTEM.md");
+	const appPath = join(SANDBOX_AGENT_DIR, "APPEND_SYSTEM.md");
+	const han = /[㐀-鿿豈-﫿]/;
+	const stripDisk = (s: string) => s.replace(/记忆\/\*\.md/g, "").replace(/记忆\//g, "").replace(/正文\//g, "");
+	try {
+		// 模拟老用户盘上存着未手改的中文默认 SYSTEM.md / APPEND_SYSTEM.md
+		writeFileSync(sysPath, shippedSlotPrompt("SYSTEM.md", "zh"), "utf8");
+		writeFileSync(appPath, shippedSlotPrompt("APPEND_SYSTEM.md", "zh"), "utf8");
+		writeFileSync(
+			join(cwd, "card.json"),
+			JSON.stringify({
+				data: {
+					name: "Lyra",
+					description: "Clockwork observatory astronomer.",
+					personality: "Sharp and calm.",
+					scenario: "Midnight tower.",
+					first_mes: "The lens is aligned, {{user}}.",
+				},
+			}),
+		);
+		writeFileSync(
+			join(cwd, "liyuan.config.json"),
+			JSON.stringify({ card: "card.json", userName: "Alex", language: "English", uiLanguage: "en" }),
+		);
+		setUiLocale("en");
+
+		const capturedMain: unknown[] = [];
+		const capturedSide: unknown[] = [];
+		const activities: string[] = [];
+		reg.setResponses([
+			(ctx) => {
+				capturedMain.push(ctx);
+				return fauxAssistantMessage("Lyra turned the brass wheel and studied the horizon.");
+			},
+			(ctx) => {
+				capturedSide.push(ctx);
+				return fauxAssistantMessage(JSON.stringify({ patch: { time: "Day 1 Midnight", location: "Observatory" } }));
+			},
+		] as never);
+
+		const engine = await makePiEngine({
+			...piDeps(cwd, sm, reg.getModel("faux-rp")),
+			events: { onActivity: (d) => activities.push(d) },
+		});
+		await engine.performTurn("I step onto the balcony.");
+
+		assert.equal(capturedMain.length, 1);
+		assert.equal(capturedSide.length, 1);
+		const mainPayload = stripDisk(JSON.stringify(capturedMain[0]));
+		const sidePayload = stripDisk(JSON.stringify(capturedSide[0]));
+		const actJoined = stripDisk(activities.join("\n"));
+
+		const m1 = han.exec(mainPayload);
+		assert.equal(m1, null, `主请求含中文：${m1 ? mainPayload.slice(Math.max(0, m1.index - 30), m1.index + 50) : ""}`);
+		const m2 = han.exec(sidePayload);
+		assert.equal(m2, null, `场记请求含中文：${m2 ? sidePayload.slice(Math.max(0, m2.index - 30), m2.index + 50) : ""}`);
+		const m3 = han.exec(actJoined);
+		assert.equal(m3, null, `过程条含中文：${m3 ? actJoined.slice(Math.max(0, m3.index - 30), m3.index + 50) : ""}`);
+		assert.ok(activities.some((a) => /Ledger:/i.test(a)), `应产出英文记账活动条，实际：${actJoined}`);
+	} finally {
+		setUiLocale("zh");
+		rmSync(sysPath, { force: true });
+		rmSync(appPath, { force: true });
+		reg.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+
+
 

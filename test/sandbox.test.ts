@@ -229,3 +229,23 @@ test("沙箱：不在卡库里的卡以卡文件所在目录为界", () => {
 		assert.equal(sandboxVerdict("read", { path: join(dirname(cwd), "x.txt") }, scope, NO_GRANTS).kind, "ask");
 	} finally { rmSync(cwd, { recursive: true, force: true }); }
 });
+
+test("沙箱：turboMode 开启后完全放行跨目录读写与 bash，不再询问", async () => {
+	const { cwd, config } = makeWorkspace();
+	try {
+		let askedCount = 0;
+		const gate = createSandboxGate({
+			cwd,
+			config: { ...config, turboMode: true },
+			sessionGrants: () => NO_GRANTS,
+			rememberSession: () => {},
+			ask: async () => { askedCount++; return "拒绝"; },
+			onStop: () => {},
+		});
+		assert.equal(await gate("read", { path: "web/src/a.ts" }), undefined);
+		assert.equal(await gate("write", { path: "web/src/a.ts" }), undefined);
+		assert.equal(await gate("bash", { command: "echo turbo" }), undefined);
+		assert.equal(askedCount, 0);
+	} finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+

@@ -1343,6 +1343,55 @@ test("第3块收口：前端 substitudeMacros 对齐后端、formatAsTavernRegex
 	);
 });
 
+test("提示词模板插件状态：SillyTavern.extensionSettings.EjsTemplate 按原版协议暴露完整配置且支持 saveSettingsDebounced 跨重载持久化", () => {
+	const store = new Map<string, string>();
+	const fakeStorage = {
+		getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+		setItem: (k: string, v: string) => {
+			store.set(k, String(v));
+		},
+		removeItem: (k: string) => {
+			store.delete(k);
+		},
+	};
+	const parentWin: Record<string, unknown> = {
+		__liyuanRuntimeContext: { charName: "角色A", userName: "用户A", messages: [] },
+		localStorage: fakeStorage,
+	};
+
+	// 1. 首次加载：卡帧读取 SillyTavern.extensionSettings.EjsTemplate 应存在且不位于 disabledExtensions
+	const { win: win1 } = createIframeSandbox({ iframeName: "TH-script--card--ejs_ext_check", parentWin });
+	const ext1 = win1.SillyTavern.extensionSettings;
+	assert.ok(ext1 && ext1.EjsTemplate, "应暴露 extensionSettings.EjsTemplate 对象");
+	assert.strictEqual(win1.SillyTavern.extension_settings.EjsTemplate, ext1.EjsTemplate, "extension_settings 与 extensionSettings 指向同一份对象");
+	assert.equal((ext1.disabledExtensions ?? []).includes("third-party/ST-Prompt-Template"), false);
+	assert.equal(ext1.EjsTemplate.enabled, true);
+	assert.equal(ext1.EjsTemplate.generate_enabled, true);
+	assert.equal(ext1.EjsTemplate.render_enabled, true);
+	assert.equal(ext1.EjsTemplate.preload_worldinfo_enabled, true);
+	assert.equal(ext1.EjsTemplate.code_blocks_enabled, true);
+	assert.equal(ext1.EjsTemplate.raw_message_evaluation_enabled, true);
+	assert.equal(ext1.EjsTemplate.filter_message_enabled, true);
+	assert.equal(ext1.EjsTemplate.invert_enabled, true);
+	assert.equal(ext1.EjsTemplate.depth_limit, -1);
+
+	// 2. 卡脚本修改配置并调用 saveSettingsDebounced() 后，新重载页面可还原修改值
+	ext1.EjsTemplate.debug_enabled = true;
+	ext1.EjsTemplate.depth_limit = 5;
+	win1.SillyTavern.saveSettingsDebounced();
+	assert.ok(store.has("liyuan.st.ejsTemplateSettings"), "saveSettingsDebounced 应落盘到 localStorage");
+
+	// 模拟整页 reload（全新 parentWin，仅保留同一 localStorage）
+	const reloadedParent: Record<string, unknown> = {
+		__liyuanRuntimeContext: { charName: "角色A", userName: "用户A", messages: [] },
+		localStorage: fakeStorage,
+	};
+	const { win: win2 } = createIframeSandbox({ iframeName: "TH-script--card--ejs_ext_reload", parentWin: reloadedParent });
+	assert.equal(win2.SillyTavern.extensionSettings.EjsTemplate.debug_enabled, true, "重载后保留卡脚本保存的 debug_enabled");
+	assert.equal(win2.SillyTavern.extensionSettings.EjsTemplate.depth_limit, 5, "重载后保留卡脚本保存的 depth_limit");
+});
+
+
 
 
 

@@ -5,6 +5,7 @@
  * keepRecentTokens 的整轮），摘要落 liyuan-discussion-summary 条目，回放从 firstKeptEntryId 起。
  */
 import { authoringHistory, contextText, type ConversationEntry, type ContextMessage } from "../conversation-mode.ts";
+import { getUiLocale } from "../i18n/index.ts";
 
 export const DISCUSSION_SUMMARY_TYPE = "liyuan-discussion-summary";
 
@@ -109,7 +110,13 @@ function liveDiscussion<T extends ConversationEntry>(branch: T[]): { live: T[]; 
 export function agentHistory(branch: ConversationEntry[]): ContextMessage[] {
 	const { live, summary } = liveDiscussion(branch);
 	const messages = authoringHistory(live);
-	if (summary) messages.unshift({ role: "user", content: [{ type: "text", text: `【讨论摘要】以下是更早讨论的摘要：\n\n${summary}` }], timestamp: 0 });
+	if (summary) {
+		const en = getUiLocale() === "en";
+		const text = en
+			? `[Discussion Summary] Summary of earlier discussion:\n\n${summary}`
+			: `【讨论摘要】以下是更早讨论的摘要：\n\n${summary}`;
+		messages.unshift({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
+	}
 	return messages;
 }
 
@@ -176,17 +183,25 @@ export function planDiscussionCompaction(branch: ConversationEntry[], o: Discuss
 
 /** 讨论序列化：user / assistant 文本原样，工具调用与回执各压成一行（回执截 400 字） */
 export function serializeDiscussion(messages: ContextMessage[]): string {
+	const en = getUiLocale() === "en";
 	const lines: string[] = [];
 	for (const m of messages) {
-		if (m.role === "user") lines.push(`用户：${contextText(m.content)}`);
+		if (m.role === "user") lines.push(en ? `User: ${contextText(m.content)}` : `用户：${contextText(m.content)}`);
 		else if (m.role === "assistant" && Array.isArray(m.content)) {
 			for (const b of m.content as Array<{ type?: string; text?: string; name?: string; arguments?: unknown }>) {
-				if (b.type === "text" && b.text?.trim()) lines.push(`助手：${b.text}`);
-				else if (b.type === "toolCall") lines.push(`[调用 ${b.name} ${JSON.stringify(b.arguments ?? {}).slice(0, 400)}]`);
+				if (b.type === "text" && b.text?.trim()) lines.push(en ? `Assistant: ${b.text}` : `助手：${b.text}`);
+				else if (b.type === "toolCall") {
+					lines.push(
+						en
+							? `[tool_call ${b.name} ${JSON.stringify(b.arguments ?? {}).slice(0, 400)}]`
+							: `[调用 ${b.name} ${JSON.stringify(b.arguments ?? {}).slice(0, 400)}]`,
+					);
+				}
 			}
 		} else if (m.role === "toolResult") {
 			const t = contextText(m.content);
-			lines.push(`[回执 ${String(m.toolName ?? "")}：${t.length > 400 ? `${t.slice(0, 400)}…` : t}]`);
+			const clipped = t.length > 400 ? `${t.slice(0, 400)}…` : t;
+			lines.push(en ? `[tool_result ${String(m.toolName ?? "")}: ${clipped}]` : `[回执 ${String(m.toolName ?? "")}：${clipped}]`);
 		}
 	}
 	return lines.join("\n\n");
@@ -194,9 +209,15 @@ export function serializeDiscussion(messages: ContextMessage[]): string {
 
 /** 摘要提示词：给旁路模型的唯一一段，不进主上下文 */
 export function buildDiscussionSummaryPrompt(o: { conversationText: string; previousSummary?: string }): { systemPrompt: string; userText: string } {
-	const systemPrompt = "把一段创作讨论压成接力摘要，供另一个模型接着讨论。保留：用户提出的要求与偏好、已经定下的剧情决定、尚未决定的问题、已改动过的稿子文件与改了什么。去掉：客套、重复、过程细节。用原文的语言，条目式，事实优先。";
+	const en = getUiLocale() === "en";
+	const systemPrompt = en
+		? "Compress this creative discussion into a handoff summary for another model to continue the conversation. Keep: the user's requirements and preferences, finalized plot decisions, open questions, and which manuscript files were changed and how. Drop: pleasantries, repetition, and process chatter. Write in the language of the original discussion, in bullet points, facts first."
+		: "把一段创作讨论压成接力摘要，供另一个模型接着讨论。保留：用户提出的要求与偏好、已经定下的剧情决定、尚未决定的问题、已改动过的稿子文件与改了什么。去掉：客套、重复、过程细节。用原文的语言，条目式，事实优先。";
+	const prevNote = en
+		? "(Above is the earlier summary; merge the new discussion below into it and output one unified summary.)"
+		: "（上面是更早的摘要，把下面的新讨论并进去，输出合并后的完整摘要。）";
 	const userText = [
-		o.previousSummary ? `<previous-summary>\n${o.previousSummary}\n</previous-summary>\n\n（上面是更早的摘要，把下面的新讨论并进去，输出合并后的完整摘要。）` : "",
+		o.previousSummary ? `<previous-summary>\n${o.previousSummary}\n</previous-summary>\n\n${prevNote}` : "",
 		`<conversation>\n${o.conversationText}\n</conversation>`,
 	].filter(Boolean).join("\n\n");
 	return { systemPrompt, userText };

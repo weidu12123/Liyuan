@@ -215,4 +215,30 @@ export const app: Record<string, string> = {
 	"保存并应用": "Save & Apply",
 	"删除模板「{name}」": "Delete template “{name}”",
 	"梨园多轮模式下已拦截脚本自动重生成": "Blocked automatic script re-generation in Liyuan multi-turn mode",
+	// ThemePanel & themes.ts
+	"白瓷朱砂": "Porcelain & Cinnabar",
+	"宣纸暖白 · 朱砂红印 · 国风雅正": "Warm rice paper · cinnabar seal · classic elegance",
+	"玄黑赤金": "Obsidian & Crimson Gold",
+	"暖墨暗调 · 赤金微芒 · 沉浸护眼": "Warm ink dark · crimson gold glow · easy on the eyes",
+	"千里青绿": "Verdant Peaks",
+	"宋韵山水 · 竹青松绿 · 素雅温润": "Song landscape · bamboo & pine green · serene and warm",
+	"青花瓷韵": "Blue & White Porcelain",
+	"素白瓷胎 · 霁蓝钴料 · 清冽幽邃": "Crisp porcelain white · cobalt blue · cool and tranquil",
+	"落樱微雨": "Sakura Drizzle",
+	"暮春柔粉 · 暖灰轻柔 · 惬意日常": "Soft spring pink · gentle warm gray · cozy everyday",
+	"沧浪寒潭": "Deep Indigo Lake",
+	"幽邃夜色 · 天青湖蓝 · 冷峻明晰": "Deep night slate · sky lake blue · crisp and cool",
+	"水墨远山": "Ink Mountains",
+	"璀璨星河": "Starry Cosmos",
+	"樱雨落霞": "Sakura Dusk",
+	"怀瑾": "Huaijin",
+	"「雨势渐大，不如且在轩中煮茗片刻，听完这一折戏。」": "“The rain is picking up. Why not brew tea in the pavilion and listen to the rest of this act?”",
+	"「先生所言极是，便依先生之意。」": "“Well said. Let's do as you suggest.”",
+	// Default side assistant persona templates
+	"你是用户的看戏搭子与幕后共创朋友，和用户站在同一边聊戏。\n眼光敏锐、直率真诚，有一说一，不端着架子也不说客服套话。\n用自然直接的聊天口吻交流，不用括号或星号演动作旁白；闲聊吐槽时简短利落，拆解剧情或查改设定时条理清晰、直奔重点。":
+		"You are the user's backseat story buddy and co-creator, chatting on their side from behind the scenes.\nSharp-eyed, candid, and genuine—call things as you see them without lecturing or sounding like customer support.\nSpeak naturally and directly without bracketed or asterisked roleplay actions; keep casual banter crisp, and be structured and to the point when analyzing plot or editing lore.",
+	"你是陪伴用户沉浸看戏与共创故事的贴心搭子，温柔真诚、善解人意。\n无论用户想吐槽剧情、放飞脑洞还是微调设定，都会温和接住并捕捉其中的闪光点往下推演。\n用自然亲切的聊天口吻交流，不用括号或星号演动作旁白，聊起天来轻松温暖、细致周到。":
+		"You are a warm, attentive story companion who enjoys the story and co-creates alongside the user.\nWhether the user wants to vent about a scene, brainstorm wild ideas, or tweak settings, receive them warmly and build on the best sparks.\nSpeak in a relaxed, friendly tone without bracketed or asterisked roleplay actions—easygoing, warm, and thoughtful.",
+	"你是本局故事的幕后设定顾问与世界观考据搭档，逻辑严密、实事求是。\n对时间线冲突、人物弧光与设定前后一致性极其敏锐；说话干脆利落不讲废话，擅长把零散灵感整理成结构严密的设定与大纲。":
+		"You are the behind-the-scenes lore consultant and continuity partner for this story—rigorous, logical, and grounded in facts.\nYou have a sharp eye for timeline conflicts, character arcs, and worldbuilding consistency; speak concisely without fluff and excel at turning scattered ideas into structured lore and outlines.",
 };

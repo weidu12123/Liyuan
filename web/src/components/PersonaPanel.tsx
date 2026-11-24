@@ -428,20 +428,20 @@ const BTW_PERSONA_TEMPLATES = [
 	{
 		id: "sharp",
 		label: () => t("犀利搭子"),
-		content:
-			"你是用户的看戏搭子与幕后共创朋友，和用户站在同一边聊戏。\n眼光敏锐、直率真诚，有一说一，不端着架子也不说客服套话。\n用自然直接的聊天口吻交流，不用括号或星号演动作旁白；闲聊吐槽时简短利落，拆解剧情或查改设定时条理清晰、直奔重点。", // i18n-ignore：模型提示词模板
+		content: () =>
+			t("你是用户的看戏搭子与幕后共创朋友，和用户站在同一边聊戏。\n眼光敏锐、直率真诚，有一说一，不端着架子也不说客服套话。\n用自然直接的聊天口吻交流，不用括号或星号演动作旁白；闲聊吐槽时简短利落，拆解剧情或查改设定时条理清晰、直奔重点。"),
 	},
 	{
 		id: "gentle",
 		label: () => t("温柔共创"),
-		content:
-			"你是陪伴用户沉浸看戏与共创故事的贴心搭子，温柔真诚、善解人意。\n无论用户想吐槽剧情、放飞脑洞还是微调设定，都会温和接住并捕捉其中的闪光点往下推演。\n用自然亲切的聊天口吻交流，不用括号或星号演动作旁白，聊起天来轻松温暖、细致周到。", // i18n-ignore：模型提示词模板
+		content: () =>
+			t("你是陪伴用户沉浸看戏与共创故事的贴心搭子，温柔真诚、善解人意。\n无论用户想吐槽剧情、放飞脑洞还是微调设定，都会温和接住并捕捉其中的闪光点往下推演。\n用自然亲切的聊天口吻交流，不用括号或星号演动作旁白，聊起天来轻松温暖、细致周到。"),
 	},
 	{
 		id: "scholar",
 		label: () => t("严谨考据"),
-		content:
-			"你是本局故事的幕后设定顾问与世界观考据搭档，逻辑严密、实事求是。\n对时间线冲突、人物弧光与设定前后一致性极其敏锐；说话干脆利落不讲废话，擅长把零散灵感整理成结构严密的设定与大纲。", // i18n-ignore：模型提示词模板
+		content: () =>
+			t("你是本局故事的幕后设定顾问与世界观考据搭档，逻辑严密、实事求是。\n对时间线冲突、人物弧光与设定前后一致性极其敏锐；说话干脆利落不讲废话，擅长把零散灵感整理成结构严密的设定与大纲。"),
 	},
 ] as const;
 
@@ -459,14 +459,14 @@ export function BtwRolePanel({
 	const btwName = cfg.data?.config.btwName?.trim() || t("助手");
 	const btwAvatar = cfg.data?.config.btwAvatar;
 	const savedPersona = cfg.data?.config.btwPersona?.trim() ?? "";
-	const effectivePersona = savedPersona || BTW_PERSONA_TEMPLATES[0].content;
+	const effectivePersona = savedPersona || BTW_PERSONA_TEMPLATES[0].content();
 	const btwModel = cfg.data?.config.btwModel ?? null;
 
 	const rawCustomTemplates = cfg.data?.config.btwPersonaTemplates;
 	const hasCustomTemplateList = Array.isArray(rawCustomTemplates);
 	const templates: Array<{ id: string; name: string; content: string }> = hasCustomTemplateList
 		? rawCustomTemplates
-		: BTW_PERSONA_TEMPLATES.map((tpl) => ({ id: tpl.id, name: tpl.label(), content: tpl.content }));
+		: BTW_PERSONA_TEMPLATES.map((tpl) => ({ id: tpl.id, name: tpl.label(), content: tpl.content() }));
 
 	const modelOptions: Array<{ provider: string; entry: string; id: string; thinking?: string }> = [];
 	const providers = agentCfg.data?.config?.providers ?? {};

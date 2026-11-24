@@ -19,7 +19,7 @@ import { uploadFile } from "../api.ts";
 import { attachmentUrl, toAttachmentView } from "../attachments.ts";
 import { Toggle } from "./kit.tsx";
 import { IconAttach, IconCheck, IconTrash } from "./icons.tsx";
-import { t } from "../i18n/index.ts";
+import { t, useLocale } from "../i18n/index.ts";
 
 export interface ThemePanelProps {
 	toast: (level: "info" | "warning" | "error", text: string) => void;
@@ -44,6 +44,7 @@ const SAMPLE_WALLPAPERS = [
 ];
 
 export function ThemePanel({ toast }: ThemePanelProps) {
+	useLocale();
 	const [activeId, setActiveId] = useState<string>(() => getActiveThemeId());
 	const activeTheme = THEME_LIST.find((t) => t.id === activeId) || THEME_LIST[0];
 
@@ -60,7 +61,7 @@ export function ThemePanel({ toast }: ThemePanelProps) {
 	const handleSelect = (theme: ThemeDef) => {
 		setActiveId(theme.id);
 		applyThemeById(theme.id);
-		toast("info", t("已切换到「{name}」主题", { name: theme.name }));
+		toast("info", t("已切换到「{name}」主题", { name: t(theme.name) }));
 	};
 
 	const handleUploadWallpaper = async (file: File) => {
@@ -198,10 +199,10 @@ export function ThemePanel({ toast }: ThemePanelProps) {
 							>
 								<div className="preview-bubble-head">
 									<span className="preview-avatar" style={{ background: activeTheme.accent }} />
-									<span className="preview-char-name" style={{ color: activeTheme.accent }}>{"怀瑾" /* i18n-ignore */}</span>
+									<span className="preview-char-name" style={{ color: activeTheme.accent }}>{t("怀瑾")}</span>
 								</div>
 								<div className="preview-bubble-text">
-									{"「雨势渐大，不如且在轩中煮茗片刻，听完这一折戏。」" /* i18n-ignore */}
+									{t("「雨势渐大，不如且在轩中煮茗片刻，听完这一折戏。」")}
 								</div>
 							</div>
 
@@ -215,7 +216,7 @@ export function ThemePanel({ toast }: ThemePanelProps) {
 								}}
 							>
 								<div className="preview-bubble-text">
-									{"「先生所言极是，便依先生之意。」" /* i18n-ignore */}
+									{t("「先生所言极是，便依先生之意。」")}
 								</div>
 							</div>
 
@@ -267,10 +268,10 @@ export function ThemePanel({ toast }: ThemePanelProps) {
 								{/* 主题名称与副标 */}
 								<div className="theme-card-info">
 									<div className="theme-card-title-row">
-										<span className="theme-card-name">{theme.name}</span>
+										<span className="theme-card-name">{t(theme.name)}</span>
 										{theme.isDark && <span className="theme-tag-dark">{t("暗色")}</span>}
 									</div>
-									<span className="theme-card-desc">{theme.subtitle}</span>
+									<span className="theme-card-desc">{t(theme.subtitle)}</span>
 								</div>
 							</button>
 						);
@@ -359,7 +360,7 @@ export function ThemePanel({ toast }: ThemePanelProps) {
 										className={`theme-sample-btn ${wallpaper.url === s.url ? "active" : ""}`}
 										onClick={() => handleSelectSample(s.url)}
 									>
-										{s.name}
+										{t(s.name)}
 									</button>
 								))}
 							</div>
@@ -383,7 +384,7 @@ export function ThemePanel({ toast }: ThemePanelProps) {
 										className="theme-sample-btn"
 										onClick={() => handleSelectSample(s.url)}
 									>
-										{s.name}
+										{t(s.name)}
 									</button>
 								))}
 							</div>

@@ -4,7 +4,8 @@
  * persist=false：只改本浏览器显示（登录页——还没登录，写不了配置）。
  */
 
-import { apiPut } from "../api.ts";
+import { apiGetCacheClear, apiPut } from "../api.ts";
+import { bumpWatchPanels } from "./kit.tsx";
 import { getLocale, setLocale, t, useLocale, type UiLocale } from "../i18n/index.ts";
 
 export function LocaleSwitch({ persist = true, onError }: { persist?: boolean; onError?: (msg: string) => void }) {
@@ -13,7 +14,13 @@ export function LocaleSwitch({ persist = true, onError }: { persist?: boolean; o
 		if (next === getLocale()) return;
 		setLocale(next);
 		if (persist) {
-			apiPut("/api/config", { uiLanguage: next }).catch((e) => onError?.((e as Error).message || t("保存失败")));
+			apiPut("/api/config", { uiLanguage: next })
+				.then(() => {
+					apiGetCacheClear("/api/commands");
+					apiGetCacheClear("/api/rules");
+					bumpWatchPanels();
+				})
+				.catch((e) => onError?.((e as Error).message || t("保存失败")));
 		}
 	};
 	return (

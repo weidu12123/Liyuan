@@ -3495,6 +3495,7 @@ try{
     renderPromptManagerDebounced:promptMgrStub.renderDebounced,
     saveSettings:function(){
       if(isPresetFrameNow())return Promise.resolve();
+      if(typeof persistEjsExtSettings==="function")persistEjsExtSettings();
       return commitPresetFromSharedState().then(function(){});
     },
     uuidv4:makeUuid
@@ -3946,6 +3947,77 @@ try{
     if(typeof g.TavernHelper.stopAllGeneration==="function"&&typeof g.stopAllGeneration!=="function")g.stopAllGeneration=g.TavernHelper.stopAllGeneration;
   }
 
+  var EJS_EXT_SETTINGS_KEY="liyuan.st.ejsTemplateSettings";
+  var DEFAULT_EJS_EXT_SETTINGS={
+    enabled:true,
+    generate_enabled:true,
+    generate_loader_enabled:true,
+    render_enabled:true,
+    render_loader_enabled:true,
+    with_context_disabled:false,
+    debug_enabled:false,
+    autosave_enabled:false,
+    preload_worldinfo_enabled:true,
+    code_blocks_enabled:true,
+    raw_message_evaluation_enabled:true,
+    filter_message_enabled:true,
+    cache_enabled:0,
+    cache_size:64,
+    cache_hasher:"h32ToString",
+    inject_loader_enabled:false,
+    invert_enabled:true,
+    depth_limit:-1,
+    compile_workers:false,
+    sandbox:false,
+    code_editor:false,
+    preload_only:true
+  };
+  function getExtSettingsStorage(){
+    try{var pw=parentWin();if(pw&&pw.localStorage)return pw.localStorage;}catch(e){}
+    try{if(g.localStorage)return g.localStorage;}catch(e){}
+    return null;
+  }
+  function loadEjsExtSettings(){
+    var base=Object.assign({},DEFAULT_EJS_EXT_SETTINGS);
+    try{
+      var st=getExtSettingsStorage();
+      if(st){
+        var raw=st.getItem(EJS_EXT_SETTINGS_KEY);
+        if(raw){
+          var parsed=JSON.parse(raw);
+          if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed)){
+            Object.assign(base,parsed);
+          }
+        }
+      }
+    }catch(e){}
+    return base;
+  }
+  function persistEjsExtSettings(){
+    if(isPresetFrameNow())return;
+    try{
+      var cur=g.__liyuanStExtSettings&&g.__liyuanStExtSettings.EjsTemplate;
+      if(!cur||typeof cur!=="object")return;
+      var st=getExtSettingsStorage();
+      if(st)st.setItem(EJS_EXT_SETTINGS_KEY,JSON.stringify(cur));
+      var pw=parentWin();
+      if(pw&&pw.__liyuanStEjsSettings&&pw.__liyuanStEjsSettings!==cur){
+        Object.assign(pw.__liyuanStEjsSettings,cur);
+      }
+    }catch(e){}
+  }
+  function ensureSharedEjsExtSettings(){
+    try{
+      var pw=parentWin();
+      if(pw&&pw!==g){
+        if(!pw.__liyuanStEjsSettings||typeof pw.__liyuanStEjsSettings!=="object"){
+          pw.__liyuanStEjsSettings=loadEjsExtSettings();
+        }
+        return pw.__liyuanStEjsSettings;
+      }
+    }catch(e){}
+    return loadEjsExtSettings();
+  }
   // SillyTavern.getContext() 第一层完整投影（刀2）
   var eventSourceAdapter={
     on:function(e,cb){return g.eventOn(e,cb);},
@@ -4091,6 +4163,7 @@ try{
         character_allowed_regex:[avatarId],
         preset_allowed_regex:{openai:["in_use","default"]},
         regex:[],
+        EjsTemplate:ensureSharedEjsExtSettings(),
         tavern_helper:{
           script:{
             enabled:{global:true,characters:[avatarId],presets:["in_use","default"]},
@@ -4101,6 +4174,9 @@ try{
     }else{
       g.__liyuanStExtSettings.variables={global:g.getVariables({type:"global"})};
       g.__liyuanStExtSettings.character_allowed_regex=[avatarId];
+      if(!g.__liyuanStExtSettings.EjsTemplate||typeof g.__liyuanStExtSettings.EjsTemplate!=="object"){
+        g.__liyuanStExtSettings.EjsTemplate=ensureSharedEjsExtSettings();
+      }
       if(g.__liyuanStExtSettings.tavern_helper&&g.__liyuanStExtSettings.tavern_helper.script&&g.__liyuanStExtSettings.tavern_helper.script.enabled){
         g.__liyuanStExtSettings.tavern_helper.script.enabled.characters=[avatarId];
       }
@@ -4188,10 +4264,12 @@ try{
       saveChatConditional:function(){return Promise.resolve();},
       saveSettings:function(){
         if(isPresetFrameNow())return Promise.resolve();
+        persistEjsExtSettings();
         return commitPresetFromSharedState().then(function(){});
       },
       saveSettingsDebounced:function(){
         if(isPresetFrameNow())return;
+        persistEjsExtSettings();
         syncPromptManagerDom();
         scheduleCommitPresetFromSettings();
       },

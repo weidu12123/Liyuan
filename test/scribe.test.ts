@@ -205,3 +205,37 @@ test("场记不许凭空建面板：账本里没有的面板名一律忽略", as
 	assert.deepEqual(Object.keys(out.state.panelData ?? {}), ["队伍"], "幻觉出来的面板名不建");
 	assert.equal(out.state.panelData?.队伍.体力, 3);
 });
+
+test("场记提示词：【当前账本】不重复序列化 roster、mvu 与 panelData", () => {
+	const state = {
+		...defaultState(),
+		time: "第三日",
+		location: "河畔",
+		roster: {
+			characters: { 丹妮莉丝: "第一夜" },
+			places: { 维斯多斯拉克: "第一夜" },
+			items: { 龙蛋: "第一夜" },
+			events: { 远征: "第一夜" },
+		},
+		mvu: { 生命: 95 },
+		panelData: { 队伍: { 体力: 7 } },
+	};
+	const { userText } = buildScribeTurnPrompt({
+		state,
+		userText: "继续前行。",
+		assistantText: "*风沙扑面而来。*",
+		charName: "丹妮莉丝",
+		userName: "旅人",
+		mvu: { tree: state.mvu },
+		panels: [{ name: "队伍", tree: state.panelData.队伍 }],
+	});
+	const ledgerEnd = userText.indexOf("【状态树·当前值】");
+	assert.ok(ledgerEnd > 0);
+	const ledgerBlock = userText.slice(0, ledgerEnd);
+	assert.ok(!ledgerBlock.includes('"roster"'), "场记无权修改 roster，不该塞进账本 JSON");
+	assert.ok(!ledgerBlock.includes('"mvu"'), "mvu 已在下方单独格式化，不在账本 JSON 重复");
+	assert.ok(!ledgerBlock.includes('"panelData"'), "panelData 已在下方单独格式化，不在账本 JSON 重复");
+	assert.ok(userText.includes("【状态树·当前值】"));
+	assert.ok(userText.includes("【面板数据·当前值】"));
+});
+

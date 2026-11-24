@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { loadManifest, memoryPaths, saveManifest, type MemoryManifest } from "./card-memory.ts";
+import { getUiLocale } from "./i18n/index.ts";
 import { CHAT_DOCS_MEMORY_DIR, CHAT_MEMORY_INDEX_FILE, chatMemoryDocsDirOf, chatMemoryIndexPath, nameSafe } from "./paths.ts";
 import type { MemoryDocument, MemoryHitLike } from "./tools/memory.ts";
 import { USER_RULES_FILE, chatRulesPath } from "./user-rules.ts";
@@ -31,7 +32,7 @@ export function listCardMemory(cardDir: string, currentChatId?: string): MemoryD
 		if (doc.chatId && (manifest.manual?.forgottenChats.includes(doc.chatId) || manifest.manual?.supersededRecaps[doc.chatId] === version)) return [];
 		if (doc.chatId && currentChatId && doc.chatId !== currentChatId) return [];
 		return [{ ref: doc.ref, version, text, meta: { title: basename(doc.path), fileName: basename(doc.path), source: "card-markdown", scope: doc.chatId ? "card-chat-recap" : "card", ...(doc.chatId ? { chatId: doc.chatId } : {}) },
-			...(manifest.manual?.protectedRefs.includes(doc.ref) ? { note: "手工记忆，自动同步不会覆盖。" } : {}) }];
+			...(manifest.manual?.protectedRefs.includes(doc.ref) ? { note: getUiLocale() === "en" ? "Manual memory; auto-sync will not overwrite it." : "手工记忆，自动同步不会覆盖。" } : {}) }];
 	});
 }
 
@@ -66,8 +67,11 @@ function backup(cardDir: string, file: string): void {
 
 /** One synchronous source transaction. Manifest is written first so a crash fails closed for regeneration. */
 export function changeCardMemory(cardDir: string, ref: string, version: string, content?: string): MemoryDocument | undefined {
+	const en = getUiLocale() === "en";
 	const doc = readCardMemory(cardDir, ref);
-	if (!doc || !version || doc.version !== version) throw new Error("记忆版本冲突或引用已失效；请重新 memory_read。");
+	if (!doc || !version || doc.version !== version) {
+		throw new Error(en ? "Memory version conflict or stale reference; re-run memory_read." : "记忆版本冲突或引用已失效；请重新 memory_read。");
+	}
 	const target = documents(cardDir).find((d) => d.ref === ref)!;
 	const p = memoryPaths(cardDir), manifest = loadManifest(cardDir), control = manual(manifest);
 	const protect = (key: string) => { if (!control.protectedRefs.includes(key)) control.protectedRefs.push(key); };
@@ -94,9 +98,15 @@ export function changeCardMemory(cardDir: string, ref: string, version: string, 
 		if (existsSync(path)) unlinkSync(path);
 	}
 	const updated = readCardMemory(cardDir, ref);
-	if (updated) updated.note = target.chatId
-		? "源复盘已固定为手工稿；旧自动汇总已失效，下一次同步从现存复盘重建。"
-		: "手工汇总已保存；自动合并暂停，已参与旧汇总的复盘不再被检索。其他局的新复盘仍可独立读取。";
+	if (updated) {
+		updated.note = target.chatId
+			? (en
+				? "Source recap pinned as manual draft; stale auto-summaries invalidated and will rebuild from active recaps on next sync."
+				: "源复盘已固定为手工稿；旧自动汇总已失效，下一次同步从现存复盘重建。")
+			: (en
+				? "Manual summary saved; auto-consolidation paused and already-merged recaps are no longer searched. New recaps from other runs remain independently readable."
+				: "手工汇总已保存；自动合并暂停，已参与旧汇总的复盘不再被检索。其他局的新复盘仍可独立读取。");
+	}
 	return updated;
 }
 
@@ -188,7 +198,7 @@ function summarizeHook(text: string): string {
 		const cleaned = line.replace(/^#+\s*/, "").replace(/^[-*>]\s*/, "").trim();
 		if (cleaned) return cleaned.length > 72 ? `${cleaned.slice(0, 72)}…` : cleaned;
 	}
-	return "项目记忆文档";
+	return getUiLocale() === "en" ? "Project memory document" : "项目记忆文档";
 }
 
 function syncMemoryIndexEntry(chatDir: string, fileName: string, title: string, hook?: string): void {
@@ -196,7 +206,7 @@ function syncMemoryIndexEntry(chatDir: string, fileName: string, title: string, 
 	const idxPath = chatMemoryIndexPath(chatDir);
 	mkdirSync(chatMemoryDocsDirOf(chatDir), { recursive: true });
 	const existing = raw(idxPath) ?? "";
-	const lines = existing ? existing.split(/\r?\n/) : ["# 项目记忆索引", ""];
+	const lines = existing ? existing.split(/\r?\n/) : [getUiLocale() === "en" ? "# Project Memory Index" : "# 项目记忆索引", ""];
 	const linkToken = `(${fileName})`;
 	const filtered = lines.filter((l) => !l.includes(linkToken));
 	if (hook !== undefined) {
@@ -212,8 +222,9 @@ function syncMemoryIndexEntry(chatDir: string, fileName: string, title: string, 
 
 /** 新增或覆盖一篇项目级 Markdown 记忆文档（`<子项目>/记忆/<title>.md`），并自动同步 `记忆/MEMORY.md` 索引 */
 export function writeChatMemoryDoc(chatDir: string, input: { text: string; title?: string }): MemoryDocument {
-	const rawTitle = (input.title ?? "").trim() || "记忆笔记";
-	const safeStem = nameSafe(rawTitle.replace(/\.md$/i, "")).trim() || "记忆笔记";
+	const defaultTitle = getUiLocale() === "en" ? "memory-note" : "记忆笔记";
+	const rawTitle = (input.title ?? "").trim() || defaultTitle;
+	const safeStem = nameSafe(rawTitle.replace(/\.md$/i, "")).trim() || defaultTitle;
 	const isRules = safeStem.toUpperCase() === USER_RULES_FILE.replace(/\.md$/i, "");
 	const fileName = `${safeStem}.md`;
 	const targetPath = isRules ? chatRulesPath(chatDir) : join(chatMemoryDocsDirOf(chatDir), fileName);
@@ -228,11 +239,13 @@ export function writeChatMemoryDoc(chatDir: string, input: { text: string; title
 
 /** 按 ref 与可选版本号更新或删除项目级 Markdown 记忆文档（content 为 undefined 时删除） */
 export function changeChatMemory(chatDir: string, ref: string, version?: string, content?: string): MemoryDocument | undefined {
+	const en = getUiLocale() === "en";
+	const conflictErr = en ? "Memory version conflict or stale reference; re-run memory_read." : "记忆版本冲突或引用已失效；请重新 memory_read。";
 	const normRef = normalizeChatRef(ref);
 	const existing = readChatMemory(chatDir, normRef);
 	if (content === undefined) {
 		if (!existing) return undefined;
-		if (version && existing.version !== version) throw new Error("记忆版本冲突或引用已失效；请重新 memory_read。");
+		if (version && existing.version !== version) throw new Error(conflictErr);
 		const docEntry = chatDocuments(chatDir).find((d) => d.ref.toLowerCase() === normRef.toLowerCase());
 		if (!docEntry) return undefined;
 		if (existsSync(docEntry.path)) unlinkSync(docEntry.path);
@@ -242,7 +255,7 @@ export function changeChatMemory(chatDir: string, ref: string, version?: string,
 		return undefined;
 	}
 	if (existing && version && existing.version !== version) {
-		throw new Error("记忆版本冲突或引用已失效；请重新 memory_read。");
+		throw new Error(conflictErr);
 	}
 	const stem = normRef.slice("chat:".length);
 	return writeChatMemoryDoc(chatDir, { title: stem, text: content });

@@ -11,6 +11,7 @@
  * 内容中立：清洗作用于标签结构，正文文本是穿过管道的不透明字符串。
  */
 
+import { getUiLocale } from "./i18n/index.ts";
 import { cleanAssistantText } from "./postprocess.ts";
 
 interface StChatMeta {
@@ -151,29 +152,39 @@ interface ImportBlockInput {
 
 /** 组装注入会话起点的前情块（custom 消息 → 以 user 角色送达模型，TUI 可见） */
 export function buildImportBlock({ summary, recentTurns, charName, userName }: ImportBlockInput): string {
+	const en = getUiLocale() === "en";
 	const parts: string[] = [
-		`【前情导入】以下是本剧情此前的经过（自 SillyTavern 迁移）。剧情从这里继续，忽略更早的开场白；${charName} 的性格、双方关系与所有既成事实以下述内容为准。`,
+		en
+			? `[Imported Recap] Below is the prior course of this story (migrated from SillyTavern). Continue from here and ignore earlier greetings; treat ${charName}'s characterization, relationships, and all established facts below as authoritative.`
+			: `【前情导入】以下是本剧情此前的经过（自 SillyTavern 迁移）。剧情从这里继续，忽略更早的开场白；${charName} 的性格、双方关系与所有既成事实以下述内容为准。`,
 	];
 	if (summary.trim()) {
-		parts.push(`── 前情提要 ──\n${summary.trim()}`);
+		parts.push(`${en ? "── Recap ──" : "── 前情提要 ──"}\n${summary.trim()}`);
 	}
 	if (recentTurns.length > 0) {
-		const dialogue = recentTurns.map((m) => `${m.role === "user" ? userName : m.name || charName}：${m.text}`).join("\n\n");
-		parts.push(`── 最近对白实录（原文） ──\n${dialogue}`);
+		const sep = en ? ": " : "：";
+		const dialogue = recentTurns.map((m) => `${m.role === "user" ? userName : m.name || charName}${sep}${m.text}`).join("\n\n");
+		parts.push(`${en ? "── Recent Dialogue Transcript (Verbatim) ──" : "── 最近对白实录（原文） ──"}\n${dialogue}`);
 	}
-	parts.push(`（前情结束。接下来由 ${userName} 继续行动。）`);
+	parts.push(
+		en
+			? `(End of imported recap. ${userName} acts next.)`
+			: `（前情结束。接下来由 ${userName} 继续行动。）`,
+	);
 	return parts.join("\n\n");
 }
 
 /** 摘要输入的上限保护：超长历史截取尾部（v0；分层摘要留待后续） */
 export function serializeForImportSummary(messages: StChatMessage[], userName: string, maxChars = 100_000): string {
-	const lines = messages.map((m) => `${m.role === "user" ? userName : m.name}：${m.text}`);
+	const en = getUiLocale() === "en";
+	const sep = en ? ": " : "：";
+	const lines = messages.map((m) => `${m.role === "user" ? userName : m.name}${sep}${m.text}`);
 	let text = lines.join("\n\n");
 	if (text.length > maxChars) {
 		text = text.slice(text.length - maxChars);
 		const firstBreak = text.indexOf("\n\n");
 		if (firstBreak > 0) text = text.slice(firstBreak + 2);
-		text = `（更早的剧情因长度上限未纳入摘要）\n\n${text}`;
+		text = `${en ? "(Earlier story omitted due to length limit)" : "（更早的剧情因长度上限未纳入摘要）"}\n\n${text}`;
 	}
 	return text;
 }

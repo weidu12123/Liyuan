@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { extractAuthorScriptVariables } from "./authorScripts.ts";
 import { createEjsContext, evalEjsTemplate, hasPromptTemplateSyntax } from "./ejs-engine.ts";
+import { getUiLocale } from "./i18n/index.ts";
 import { assemble, type AssembledPiece, type AssembleReportItem, type AssembleResult, type DepthPiece } from "./preset-assemble.ts";
 import { createMacroEnv, evalPresetMacros } from "./preset-macro.ts";
 import type { PresetDoc } from "./preset-doc.ts";
@@ -34,6 +35,16 @@ const STATION_META: Record<DeclareStation, { label: string; dest: string }> = {
 	output: { label: "输出合约", dest: "停用（输出通道／MVU／面板）" },
 	memory: { label: "记忆记账", dest: "停用（场记＋世界状态）" },
 	wrapper: { label: "材料包装", dest: "跳过（装配器本职）" },
+};
+
+const STATION_META_EN: Record<DeclareStation, { label: string; dest: string }> = {
+	identity: { label: "Identity / Jailbreak", dest: "APPEND_SYSTEM.md" },
+	writing: { label: "Writing Rules", dest: "Card AGENTS.md" },
+	thinking: { label: "Thinking Protocol", dest: "Disabled (native thinking + agent loop)" },
+	draft: { label: "Draft Protocol", dest: "Disabled (draft tools)" },
+	output: { label: "Output Contract", dest: "Disabled (output channel / MVU / panels)" },
+	memory: { label: "Memory Bookkeeping", dest: "Disabled (scribe + world state)" },
+	wrapper: { label: "Material Wrapper", dest: "Skipped (handled by assembler)" },
 };
 
 const STATIONS = Object.keys(STATION_META) as DeclareStation[];
@@ -266,40 +277,83 @@ const STATION_DEFINITIONS: Record<DeclareStation, string> = {
 	wrapper: "纯材料包装：跳过卡/历史槽位后仅剩的孤立开闭标签、分节标题、加载演出（如 [World Loading...]）",
 };
 
+const STATION_DEFINITIONS_EN: Record<DeclareStation, string> = {
+	identity:
+		"Defines who you are: identity/persona/author roleplay, model card, jailbreak letters/declarations, content boundary agreements, and anti-censorship framing. If a segment contains identity or jailbreak declarations, keep it as identity even if it mixes in thinking steps or tag specs.",
+	writing:
+		"Story prose and presentation rules: prose style, description guidelines, banned words, dialogue rules, NSFW guidelines, length, plot analysis/thinking guidance, and visible formatting (prose/status bars/choices/notes). Keep as writing even if it mixes in thinking steps or tag formats.",
+	thinking:
+		"Strictly single-turn prohibitions incompatible with a multi-turn tool loop: protocols that forbid multi-step reasoning or tool calls ('think/output only once'). Normal thinking steps, plot analysis, and thinking guidance stay in writing or identity.",
+	draft:
+		"Strictly conflicting directives forcing inline paragraph-by-paragraph drafting rituals or forbidding draft delivery tools; normal continuation/prose guidance stays in writing.",
+	output:
+		"Strictly directives forcing fake tool calls (e.g. must output via a fictional function argument and never output text) or frontend runtime takeover protocols; normal prose wrapper tags, choices, and formatting specs stay in writing.",
+	memory:
+		"Strictly conflicting directives requiring external sync script commands every turn or hijacking background bookkeeping; everything else stays in writing.",
+	wrapper:
+		"Pure structural wrappers left after removing card/history slots: orphan open/close tags, section headings, or loading theatrics (e.g. [World Loading...]).",
+};
+
 export function buildDeclarePrompt(
 	pieces: DeclarePiece[],
 	meta: { preset: string },
 ): { systemPrompt: string; userText: string } {
+	const en = getUiLocale() === "en";
+	const whereLabel = (w: DeclarePiece["where"]) =>
+		en
+			? (w === "before" ? "pre-history" : w === "after" ? "post-history" : "depth")
+			: (w === "before" ? "历史前" : w === "after" ? "历史后" : "深度注入");
 	const segments = pieces
-		.map(
-			(p, i) =>
-				`⟦${i + 1}｜${p.role}｜${p.where === "before" ? "历史前" : p.where === "after" ? "历史后" : "深度注入"}｜${p.name}⟧\n${p.text}`,
-		)
+		.map((p, i) => `⟦${i + 1}｜${p.role}｜${whereLabel(p.where)}｜${p.name}⟧\n${p.text}`)
 		.join("\n\n");
 
-	const systemPrompt = [
-		"你分析角色扮演预设的结构。输入是引擎编译后的分段提示词，每段头部为 ⟦编号｜角色｜位置｜块名⟧。",
-		"",
-		"给每个分段声明一个站点类别，判据：",
-		...STATIONS.map((s) => `- ${s}：${STATION_DEFINITIONS[s]}（去向：${STATION_META[s].dest}）`),
-		"",
-		"规则：",
-		"- 破限、模型卡与身份声明一律 identity（即使混有思考规划或标签说明也必须保留），不做取舍。",
-		"- 正文写作规则、正常思考引导与展示排版格式一律 writing；拿不准的分段一律 writing（保守保留）。",
-		"- 只有与多轮工具循环硬互斥的单轮/禁工具/假工具接管指令，或纯材料空包装才停用或跳过；绝不因分段包含思考引导、模型卡或展示标签而停用。",
-		"- 只分类，不评价、不改写分段内容。",
-		"",
-		"输出 JSON 数组，id 为段头编号（整数），逐段一项：",
-		'[{"id":1,"station":"<类别>","note":"<不超过20字的理由>"}]',
-	].join("\n");
+	const systemPrompt = en
+		? [
+				"You analyze the structure of a roleplay preset. The input is the compiled sequence of prompt segments, each headed by ⟦index｜role｜position｜blockName⟧.",
+				"",
+				"Assign one station category to each segment using these criteria:",
+				...STATIONS.map((s) => `- ${s}: ${STATION_DEFINITIONS_EN[s]} (destination: ${STATION_META_EN[s].dest})`),
+				"",
+				"Rules:",
+				"- Jailbreaks, model cards, and identity declarations always go to identity (even if mixed with thinking steps or tag specs); do not trim or omit.",
+				"- Story writing rules, normal thinking guidance, and visible formatting always go to writing; when in doubt, default to writing (conservative retention).",
+				"- Only hard-conflicting single-turn / anti-tool / fake-tool takeover directives or pure empty structural wrappers should be disabled or skipped; never disable a segment merely for containing thinking guidance, model cards, or display tags.",
+				"- Classify only; do not critique or rewrite segment content.",
+				"",
+				"Output a JSON array with one item per segment, where id is the integer segment index:",
+				'[{"id":1,"station":"<category>","note":"<reason under 12 words>"}]',
+			].join("\n")
+		: [
+				"你分析角色扮演预设的结构。输入是引擎编译后的分段提示词，每段头部为 ⟦编号｜角色｜位置｜块名⟧。",
+				"",
+				"给每个分段声明一个站点类别，判据：",
+				...STATIONS.map((s) => `- ${s}：${STATION_DEFINITIONS[s]}（去向：${STATION_META[s].dest}）`),
+				"",
+				"规则：",
+				"- 破限、模型卡与身份声明一律 identity（即使混有思考规划或标签说明也必须保留），不做取舍。",
+				"- 正文写作规则、正常思考引导与展示排版格式一律 writing；拿不准的分段一律 writing（保守保留）。",
+				"- 只有与多轮工具循环硬互斥的单轮/禁工具/假工具接管指令，或纯材料空包装才停用或跳过；绝不因分段包含思考引导、模型卡或展示标签而停用。",
+				"- 只分类，不评价、不改写分段内容。",
+				"",
+				"输出 JSON 数组，id 为段头编号（整数），逐段一项：",
+				'[{"id":1,"station":"<类别>","note":"<不超过20字的理由>"}]',
+			].join("\n");
 
-	const userText = [
-		`预设「${meta.preset}」。分段内容如下（⟦…⟧ 标记行是分度信息，不属于分段正文）：`,
-		"",
-		`输入共 ${pieces.length} 个分段，请逐段输出，从 1 到 ${pieces.length}，不要遗漏：`,
-		"",
-		segments,
-	].join("\n");
+	const userText = en
+		? [
+				`Preset "${meta.preset}". Segments follow (⟦…⟧ header lines are delimiters, not part of segment text):`,
+				"",
+				`Total ${pieces.length} segments — output one entry per segment from 1 to ${pieces.length} without omitting any:`,
+				"",
+				segments,
+			].join("\n")
+		: [
+				`预设「${meta.preset}」。分段内容如下（⟦…⟧ 标记行是分度信息，不属于分段正文）：`,
+				"",
+				`输入共 ${pieces.length} 个分段，请逐段输出，从 1 到 ${pieces.length}，不要遗漏：`,
+				"",
+				segments,
+			].join("\n");
 
 	return { systemPrompt, userText };
 }
@@ -623,13 +677,58 @@ const DECLARE_ACTION_LABEL: Record<DeclareLineItem["action"], string> = {
 	"dropped-prefill": "丢弃（预填位，8/23 定案）",
 };
 
+const DECLARE_ACTION_LABEL_EN: Record<DeclareLineItem["action"], string> = {
+	append: "Added to APPEND_SYSTEM.md (identity/jailbreak, active entry)",
+	agents: "Added to card AGENTS.md (writing rules, active entry)",
+	disabled: "Disabled (toggled-off entry in AGENTS.md; can be re-enabled)",
+	wrapper: "Skipped (handled by assembler)",
+	"skipped-marker": "Skipped (marker slot)",
+	"skipped-disabled": "Disabled in preset",
+	"skipped-empty": "Empty content",
+	"dropped-prefill": "Dropped (prefill slot)",
+};
+
 export function declareTranslateReport(
 	doc: PresetDoc,
 	r: DeclareTranslateResult,
 	declaration: PresetDeclaration,
 	sourceFile: string,
 ): string {
+	const en = getUiLocale() === "en";
 	const count = (a: DeclareLineItem["action"]) => r.lines.filter((l) => l.action === a).length;
+	if (en) {
+		const head = [
+			`# Translation Report: ${doc.name} (Narrow Split)`,
+			``,
+			`- Source: \`${sourceFile}\` (untouched; can be re-translated)`,
+			`- Date: ${declaration.createdAt}${declaration.model ? `; Declaration model: ${declaration.model}` : ""}`,
+			`- Output 1: Card APPEND_SYSTEM.md (${count("append")} identity entries, ${r.appendMarkdown.length.toLocaleString()} chars)`,
+			`- Output 2: Card AGENTS.md (${count("agents")} writing entries + ${count("disabled")} disabled protocol entries, ${r.agentsSection.length.toLocaleString()} chars total; disabled entries are excluded from prompts)`,
+			`- Disabled preset blocks: ${count("skipped-disabled")} (toggle them on in the preset editor, save, and re-translate to include)`,
+			`- Sampler parameters: ${Object.keys(r.samplers).length} migrated to config.samplers`,
+		];
+		if (r.usesLastUserMessage.length > 0) {
+			head.push(`- ⚠ Blocks referencing {{lastusermessage}} (per-turn macro, evaluated as empty during translation): ${r.usesLastUserMessage.join(", ")}`);
+		}
+		if (r.unsupportedMacros.length > 0) {
+			head.push(`- ⚠ Unsupported macros (kept verbatim): ${r.unsupportedMacros.join(", ")}`);
+		}
+		head.push(``, `## Block Routing`, ``);
+		const rows = r.lines.map((l) => {
+			const station = l.station ? ` (${STATION_META_EN[l.station].label})` : "";
+			const note = l.note ? ` — ${l.note}` : "";
+			return `- ${l.name || l.identifier} · ${l.chars.toLocaleString()} chars: ${DECLARE_ACTION_LABEL_EN[l.action]}${station}${note}`;
+		});
+		const tail = [
+			``,
+			`## Known Trade-Offs`,
+			``,
+			`- Multi-role jailbreak letter pairs are flattened into file quotes after translation, preserving meaning while softening turn-role framing.`,
+			`- Disabling conflicting output contracts stops preset-driven status bars/choices where Liyuan handles them via MVU/panels/ask; card-native output formats remain unaffected.`,
+			`- Declaration cache: assets/presets/.liyuan/预设声明-*.json (shared globally; editable before re-translating).`,
+		];
+		return [...head, ...rows, ...tail, ""].join("\n");
+	}
 	const head = [
 		`# 转译报告：${doc.name}（窄拆）`,
 		``,
@@ -710,53 +809,99 @@ export function buildProcessPrompt(
 	pieces: CompiledPiece[],
 	meta: { preset: string },
 ): { systemPrompt: string; userText: string } {
+	const en = getUiLocale() === "en";
+	const whereLabel = (w: CompiledPiece["where"]) =>
+		en
+			? (w === "before" ? "pre-history" : w === "after" ? "post-history" : "depth")
+			: (w === "before" ? "历史前" : w === "after" ? "历史后" : "深度注入");
 	const segments = pieces
 		.map(
 			(p, i) =>
-				`⟦片段${i + 1}｜${p.id}｜${p.role}｜${p.where === "before" ? "历史前" : p.where === "after" ? "历史后" : "深度注入"}｜${p.name}⟧\n${p.text}`,
+				`⟦${en ? `Segment ${i + 1}` : `片段${i + 1}`}｜${p.id}｜${p.role}｜${whereLabel(p.where)}｜${p.name}⟧\n${p.text}`,
 		)
 		.join("\n\n");
 
-	const systemPrompt = [
-		"你处理一份角色扮演预设。输入是它经引擎按用户选项编译后的线性提示词，已按来源块切成分段，每段头部带 ⟨标识符｜角色｜位置｜块名⟩ 标记行。",
-		"",
-		"把有效内容加工成两份产物：",
-		"- identity：身份与人格设定、作家扮演、破限信件、内容边界共识。此类内容**实质一字不丢**：可合并重复、调整衔接，不可摘要、不可删减、不可软化。信件对保留「来信—回信」的结构。",
-		"- writing：指导写正文的规则：文风、描写边界、禁词表、对白与转述规则、nsfw 准则、字数要求。合并重组为一段连贯的规则，去掉段与段之间重复的条目。",
-		"",
-		"直接丢弃，不进产物，但要列入 dropped 报账：",
-		"- 思考协议（思考模板、思考量要求、自检清单、思维链仪式）",
-		"- 草稿协议（分段草稿、排练注释、改稿仪式）",
-		"- 输出合约（格式模块顺序、正文包裹标签、状态栏/选项/摘要等每拍附加输出规格）",
-		"- 记忆记账（要求每拍输出摘要/关键记忆供留存的自建记忆系统）",
-		"- 材料包装（包裹内容槽位的开闭标签、分节标题、加载演出）",
-		"- 与已选选项相斥或被排除的内容",
-		"",
-		"规矩：",
-		"- 原料只用输入里的内容，不发明新规则、不添加新要求。",
-		"- {{char}}/{{user}} 保持占位符原样，不代入具体名字。",
-		"- 某份产物没有可归入的内容就整段省略。",
-		"",
-		"输出以下三段，标签行独占一行，标签外不要任何说明文字：",
-		"",
-		"<identity>",
-		"（身份与破限正文，正常分行书写）",
-		"</identity>",
-		"",
-		"<writing>",
-		"（写作规则正文，正常分行书写）",
-		"</writing>",
-		"",
-		"<dropped>",
-		"- 分段名或内容简述——不超过20字的理由",
-		"</dropped>",
-	].join("\n");
+	const systemPrompt = en
+		? [
+				"You process a roleplay preset. The input is the linear prompt compiled by the engine with the user's toggles, split into source blocks headed by ⟦segment｜id｜role｜position｜blockName⟧.",
+				"",
+				"Compile the effective content into two outputs:",
+				"- identity: identity and persona setup, author roleplay, jailbreak letters, content boundary agreements. Keep **every substantive detail intact**: you may deduplicate and smooth transitions, but never summarize, abridge, or soften. Preserve request/reply structure for letter pairs.",
+				"- writing: prose writing rules (style, description boundaries, banned words, dialogue/narration rules, NSFW guidelines, length targets). Merge and reorganize into a coherent rule set without cross-block duplicates.",
+				"",
+				"Drop directly (exclude from outputs, but account for in dropped):",
+				"- Thinking protocols (thinking templates, reasoning-length quotas, self-checklists, chain-of-thought rituals)",
+				"- Drafting protocols (paragraph-by-paragraph drafting, rehearsal notes, inline edit rituals)",
+				"- Output contracts (forced block ordering, wrapper tags, per-turn status-bar/choice/summary appendages)",
+				"- Memory bookkeeping (custom memory systems asking for per-turn summary/key-fact output)",
+				"- Structural wrappers (open/close tags around content slots, section dividers, loading theatrics)",
+				"- Clauses contradicted or excluded by selected toggles",
+				"",
+				"Rules:",
+				"- Use only material present in the input; do not invent new rules or requirements.",
+				"- Keep {{char}} and {{user}} placeholders verbatim.",
+				"- Omit an output section entirely if nothing belongs in it.",
+				"",
+				"Output the following three tagged sections with tag lines on their own lines and no commentary outside the tags:",
+				"",
+				"<identity>",
+				"(Identity & jailbreak text, normal line breaks)",
+				"</identity>",
+				"",
+				"<writing>",
+				"(Writing rules text, normal line breaks)",
+				"</writing>",
+				"",
+				"<dropped>",
+				"- Segment name or brief description — reason under 12 words",
+				"</dropped>",
+			].join("\n")
+		: [
+				"你处理一份角色扮演预设。输入是它经引擎按用户选项编译后的线性提示词，已按来源块切成分段，每段头部带 ⟨标识符｜角色｜位置｜块名⟩ 标记行。",
+				"",
+				"把有效内容加工成两份产物：",
+				"- identity：身份与人格设定、作家扮演、破限信件、内容边界共识。此类内容**实质一字不丢**：可合并重复、调整衔接，不可摘要、不可删减、不可软化。信件对保留「来信—回信」的结构。",
+				"- writing：指导写正文的规则：文风、描写边界、禁词表、对白与转述规则、nsfw 准则、字数要求。合并重组为一段连贯的规则，去掉段与段之间重复的条目。",
+				"",
+				"直接丢弃，不进产物，但要列入 dropped 报账：",
+				"- 思考协议（思考模板、思考量要求、自检清单、思维链仪式）",
+				"- 草稿协议（分段草稿、排练注释、改稿仪式）",
+				"- 输出合约（格式模块顺序、正文包裹标签、状态栏/选项/摘要等每拍附加输出规格）",
+				"- 记忆记账（要求每拍输出摘要/关键记忆供留存的自建记忆系统）",
+				"- 材料包装（包裹内容槽位的开闭标签、分节标题、加载演出）",
+				"- 与已选选项相斥或被排除的内容",
+				"",
+				"规矩：",
+				"- 原料只用输入里的内容，不发明新规则、不添加新要求。",
+				"- {{char}}/{{user}} 保持占位符原样，不代入具体名字。",
+				"- 某份产物没有可归入的内容就整段省略。",
+				"",
+				"输出以下三段，标签行独占一行，标签外不要任何说明文字：",
+				"",
+				"<identity>",
+				"（身份与破限正文，正常分行书写）",
+				"</identity>",
+				"",
+				"<writing>",
+				"（写作规则正文，正常分行书写）",
+				"</writing>",
+				"",
+				"<dropped>",
+				"- 分段名或内容简述——不超过20字的理由",
+				"</dropped>",
+			].join("\n");
 
-	const userText = [
-		`预设「${meta.preset}」。分段内容如下（⟦…⟧ 标记行是分度信息，不属于分段正文）：`,
-		"",
-		segments,
-	].join("\n");
+	const userText = en
+		? [
+				`Preset "${meta.preset}". Segments follow (⟦…⟧ header lines are delimiters, not part of segment text):`,
+				"",
+				segments,
+			].join("\n")
+		: [
+				`预设「${meta.preset}」。分段内容如下（⟦…⟧ 标记行是分度信息，不属于分段正文）：`,
+				"",
+				segments,
+			].join("\n");
 
 	return { systemPrompt, userText };
 }

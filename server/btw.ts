@@ -20,7 +20,7 @@ import {
 } from "@liyuan/agent-runtime";
 
 import { formatToolStartDetail } from "../src/activity-format.ts";
-import { t } from "../src/i18n/index.ts";
+import { getUiLocale, t } from "../src/i18n/index.ts";
 import { CHAT_BTW_SESSIONS_DIR } from "../src/paths.ts";
 import {
 	createSandboxGate,
@@ -30,6 +30,7 @@ import {
 	sandboxScope,
 	type SandboxGrants,
 } from "../src/sandbox.ts";
+import { readLocalizedGlobalSlot } from "../src/user-rules.ts";
 import { prependToFirstUser } from "../src/stage/btw.ts";
 import type { StageEngine, StageStreamFn } from "../src/stage/engine.ts";
 import { loadStageConfig } from "../src/stage/materials.ts";
@@ -78,25 +79,8 @@ export interface BtwRunner {
 	dispose(): Promise<void>;
 }
 
-const shippedSystemSkeleton = (): string => {
-	try {
-		return readFileSync(new URL("../assets/SYSTEM.md", import.meta.url), "utf8").trim();
-	} catch {
-		return "";
-	}
-};
-
 function readBaseSkeleton(agentDir: string): string {
-	const custom = join(agentDir, "SYSTEM.md");
-	if (existsSync(custom)) {
-		try {
-			const text = readFileSync(custom, "utf8").trim();
-			if (text) return text;
-		} catch {
-			// fall through to shipped skeleton
-		}
-	}
-	return shippedSystemSkeleton();
+	return readLocalizedGlobalSlot(join(agentDir, "SYSTEM.md"), "SYSTEM.md", { fallbackToShipped: true }).trim();
 }
 
 /** 从 pi 会话分支重建前端/CLI 展示用的对话快照（合并同轮连续 assistant 工具步与正文） */
@@ -141,7 +125,7 @@ function rebuildTranscriptFromBranch(branch: ReadonlyArray<Record<string, unknow
 			}
 			if (msg.stopReason === "error" && !curAssistant.text.trim()) {
 				const errText = typeof msg.errorMessage === "string" && msg.errorMessage ? msg.errorMessage : "provider error";
-				curAssistant.text = `（生成失败：${errText}）`; // i18n-ignore：回落文案
+				curAssistant.text = t("（生成失败：{error}）", { error: errText });
 			}
 		}
 	}
@@ -278,15 +262,25 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 			});
 			activeKit = kit;
 			const policy = loadStageConfig(deps.cwd).relayPolicy;
+			const en = getUiLocale() === "en";
 			const allTools =
 				policy?.contextPackMode === "tool-desc"
 					? [
 							{
 								name: CARRIER_TOOL_NAME,
-								description: "本轮设定与历史参考资料（静态只读 JSON 载体，无需调用）。", // i18n-ignore：模型工具描述
+								description: en
+									? "Reference context and history for this turn (static read-only JSON carrier; do not invoke)."
+									: "本轮设定与历史参考资料（静态只读 JSON 载体，无需调用）。", // i18n-ignore：模型工具描述
 								parameters: {
 									type: "object",
-									properties: { ack: { type: "string", description: "可选只读占位字段，本工具无需调用" } }, // i18n-ignore：模型工具参数
+									properties: {
+										ack: {
+											type: "string",
+											description: en
+												? "Optional read-only placeholder field; this tool does not need to be called."
+												: "可选只读占位字段，本工具无需调用", // i18n-ignore：模型工具参数
+										},
+									},
 								},
 							},
 							...kit.tools,
@@ -301,7 +295,14 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 					async execute(id, input, signal) {
 						if (tool.name === CARRIER_TOOL_NAME) {
 							return {
-								content: [{ type: "text", text: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续回答当前问题。" }], // i18n-ignore：模型回执
+								content: [
+									{
+										type: "text",
+										text: getUiLocale() === "en"
+											? "The reference material above is already included in this request's tool description; no need to call this tool again — please continue answering the current question."
+											: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续回答当前问题。", // i18n-ignore：模型回执
+									},
+								],
 							};
 						}
 						const cur = activeKit ?? kit;
@@ -359,7 +360,10 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 			pi.on("tool_call", async (event) => {
 				if (event.toolName === CARRIER_TOOL_NAME) return undefined;
 				if (!activeToolNames.includes(event.toolName)) {
-					return { block: true, reason: "此工具在旁路助手中不可用。" }; // i18n-ignore：模型回执
+					return {
+						block: true,
+						reason: getUiLocale() === "en" ? "This tool is not available in the side assistant." : "此工具在旁路助手中不可用。", // i18n-ignore：模型回执
+					};
 				}
 				const kit = activeKit;
 				const asm = activeAssembly ?? deps.stage.btwAssembly();
@@ -473,7 +477,7 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 					}
 				}
 			} else if (event.type === "auto_retry_start") {
-				recordTool(`请求失败，正在自动重试（第 ${event.attempt}/${event.maxAttempts} 次）…`); // i18n-ignore：过程日志
+				recordTool(t("请求失败，正在自动重试（第 {attempt}/{max} 次）…", { attempt: event.attempt, max: event.maxAttempts }));
 			}
 		});
 		return session;
@@ -629,7 +633,7 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 				const aborted = activeAbort.signal.aborted;
 				if (lastError && !aborted) {
 					if (liveReply && !liveReply.text.trim()) {
-						liveReply.text = `（生成失败：${lastError}）`; // i18n-ignore：回落文案
+						liveReply.text = t("（生成失败：{error}）", { error: lastError });
 					}
 					deps.events?.onNotify?.("error", t("旁路助手生成失败：{error}", { error: lastError }));
 				}
@@ -641,7 +645,7 @@ export function createBtwRunner(deps: BtwRunnerDeps): BtwRunner {
 				const aborted = activeAbort.signal.aborted;
 				const msg = err instanceof Error ? err.message : String(err);
 				if (liveReply && !liveReply.text.trim() && !aborted) {
-					liveReply.text = `（生成失败：${msg}）`; // i18n-ignore：回落文案
+					liveReply.text = t("（生成失败：{error}）", { error: msg });
 				}
 				if (!aborted) deps.events?.onNotify?.("error", t("旁路助手生成失败：{error}", { error: msg }));
 				const info = { aborted, ...(!aborted ? { error: msg } : {}) };

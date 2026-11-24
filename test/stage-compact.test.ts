@@ -273,3 +273,53 @@ test("runCompaction：归档失败不挡压缩（连续性优先于细节召回�
 	assert.equal(r.kind, "compacted");
 	assert.equal(deps.appended.length, 1);
 });
+
+test("planCompaction：everyNTurns=0 时，上下文吃紧可被动触发；未吃紧不触发", () => {
+	const branch = beats(10);
+	const calm = planCompaction(branch, {
+		everyNTurns: 0,
+		userName: "沈舟",
+		charName: "云澜",
+		contextPressure: { usedTokens: 60000, contextWindow: 128000 },
+	});
+	assert.equal(calm, null, "未到窗口阈值时不触发被动压缩");
+
+	const tight = planCompaction(branch, {
+		everyNTurns: 0,
+		userName: "沈舟",
+		charName: "云澜",
+		contextPressure: { usedTokens: 115000, contextWindow: 128000 },
+	});
+	assert.ok(tight, "超过 128000 - 16384 阈值时应被动触发压缩");
+	assert.equal(tight.turns, 4, "10 拍留 6 拍，压前 4 拍");
+});
+
+test("planCompaction：超长文不足 KEEP_RECENT_BEATS+1 拍时，被动吃紧退让保留拍数防死锁", () => {
+	const branch = beats(4, 3000);
+	const plan = planCompaction(branch, {
+		everyNTurns: 30,
+		userName: "沈舟",
+		charName: "云澜",
+		contextPressure: { usedTokens: 120000, contextWindow: 128000 },
+	});
+	assert.ok(plan, "仅 4 拍但上下文吃紧时应退让保留拍数并压出前 1 拍");
+	assert.equal(plan.turns, 1);
+	assert.equal(plan.coversThroughId, "a-1");
+});
+
+test("planCompaction：导入对话的 rp-import 条目计入叙事拍边界", () => {
+	const branch: BranchEntryLike[] = [];
+	for (let i = 1; i <= 8; i++) {
+		branch.push({ id: `iu-${i}`, type: "custom_message", customType: "rp-import", content: `导入第 ${i} 拍用户输入。` });
+		branch.push({ id: `ia-${i}`, type: "custom_message", customType: "rp-edited-reply", content: `导入第 ${i} 拍正文。${"风".repeat(1200)}` });
+	}
+	const plan = planCompaction(branch, {
+		everyNTurns: 2,
+		userName: "沈舟",
+		charName: "云澜",
+	});
+	assert.ok(plan, "8 拍导入对话满足 keep(6) + everyNTurns(2) 应触发压缩");
+	assert.equal(plan.turns, 2);
+	assert.equal(plan.coversThroughId, "ia-2");
+});
+

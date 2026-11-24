@@ -15,6 +15,8 @@
 
 import { scanTaggedBlocks } from "./postprocess.ts";
 
+import { getUiLocale } from "./i18n/index.ts";
+
 /** 补丁隐藏消息的 customType（sendMessage display:false；wire 跳过、送模前移除） */
 export const DRAFT_OP_TYPE = "rp-draft-op";
 
@@ -202,8 +204,9 @@ export function draftTurnText(messages: DraftMsgLike[]): string {
 
 /** draft_edit 定位校验（对给定草稿文本）：old 必须恰好出现一次 */
 function resolveDraftEditText(turn: string, old: string): { ok: true } | { ok: false; error: string } {
-	if (!old || !old.trim()) return { ok: false, error: "old 不能为空。" };
-	if (!turn) return { ok: false, error: "本回合还没有可修订的正文——先把草稿写出来。" };
+	const en = getUiLocale() === "en";
+	if (!old || !old.trim()) return { ok: false, error: en ? "old cannot be empty." : "old 不能为空。" };
+	if (!turn) return { ok: false, error: en ? "No prose to revise yet in this turn — write the draft first." : "本回合还没有可修订的正文——先把草稿写出来。" };
 	let count = 0;
 	let idx = turn.indexOf(old);
 	while (idx !== -1 && count < 3) {
@@ -211,10 +214,20 @@ function resolveDraftEditText(turn: string, old: string): { ok: true } | { ok: f
 		idx = turn.indexOf(old, idx + Math.max(1, old.length));
 	}
 	if (count === 0) {
-		return { ok: false, error: "old 在本回合已写文本中找不到——必须与原文逐字一致（含标点空白）。请重新精确引用。" };
+		return {
+			ok: false,
+			error: en
+				? "old was not found in this turn's written text — it must match verbatim including punctuation and whitespace. Quote accurately and retry."
+				: "old 在本回合已写文本中找不到——必须与原文逐字一致（含标点空白）。请重新精确引用。",
+		};
 	}
 	if (count > 1) {
-		return { ok: false, error: "old 在本回合文本中出现多处——请扩大引用范围使其唯一。" };
+		return {
+			ok: false,
+			error: en
+				? "old appears multiple times in this turn's text — expand the quote to make it unique."
+				: "old 在本回合文本中出现多处——请扩大引用范围使其唯一。",
+		};
 	}
 	return { ok: true };
 }
@@ -255,8 +268,9 @@ interface EditLocation {
 
 /** 在 text 中按阶梯定位 old 的唯一出现：精确 → 首尾 trim → 标点归一 */
 export function locateEdit(text: string, old: string): { ok: true; at: EditLocation } | { ok: false; error: string } {
-	if (!old || !old.trim()) return { ok: false, error: "old 不能为空。" };
-	if (!text.trim()) return { ok: false, error: "工作区还没有稿件——先用 draft_write 提交初稿。" };
+	const en = getUiLocale() === "en";
+	if (!old || !old.trim()) return { ok: false, error: en ? "old cannot be empty." : "old 不能为空。" };
+	if (!text.trim()) return { ok: false, error: en ? "No draft in workspace yet — call draft_write first." : "工作区还没有稿件——先用 draft_write 提交初稿。" };
 
 	const findAll = (hay: string, needle: string): number[] => {
 		const hits: number[] = [];
@@ -273,7 +287,12 @@ export function locateEdit(text: string, old: string): { ok: true; at: EditLocat
 	let hits = findAll(text, old);
 	if (hits.length === 1) return { ok: true, at: { start: hits[0]!, end: hits[0]! + old.length, level: "exact" } };
 	if (hits.length > 1) {
-		return { ok: false, error: `old 在现稿中出现 ${hits.length} 处——请扩大引用范围（前后多带一句）使其唯一。` };
+		return {
+			ok: false,
+			error: en
+				? `old appears ${hits.length} times in the current draft — include more surrounding context to make it unique.`
+				: `old 在现稿中出现 ${hits.length} 处——请扩大引用范围（前后多带一句）使其唯一。`,
+		};
 	}
 
 	// 二级：首尾 trim（模型常多带或少带首尾空白）
@@ -284,7 +303,12 @@ export function locateEdit(text: string, old: string): { ok: true; at: EditLocat
 			return { ok: true, at: { start: hits[0]!, end: hits[0]! + trimmed.length, level: "trimmed" } };
 		}
 		if (hits.length > 1) {
-			return { ok: false, error: `old（忽略首尾空白后）在现稿中出现 ${hits.length} 处——请扩大引用范围使其唯一。` };
+			return {
+				ok: false,
+				error: en
+					? `old (after trimming whitespace) appears ${hits.length} times in the draft — expand the quote to make it unique.`
+					: `old（忽略首尾空白后）在现稿中出现 ${hits.length} 处——请扩大引用范围使其唯一。`,
+			};
 		}
 	}
 
@@ -297,15 +321,21 @@ export function locateEdit(text: string, old: string): { ok: true; at: EditLocat
 		return { ok: true, at: { start: hits[0]!, end: hits[0]! + normOld.length, level: "punct" } };
 	}
 	if (hits.length > 1) {
-		return { ok: false, error: `old（标点归一后）在现稿中出现 ${hits.length} 处——请扩大引用范围使其唯一。` };
+		return {
+			ok: false,
+			error: en
+				? `old (after normalizing punctuation) appears ${hits.length} times in the draft — expand the quote to make it unique.`
+				: `old（标点归一后）在现稿中出现 ${hits.length} 处——请扩大引用范围使其唯一。`,
+		};
 	}
 
 	return {
 		ok: false,
 		// 回显模型自己声称的 old（对标 Codex lib.rs:790）——让它自己看出幻觉
-		error:
-			`old 在现稿中找不到。你引用的是：\n「${trimmed.slice(0, 80)}${trimmed.length > 80 ? "…" : ""}」\n` +
-			`须与现稿逐字一致。用 draft_search 取回精确原文，或 draft_read 通读现稿后重试。`,
+		error: en
+			? `old was not found in the current draft. You quoted:\n"${trimmed.slice(0, 80)}${trimmed.length > 80 ? "…" : ""}"\nIt must match the draft verbatim. Use draft_search for exact quotes or draft_read to inspect the draft, then retry.`
+			: `old 在现稿中找不到。你引用的是：\n「${trimmed.slice(0, 80)}${trimmed.length > 80 ? "…" : ""}」\n` +
+				`须与现稿逐字一致。用 draft_search 取回精确原文，或 draft_read 通读现稿后重试。`,
 	};
 }
 
@@ -327,7 +357,8 @@ interface DraftEditResult {
  * 任一处失败则整批不改，避免半套用的稿子）。区间重叠也判失败。
  */
 export function applyDraftEdits(text: string, edits: DraftEditItem[]): DraftEditResult {
-	if (edits.length === 0) return { ok: false, details: ["edits 为空——至少给一处修改。"] };
+	const en = getUiLocale() === "en";
+	if (edits.length === 0) return { ok: false, details: [en ? "edits is empty — provide at least one edit." : "edits 为空——至少给一处修改。"] };
 
 	const located: Array<{ at: EditLocation; item: DraftEditItem; idx: number }> = [];
 	const details: string[] = [];
@@ -336,13 +367,13 @@ export function applyDraftEdits(text: string, edits: DraftEditItem[]): DraftEdit
 	for (let i = 0; i < edits.length; i++) {
 		const it = edits[i]!;
 		if (typeof it?.old !== "string" || typeof it?.new !== "string") {
-			details.push(`第 ${i + 1} 处：old/new 都必须是字符串。`);
+			details.push(en ? `Edit #${i + 1}: both old and new must be strings.` : `第 ${i + 1} 处：old/new 都必须是字符串。`);
 			failed = true;
 			continue;
 		}
 		const r = locateEdit(text, it.old);
 		if (!r.ok) {
-			details.push(`第 ${i + 1} 处：${r.error}`);
+			details.push(en ? `Edit #${i + 1}: ${r.error}` : `第 ${i + 1} 处：${r.error}`);
 			failed = true;
 			continue;
 		}
@@ -355,8 +386,10 @@ export function applyDraftEdits(text: string, edits: DraftEditItem[]): DraftEdit
 		for (let i = 1; i < sorted.length; i++) {
 			if (sorted[i]!.at.start < sorted[i - 1]!.at.end) {
 				details.push(
-					`第 ${sorted[i - 1]!.idx + 1} 处与第 ${sorted[i]!.idx + 1} 处的引用区间重叠——` +
-						`请合并成一处，或缩小引用范围。`,
+					en
+						? `Edit #${sorted[i - 1]!.idx + 1} and edit #${sorted[i]!.idx + 1} overlap — merge them into one edit or narrow the quotes.`
+						: `第 ${sorted[i - 1]!.idx + 1} 处与第 ${sorted[i]!.idx + 1} 处的引用区间重叠——` +
+							`请合并成一处，或缩小引用范围。`,
 				);
 				failed = true;
 				break;
@@ -365,7 +398,11 @@ export function applyDraftEdits(text: string, edits: DraftEditItem[]): DraftEdit
 	}
 
 	if (failed) {
-		details.push("**整批未套用**（任一处定位失败则全部不改）——修正后重新提交整批。");
+		details.push(
+			en
+				? "**Batch not applied** (if any edit fails to match, none are applied) — fix the errors and resubmit the batch."
+				: "**整批未套用**（任一处定位失败则全部不改）——修正后重新提交整批。",
+		);
 		return { ok: false, details };
 	}
 
@@ -377,12 +414,23 @@ export function applyDraftEdits(text: string, edits: DraftEditItem[]): DraftEdit
 	}
 
 	for (const { at, item, idx } of located) {
-		const lvl =
-			at.level === "exact" ? "" : at.level === "trimmed" ? "（按忽略首尾空白匹配）" : "（按标点归一匹配）";
+		const lvl = en
+			? at.level === "exact"
+				? ""
+				: at.level === "trimmed"
+					? " (matched ignoring edge whitespace)"
+					: " (matched with normalized punctuation)"
+			: at.level === "exact"
+				? ""
+				: at.level === "trimmed"
+					? "（按忽略首尾空白匹配）"
+					: "（按标点归一匹配）";
 		const from = item.old.trim();
 		details.push(
-			`第 ${idx + 1} 处${lvl}：${from.slice(0, 24)}${from.length > 24 ? "…" : ""} → ` +
-				`${item.new.slice(0, 24)}${item.new.length > 24 ? "…" : ""}`,
+			en
+				? `Edit #${idx + 1}${lvl}: ${from.slice(0, 24)}${from.length > 24 ? "…" : ""} → ${item.new.slice(0, 24)}${item.new.length > 24 ? "…" : ""}`
+				: `第 ${idx + 1} 处${lvl}：${from.slice(0, 24)}${from.length > 24 ? "…" : ""} → ` +
+					`${item.new.slice(0, 24)}${item.new.length > 24 ? "…" : ""}`,
 		);
 	}
 	return { ok: true, text: out, details };

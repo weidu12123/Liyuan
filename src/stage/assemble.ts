@@ -14,6 +14,7 @@
 import { applyMacros } from "../card.ts";
 import { applyCardSkin } from "../cardSkin.ts";
 import { applyDraftOps, type DraftMsgLike } from "../draft.ts";
+import { getUiLocale } from "../i18n/index.ts";
 import { cleanAssistantText } from "../postprocess.ts";
 import { formatState, defaultState } from "../state.ts";
 import { isBackstageText } from "../stance.ts";
@@ -302,6 +303,7 @@ export function buildStageSystemPrompt({
 	tools,
 	mcpTools,
 }: StageSystemOptions): string {
+	const en = getUiLocale() === "en";
 	const macro: MacroContext = { charName: card.name, userName: config.userName };
 	const m = (s: string) => applyMacros(s, macro);
 	const sections: string[] = [];
@@ -326,21 +328,33 @@ export function buildStageSystemPrompt({
 	} else {
 		const charParts: string[] = [];
 		if (card.description) charParts.push(m(card.description));
-		if (card.personality) charParts.push(`## 性格\n${m(card.personality)}`);
-		if (card.scenario) charParts.push(`## 当前场景\n${m(card.scenario)}`);
+		if (card.personality) charParts.push(`${en ? "## Personality" : "## 性格"}\n${m(card.personality)}`);
+		if (card.scenario) charParts.push(`${en ? "## Current Scenario" : "## 当前场景"}\n${m(card.scenario)}`);
 		if (card.mesExample) {
-			charParts.push(`## 对白示例（仅供文风与语气参考，不是已发生的剧情）\n${m(card.mesExample)}`);
+			charParts.push(
+				`${en ? "## Dialogue Examples (for style and tone reference only, not prior story events)" : "## 对白示例（仅供文风与语气参考，不是已发生的剧情）"}\n${m(card.mesExample)}`,
+			);
 		}
-		if (charParts.length > 0) sections.push([`# 你扮演的角色：${card.name}`, ...charParts].join("\n\n"));
+		if (charParts.length > 0) {
+			sections.push([en ? `# Character You Play: ${card.name}` : `# 你扮演的角色：${card.name}`, ...charParts].join("\n\n"));
+		}
 	}
 
-	const personaLines = [`# 用户扮演：${config.userName}`];
-	personaLines.push(config.userPersona ? m(config.userPersona) : `（${config.userName} 的具体形象由用户在剧情中自行呈现）`);
+	const personaLines = [en ? `# User Plays: ${config.userName}` : `# 用户扮演：${config.userName}`];
+	personaLines.push(
+		config.userPersona
+			? m(config.userPersona)
+			: en
+				? `(${config.userName}'s appearance and details are presented by the user in play.)`
+				: `（${config.userName} 的具体形象由用户在剧情中自行呈现）`,
+	);
 	sections.push(personaLines.join("\n"));
 
 	if (!agentsText && constantLore.length > 0) {
-		const loreText = constantLore.map((e) => `- ${e.comment ? `【${e.comment}】` : ""}${m(e.content)}`).join("\n");
-		sections.push(`# 世界设定（常驻事实）\n${loreText}`);
+		const loreText = constantLore
+			.map((e) => `- ${e.comment ? (en ? `[${e.comment}] ` : `【${e.comment}】`) : ""}${m(e.content)}`)
+			.join("\n");
+		sections.push(`${en ? "# World Lore (Constant Facts)" : "# 世界设定（常驻事实）"}\n${loreText}`);
 	}
 
 	// skill 全部走标准按需档（8/23）：名字+描述在 skill_read 的工具描述里，正文调了才加载。
@@ -350,9 +364,17 @@ export function buildStageSystemPrompt({
 	// 工具已在清单里，这里只说明它们是什么、以及 RP 语境下的三条纪律。
 	// 措辞承自旧 director.ts（009e22e 换引擎时随 director 一起失联）。
 	if (mcpTools && mcpTools.length > 0) {
-		const index = mcpTools.map((t) => `- \`${t.name}\`：${t.description}`).join("\n");
+		const index = mcpTools.map((t) => `- \`${t.name}\`${en ? ": " : "："}${t.description}`).join("\n");
 		sections.push(
-			`# MCP 外设（用户接入的外部工具）
+			en
+				? `# MCP External Tools (User-Connected)
+Tools prefixed with \`mcp__\` come from external servers connected by the user (vision, search, browser, etc.) — call them directly.
+- **Use only when the story genuinely needs them** — they are external services, not part of roleplay; do not call them for things you can write from lore and imagination.
+- Tool results are **not visible to the user**: anything the user should know must be written into your response.
+- Report tool errors honestly instead of pretending they succeeded; ask the user before irreversible or high-risk actions (deleting files, payments, posting).
+Currently available:
+${index}`
+				: `# MCP 外设（用户接入的外部工具）
 以 \`mcp__\` 开头的工具来自用户接入的外部服务器（识图、搜索、浏览器等），**直接调用**即可。
 - **只在剧情真需要时用**——它们是外部服务，不是演出的一部分；能靠设定和想象写出来的，就不要调。
 - 调用结果**用户看不见**：要让用户知道的内容，必须由你写进正文。
@@ -363,7 +385,16 @@ ${index}`,
 	}
 
 	sections.push(
-		`# 消息流约定
+		en
+			? `# Message Stream Conventions
+- Messages labeled [Opening] are ${card.name}'s established opening; continue the story from that moment.
+- Messages labeled [Recap] are continuity summaries of earlier beats and established fact.
+- Messages labeled [World State] are the current factual baseline: if story memory conflicts with it, follow [World State] and reconcile smoothly in-narrative without breaking character to explain.
+- Messages labeled [Roster] list all characters, places, items, and plot threads introduced in this run along with when they first appeared${tools !== false ? "; look up details with `memory_search`" : ""}; only names outside the roster are newly introduced.
+- Messages labeled [Active Panels] hold the current content of each panel (which the user may have edited); treat those facts as authoritative.
+- Messages labeled [Relevant Lore] and [Lorebook Index] list lore entry titles (the former matched keywords this beat, the latter indexes the whole lorebook)${tools !== false ? "; fetch entry bodies with `lorebook_search`" : ""}.
+- Messages labeled [Story Memory] are retrieved excerpts of past prose; draw on them as needed without copying verbatim.`
+			: `# 消息流约定
 - 标注【开场】的消息是 ${card.name} 的既定开场白，剧情从那一刻继续。
 - 标注【前情提要】的消息是更早剧情的接力摘要，是既定事实。
 - 标注【世界状态】的消息是当前事实基准：剧情记忆与它冲突时，以状态为准并在叙事内自然圆回，绝不跳出剧情解释。
@@ -374,7 +405,7 @@ ${index}`,
 	);
 
 	if (!agentsText && card.systemPrompt) {
-		sections.push(`# 卡作者附加指令（优先级最高）\n${m(card.systemPrompt)}`);
+		sections.push(`${en ? "# Card Author Instructions (Highest Priority)" : "# 卡作者附加指令（优先级最高）"}\n${m(card.systemPrompt)}`);
 	}
 
 	return sections.join("\n\n");
@@ -417,6 +448,9 @@ export function formatLoreIndex(
 		used += t.length + 1;
 	}
 	const rest = titles.length - shown.length;
+	if (getUiLocale() === "en") {
+		return `${titles.length} entries: ${shown.join(", ")}${rest > 0 ? `… (${rest} more not listed)` : ""}`;
+	}
 	return `共 ${titles.length} 条：${shown.join("、")}${rest > 0 ? `……等（另 ${rest} 条未列出）` : ""}`;
 }
 
@@ -471,17 +505,18 @@ export function buildStageInjection({
 	passiveLore,
 	directorNote,
 }: StageInjectionOptions): string {
+	const en = getUiLocale() === "en";
 	const macro: MacroContext = { charName: card.name, userName: config.userName };
 	const blocks: string[] = [];
 
-	blocks.push(`【世界状态】\n${formatState(state)}`);
+	blocks.push(`${en ? "[World State]" : "【世界状态】"}\n${formatState(state)}`);
 
 	if (rosterIndex) {
-		blocks.push(`【登场名录】${rosterIndex}`);
+		blocks.push(en ? `[Roster] ${rosterIndex}` : `【登场名录】${rosterIndex}`);
 	}
 
 	if (panelIndex) {
-		blocks.push(`【活跃面板】\n${panelIndex}`);
+		blocks.push(`${en ? "[Active Panels]" : "【活跃面板】"}\n${panelIndex}`);
 	}
 
 	// 绿灯命中：**按档位分策略**（8/23 用户定案）。世界书这套是照抄酒馆的，而酒馆没有
@@ -494,43 +529,47 @@ export function buildStageInjection({
 		if (passiveLore) {
 			// off 挡：给命中条目的正文（酒馆原生被动供料）——模型不主动检索时的兜底
 			const lore = activatedLore
-				.map((e) => `- ${e.comment ? `【${e.comment}】` : ""}${applyMacros(e.content, macro)}`)
+				.map((e) => `- ${e.comment ? (en ? `[${e.comment}] ` : `【${e.comment}】`) : ""}${applyMacros(e.content, macro)}`)
 				.join("\n");
-			blocks.push(`【相关设定】\n${lore}`);
+			blocks.push(`${en ? "[Relevant Lore]" : "【相关设定】"}\n${lore}`);
 		} else {
 			// thinking 挡：给标题＝给线索，正文由模型自己 lorebook_search 取，检索这一环才闭得上
 			const titles = activatedLore.map((e) => (e.comment || e.keys?.[0] || "").trim()).filter(Boolean);
 			if (titles.length > 0) {
-				blocks.push(`【相关设定】本拍命中 ${titles.length} 条：${titles.join("、")}`);
+				blocks.push(
+					en
+						? `[Relevant Lore] ${titles.length} matched this beat: ${titles.join(", ")}`
+						: `【相关设定】本拍命中 ${titles.length} 条：${titles.join("、")}`,
+				);
 			}
 		}
 	}
 
 	if (loreIndex) {
-		blocks.push(`【设定集索引】${loreIndex}`);
+		blocks.push(en ? `[Lorebook Index] ${loreIndex}` : `【设定集索引】${loreIndex}`);
 	}
 
 	// 【剧情记忆】：向量库被动召回。块的语义早已写在 system「消息流约定」里，
 	// 此处只是把宣称过的通道接上——不加一句新话（铁律一）。
 	if (memoryRecall) {
-		blocks.push(`【剧情记忆】\n${memoryRecall}`);
+		blocks.push(`${en ? "[Story Memory]" : "【剧情记忆】"}\n${memoryRecall}`);
 	}
 
 	// 卡末端指令：独立块（旧【导演备注】容器解散后的存留者——卡数据，原文直通）。
 	// 卡档案在场 ⇒ 它已在 AGENTS.md 里（B8），这里不双份。
 	if (card.postHistoryInstructions && !cardAgentsActive) {
-		blocks.push(`【卡作者末端指令】\n${applyMacros(card.postHistoryInstructions, macro)}`);
+		blocks.push(`${en ? "[Card Author Post-History Instructions]" : "【卡作者末端指令】"}\n${applyMacros(card.postHistoryInstructions, macro)}`);
 	}
 
 	// 字数一行：纯事实（无「朝这个量落笔」类指令）；无目标不出行
 	if (wordRange) {
-		blocks.push(`本拍约 ${wordRange.min}–${wordRange.max} 字`);
+		blocks.push(en ? `Target length for this beat: ~${wordRange.min}–${wordRange.max} chars` : `本拍约 ${wordRange.min}–${wordRange.max} 字`);
 	}
 
 	// 导演备注（PLAN-DIRECTOR-NOTE）：末块——紧贴用户原话之前，对当拍演出的指示权重最大。
 	// 用户自己的话，原文直通；无值不出块（有备注才存在，不是 harness 新增的句子——铁律一）。
 	if (directorNote?.trim()) {
-		blocks.push(`【导演备注】\n${directorNote.trim()}`);
+		blocks.push(`${en ? "[Director's Note]" : "【导演备注】"}\n${directorNote.trim()}`);
 	}
 
 	return blocks.join("\n\n");

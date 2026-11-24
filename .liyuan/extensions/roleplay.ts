@@ -16,6 +16,8 @@ import { publishStageConnection, type StageHooks } from "../../src/stage/bridge.
 import { completeSimple } from "@liyuan/ai/compat";
 import { Type } from "typebox";
 import { StoryHistory, listStoryFiles, storyDirectory } from "../../src/stage/story-history.ts";
+import { getUiLocale } from "../../src/i18n/index.ts";
+import { isShippedSlotDefault, shippedSlotPrompt } from "../../src/user-rules.ts";
 
 import { loadCardFile } from "../../src/card.ts";
 import { buildImportBlock, cleanChat, parseStChat, serializeForImportSummary } from "../../src/chatlog.ts";
@@ -1128,28 +1130,33 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 	// SYSTEM.md 缺席（customPrompt 为空：未播种或被清空）时 pi 会回落 coding 基座，
 	// 与「你是角色扮演 agent」互斥——此时退回随包骨架原文并每拍告警。这不是隐形兜底：
 	// 告警可见，用户要么建回文件、要么看着告警知道发生了什么。
-	let skeletonCache: string | null = null;
 	const stageSystemSkeleton = (): string => {
-		if (skeletonCache !== null) return skeletonCache;
 		try {
-			skeletonCache = readFileSync(new URL("../../assets/SYSTEM.md", import.meta.url), "utf-8");
+			return shippedSlotPrompt("SYSTEM.md", getUiLocale());
 		} catch (err) {
-			skeletonCache = "";
 			console.error(
 				`[stage] 扮演骨架不可读（assets/SYSTEM.md）：${err instanceof Error ? err.message : String(err)}` +
 					"；本拍 system 无骨架，只有运行时段",
 			);
+			return "";
 		}
-		return skeletonCache;
 	};
 	pi.on("before_agent_start", (event) => {
 		if (!activeStage) return undefined;
 		let base = event.systemPrompt;
-		if (!event.systemPromptOptions?.customPrompt) {
+		const custom = event.systemPromptOptions?.customPrompt;
+		if (!custom) {
 			const skeleton = stageSystemSkeleton();
 			if (!skeleton) return { systemPrompt: activeStage.systemPrompt };
 			console.error("[stage] SYSTEM.md 缺席，本拍用随包扮演骨架（建回 <agentDir>/SYSTEM.md 可停用本告警）");
 			base = skeleton;
+		} else if (isShippedSlotDefault("SYSTEM.md", custom)) {
+			// 未手改的 SYSTEM.md 在切换语言后即时按当前语言替换骨架部分，无需重启
+			const target = stageSystemSkeleton().trim();
+			const srcTrim = custom.trim();
+			if (target && srcTrim && target !== srcTrim && base.includes(srcTrim)) {
+				base = base.replace(srcTrim, target);
+			}
 		}
 		return { systemPrompt: `${base}\n\n${activeStage.systemPrompt}` };
 	});
@@ -1207,7 +1214,7 @@ export default function roleplayExtension(pi: ExtensionAPI) {
 		const input = (await activeStage?.toolCall(event.toolName, event.input)) ?? {
 			toolName: event.toolName,
 			lastUserText: lastUserText(ctx as never),
-			creationMode: rpMode ? config.creationMode : "silent",
+			creationMode: rpMode && !config.turboMode ? config.creationMode : "silent",
 		};
 		if ("blockReason" in input && input.blockReason) return { block: true, reason: input.blockReason };
 		const verdict = checkWriteGate(input);

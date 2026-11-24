@@ -90,10 +90,12 @@ export function t(zh: string, vars?: TVars): string {
 		const hit = en[zh];
 		if (hit !== undefined) {
 			out = hit;
-			if (out.includes("|")) {
-				const n = vars ? (typeof vars.n === "number" ? vars.n : Object.values(vars).find((v) => typeof v === "number")) : undefined;
-				const [one, many] = out.split("|");
-				out = n === 1 ? one : (many ?? one);
+			if (out.includes("|") && vars) {
+				const n = typeof vars.n === "number" ? vars.n : Object.values(vars).find((v) => typeof v === "number");
+				const parts = out.split("|");
+				if (n !== undefined && parts.length === 2) {
+					out = n === 1 ? parts[0]! : parts[1]!;
+				}
 			}
 		}
 	}

@@ -1,4 +1,5 @@
 /** A fixed previous-reply editor. It never accepts a historical entry selector. */
+import { getUiLocale, t } from "../i18n/index.ts";
 import { isBackstageText } from "../stance.ts";
 import { storyBranch } from "../conversation-mode.ts";
 import { applyDraftRevisions, type DraftBranchEntry } from "./draft-projection.ts";
@@ -54,18 +55,28 @@ export class PreviousDraftEditor {
 	}
 
 	#snapshot(ws: TurnWorkspace): Snapshot {
+		const en = getUiLocale() === "en";
 		const branch = this.getBranch();
-		if (!ws.userId || !branch.some((e) => e.id === ws.userId && e.type === "message" && (e.message as { role?: string })?.role === "user")) throw new Error("当前请求已不在此分支，未修改上一拍。");
+		if (!ws.userId || !branch.some((e) => e.id === ws.userId && e.type === "message" && (e.message as { role?: string })?.role === "user")) {
+			throw new Error(en ? "Current request is no longer on this branch; previous beat unchanged." : "当前请求已不在此分支，未修改上一拍。");
+		}
 		const reply = previousReply(branch);
-		if (!reply || !this.#targetId) throw new Error("当前分支没有可修订的上一拍回复。");
-		if (reply.entryId !== this.#targetId) throw new Error("上一拍已变化，本次请求不能改到另一拍。");
-		if (reply.phase !== "sealed") throw new Error("上一拍尚未收笔，不能作为已定稿正文回改。");
+		if (!reply || !this.#targetId) {
+			throw new Error(en ? "No previous reply available to revise on the current branch." : "当前分支没有可修订的上一拍回复。");
+		}
+		if (reply.entryId !== this.#targetId) {
+			throw new Error(en ? "The previous beat has changed; cannot edit a different beat in this request." : "上一拍已变化，本次请求不能改到另一拍。");
+		}
+		if (reply.phase !== "sealed") {
+			throw new Error(en ? "The previous beat is not sealed and cannot be revised as finalized prose." : "上一拍尚未收笔，不能作为已定稿正文回改。");
+		}
 		const stored = reply.draftId ? new DraftStore(this.directory, reply.draftId).read() : undefined;
 		const source = stored?.sessionId === ws.sessionId ? stored : undefined;
 		return { reply, source, fingerprint: JSON.stringify({ reply, source }) };
 	}
 
 	run(ws: TurnWorkspace, deps: WorkspaceDeps, name: string, args: Record<string, unknown>): WriteToolResult {
+		const en = getUiLocale() === "en";
 		const fail = (text: string): WriteToolResult => ({ ok: false, isError: true, text });
 		try {
 			if (name === "previous_draft_read") {
@@ -75,14 +86,16 @@ export class PreviousDraftEditor {
 				const choices = snapshot.reply.choices ?? snapshot.source?.choices;
 				if (result.ok && choices?.length) result.text = JSON.stringify({ ...JSON.parse(result.text), userChoices: choices });
 				if (result.ok) this.#observed = snapshot;
-				return { ...result, activity: result.ok ? "读取上一拍原稿" : undefined, details: { targetId: snapshot.reply.entryId, version: snapshot.reply.version } };
+				return { ...result, activity: result.ok ? t("读取上一拍原稿") : undefined, details: { targetId: snapshot.reply.entryId, version: snapshot.reply.version } };
 			}
-			if (name !== "previous_draft_edit") return fail(`未知上一拍工具 ${name}。`);
-			if (ws.revision || ws.draft) return fail("本次请求已有稿件，不能同时回改上一拍。");
-			if (ws.mode !== "write") return fail("当前为探索阶段，尚未开放写入。");
-			if (!this.#observed) return fail("尚未读取上一拍原稿；previous_draft_read 可读取原文与版本。");
+			if (name !== "previous_draft_edit") return fail(en ? `Unknown previous-beat tool ${name}.` : `未知上一拍工具 ${name}。`);
+			if (ws.revision || ws.draft) return fail(en ? "This request already has a draft and cannot also revise the previous beat." : "本次请求已有稿件，不能同时回改上一拍。");
+			if (ws.mode !== "write") return fail(en ? "Currently in explore mode; writing is not open yet." : "当前为探索阶段，尚未开放写入。");
+			if (!this.#observed) return fail(en ? "Previous beat has not been read yet; call previous_draft_read first to inspect text and version." : "尚未读取上一拍原稿；previous_draft_read 可读取原文与版本。");
 			const snapshot = this.#snapshot(ws);
-			if (snapshot.fingerprint !== this.#observed.fingerprint || args.version !== snapshot.reply.version) return fail("上一拍版本已变化，本次未修改；previous_draft_read 可重新读取。");
+			if (snapshot.fingerprint !== this.#observed.fingerprint || args.version !== snapshot.reply.version) {
+				return fail(en ? "Previous beat version changed; no edits applied — call previous_draft_read to reload." : "上一拍版本已变化，本次未修改；previous_draft_read 可重新读取。");
+			}
 			const { reply, source } = snapshot;
 			// Copy on write: the original artifact may be shared by sibling worldlines.
 			const next = structuredClone(ws);
@@ -100,14 +113,19 @@ export class PreviousDraftEditor {
 			next.timeline = finalTimeline(next, reply.text);
 			const edited = runWriteTool(next, { ...deps, persist: undefined, reload: undefined }, "draft_edit", args);
 			if (!edited.ok) return edited;
-			if (!next.draft.trim()) return fail("上一拍修订不能清空整篇正文。");
+			if (!next.draft.trim()) return fail(en ? "Revising the previous beat cannot clear the entire prose." : "上一拍修订不能清空整篇正文。");
 			if (next.version !== reply.version) next.revisions.at(-1)!.reason = name;
 			next.sealed = true; next.phase = "sealed";
 			next.entryId = reply.entryId;
 			next.revision = { targetId: reply.entryId, requestId: ws.userId!, sourceDraftId: reply.draftId, sourceVersion: reply.version };
 			next.restorePending = true;
 			commitWorkspace(ws, deps, next);
-			return { ...edited, text: `上一拍已修订，v${next.version}。`, activity: "修订上一拍原稿", details: { targetId: reply.entryId, draftId: ws.id, version: ws.version } };
+			return {
+				...edited,
+				text: en ? `Previous beat revised, v${next.version}.` : `上一拍已修订，v${next.version}。`,
+				activity: t("修订上一拍原稿"),
+				details: { targetId: reply.entryId, draftId: ws.id, version: ws.version },
+			};
 		} catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
 	}
 }

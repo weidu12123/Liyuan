@@ -9,6 +9,7 @@
  * 5. 自定义 body 字段增删（customIncludeBody / customExcludeBody）与预填协议兼容标记（partial / prefix）。
  */
 
+import { getUiLocale } from "../i18n/index.ts";
 import { readRelayRules, type RelayRules } from "../relay-rules.ts";
 import type { RelayPolicyConfig } from "../types.ts";
 import type { ChatHistorySquashRule, PresetRelayMeta } from "./preset-relay-meta.ts";
@@ -20,8 +21,12 @@ export type ContextPackMode = "off" | "auto" | "tool-desc";
 export const CARRIER_TOOL_NAME = "liyuan_context_reference";
 export const CONTEXT_PACK_MAX_CHARS = 180_000;
 const CONTEXT_PACK_MIN_CHARS = 20;
-const PACKED_SYSTEM_ANCHOR =
+const PACKED_SYSTEM_ANCHOR_ZH =
 	"本轮设定与前序上下文已完整打包于工具 liyuan_context_reference 的 description JSON 资料字段中，无需调用该工具，请直接读取其中资料并回应最后一条 user 输入。";
+const PACKED_SYSTEM_ANCHOR_EN =
+	"The settings and prior context for this turn are completely packed inside the description JSON payload of tool liyuan_context_reference. Do not call this tool; read the reference directly and respond to the final user input.";
+const packedSystemAnchor = (): string => (getUiLocale() === "en" ? PACKED_SYSTEM_ANCHOR_EN : PACKED_SYSTEM_ANCHOR_ZH);
+const isPackedSystemAnchor = (s: string): boolean => s === PACKED_SYSTEM_ANCHOR_ZH || s === PACKED_SYSTEM_ANCHOR_EN;
 const OAUTH_CLAUDE_CODE_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 export interface RelayModelLike {
@@ -277,7 +282,7 @@ export function applyInputScrambleToString(
 	rules?: RelayRules,
 	opts: { deep?: boolean; scramble?: boolean; stride?: number; rng?: () => number } = {},
 ): string {
-	if (!text.trim() || isWholeProtectedBlock(text) || text.trim() === PACKED_SYSTEM_ANCHOR) return text;
+	if (!text.trim() || isWholeProtectedBlock(text) || isPackedSystemAnchor(text.trim())) return text;
 	const doDeep = opts.deep === true || opts.scramble === true;
 	const doScramble = opts.scramble === true;
 	if (!doDeep && !doScramble) return text;
@@ -570,8 +575,11 @@ function buildPackedContextDescription(
 		...(stateText ? { stateContext: stateText } : {}),
 		...(acceptedHistory.length > 0 ? { history: acceptedHistory } : {}),
 	});
+	const en = getUiLocale() === "en";
 	return {
-		description: `本轮设定与历史参考资料（只读静态 JSON，无需调用）：\n${jsonPayload}`,
+		description: en
+			? `Reference settings and history for this turn (static read-only JSON; do not invoke):\n${jsonPayload}`
+			: `本轮设定与历史参考资料（只读静态 JSON，无需调用）：\n${jsonPayload}`,
 		overflowCount,
 	};
 }
@@ -597,14 +605,17 @@ function summarizeToolCallsNote(calls: unknown): string {
 			return String(obj.function?.name ?? obj.name ?? "").trim();
 		})
 		.filter(Boolean);
-	return names.length > 0 ? `[调用工具: ${names.join(", ")}]` : "";
+	if (names.length === 0) return "";
+	return getUiLocale() === "en" ? `[tool call: ${names.join(", ")}]` : `[调用工具: ${names.join(", ")}]`;
 }
 
 function clipHistoricalToolNote(rawText: string, maxLen = 800): string {
 	const t = rawText.trim();
 	if (!t) return "";
 	if (t.length <= maxLen) return t;
-	return `${t.slice(0, maxLen)}…(已折叠，原文共${t.length}字)`;
+	return getUiLocale() === "en"
+		? `${t.slice(0, maxLen)}…(truncated, ${t.length} chars total)`
+		: `${t.slice(0, maxLen)}…(已折叠，原文共${t.length}字)`;
 }
 
 function upsertCarrierTool(
@@ -613,7 +624,12 @@ function upsertCarrierTool(
 	description: string,
 ): unknown[] {
 	const carrierProperties = {
-		ack: { type: "string", description: "可选只读占位字段，本工具无需调用" },
+		ack: {
+			type: "string",
+			description: getUiLocale() === "en"
+				? "Optional read-only placeholder field; this tool does not need to be called."
+				: "可选只读占位字段，本工具无需调用",
+		},
 	};
 	const arr = Array.isArray(tools) ? [...(tools as Array<Record<string, unknown>>)] : [];
 	if (protocol === "openai-completions") {
@@ -743,7 +759,7 @@ export function packContextIntoToolDescription(
 			const role = String(m.role ?? "");
 			const txt = contentToPlainText(m.content).trim();
 			if (role === "system" || role === "developer") {
-				if (!txt || txt === PACKED_SYSTEM_ANCHOR) continue;
+				if (!txt || isPackedSystemAnchor(txt)) continue;
 				if (isProtectedTextBlock(txt)) {
 					keptSystemReminders.push(m);
 				} else {
@@ -818,7 +834,7 @@ export function packContextIntoToolDescription(
 				.map((h) => h.idx),
 		);
 		const nextMessages: Array<Record<string, unknown>> = [];
-		nextMessages.push({ role: "system", content: PACKED_SYSTEM_ANCHOR });
+		nextMessages.push({ role: "system", content: packedSystemAnchor() });
 		nextMessages.push(...keptSystemReminders);
 		for (let i = 0; i < lastUserIdx; i++) {
 			if (keptPrefixIndices.has(i) || overflowIndices.has(i)) {
@@ -844,10 +860,11 @@ export function packContextIntoToolDescription(
 		if (lastUserIdx < 0) return { payload, packed: false };
 
 		const packedSystemParts: string[] = [];
+		const anchor = packedSystemAnchor();
 		let nextSystem: unknown = out.system;
-		if (typeof out.system === "string" && out.system.trim() && out.system.trim() !== PACKED_SYSTEM_ANCHOR) {
+		if (typeof out.system === "string" && out.system.trim() && !isPackedSystemAnchor(out.system.trim())) {
 			packedSystemParts.push(out.system.trim());
-			nextSystem = PACKED_SYSTEM_ANCHOR;
+			nextSystem = anchor;
 		} else if (Array.isArray(out.system)) {
 			const keptBlocks: Array<Record<string, unknown>> = [];
 			let addedAnchor = false;
@@ -861,11 +878,11 @@ export function packContextIntoToolDescription(
 					keptBlocks.push(blk);
 					continue;
 				}
-				if (txt && txt !== PACKED_SYSTEM_ANCHOR) {
+				if (txt && !isPackedSystemAnchor(txt)) {
 					packedSystemParts.push(txt);
 				}
 				if (!addedAnchor) {
-					keptBlocks.push({ type: "text", text: PACKED_SYSTEM_ANCHOR });
+					keptBlocks.push({ type: "text", text: anchor });
 					addedAnchor = true;
 				}
 			}
@@ -890,7 +907,11 @@ export function packContextIntoToolDescription(
 					.map((b) => clipHistoricalToolNote(contentToPlainText(b.content)))
 					.filter(Boolean)
 					.join("\n");
-				const combined = [txt, toolUseNames.length ? `[调用工具: ${toolUseNames.join(", ")}]` : "", toolResText]
+				const combined = [
+					txt,
+					toolUseNames.length ? (getUiLocale() === "en" ? `[tool call: ${toolUseNames.join(", ")}]` : `[调用工具: ${toolUseNames.join(", ")}]`) : "",
+					toolResText,
+				]
 					.filter(Boolean)
 					.join("\n");
 				if (combined) {
@@ -951,7 +972,7 @@ export function packContextIntoToolDescription(
 			}
 		}
 		nextMessages.push(...tailSlice);
-		out.system = nextSystem ?? [{ type: "text", text: PACKED_SYSTEM_ANCHOR }];
+		out.system = nextSystem ?? [{ type: "text", text: anchor }];
 		out.messages = nextMessages;
 		out.tools = upsertCarrierTool(out.tools, "anthropic", description);
 		return { payload: out, packed: true };
@@ -977,7 +998,7 @@ export function packContextIntoToolDescription(
 				? { ...(out.config as Record<string, unknown>) }
 				: {};
 		let packedSystem = "";
-		if (typeof cfg.systemInstruction === "string" && cfg.systemInstruction.trim() !== PACKED_SYSTEM_ANCHOR) {
+		if (typeof cfg.systemInstruction === "string" && !isPackedSystemAnchor(cfg.systemInstruction.trim())) {
 			packedSystem = cfg.systemInstruction.trim();
 		} else if (cfg.systemInstruction && typeof cfg.systemInstruction === "object") {
 			const si = cfg.systemInstruction as { parts?: Array<{ text?: unknown }>; text?: unknown };
@@ -1015,7 +1036,11 @@ export function packContextIntoToolDescription(
 					})
 					.filter(Boolean)
 					.join("\n");
-				const combined = [txt, fcNames.length ? `[调用工具: ${fcNames.join(", ")}]` : "", frText]
+				const combined = [
+					txt,
+					fcNames.length ? (getUiLocale() === "en" ? `[tool call: ${fcNames.join(", ")}]` : `[调用工具: ${fcNames.join(", ")}]`) : "",
+					frText,
+				]
 					.filter(Boolean)
 					.join("\n");
 				if (combined) {
@@ -1085,7 +1110,7 @@ export function packContextIntoToolDescription(
 			}
 		}
 		nextContents.push(...tailSlice);
-		cfg.systemInstruction = PACKED_SYSTEM_ANCHOR;
+		cfg.systemInstruction = packedSystemAnchor();
 		cfg.tools = upsertCarrierTool(cfg.tools, "google", description);
 		out.config = cfg;
 		out.contents = nextContents;
@@ -1105,8 +1130,9 @@ export function packContextIntoToolDescription(
 		if (lastUserIdx < 0) return { payload, packed: false };
 
 		const packedSystemParts: string[] = [];
+		const anchor = packedSystemAnchor();
 		let replacedInstructions = false;
-		if (typeof out.instructions === "string" && out.instructions.trim() && out.instructions.trim() !== PACKED_SYSTEM_ANCHOR) {
+		if (typeof out.instructions === "string" && out.instructions.trim() && !isPackedSystemAnchor(out.instructions.trim())) {
 			packedSystemParts.push(out.instructions.trim());
 			replacedInstructions = true;
 		}
@@ -1123,7 +1149,14 @@ export function packContextIntoToolDescription(
 			if (typ === "reasoning") continue;
 			if (typ === "function_call" || typ === "custom_tool_call") {
 				const nm = String(it.name ?? "");
-				if (nm) candidateHistory.push({ idx: i, role: "assistant", text: `[调用工具: ${nm}]`, isPlain: false });
+				if (nm) {
+					candidateHistory.push({
+						idx: i,
+						role: "assistant",
+						text: getUiLocale() === "en" ? `[tool call: ${nm}]` : `[调用工具: ${nm}]`,
+						isPlain: false,
+					});
+				}
 				continue;
 			}
 			if (typ === "function_call_output") {
@@ -1133,7 +1166,7 @@ export function packContextIntoToolDescription(
 			}
 			const txt = responsesItemPlainText(it).trim();
 			if (role === "system" || role === "developer") {
-				if (!txt || txt === PACKED_SYSTEM_ANCHOR) continue;
+				if (!txt || isPackedSystemAnchor(txt)) continue;
 				if (isProtectedTextBlock(txt)) {
 					keptPrefixIndices.add(i);
 				} else {
@@ -1201,7 +1234,7 @@ export function packContextIntoToolDescription(
 		for (let i = 0; i < lastUserIdx; i++) {
 			if (packedSysItemIndices.has(i)) {
 				if (!replacedFirstSysItem && !replacedInstructions) {
-					nextInput.push({ role: items[i]!.role, content: PACKED_SYSTEM_ANCHOR });
+					nextInput.push({ role: items[i]!.role, content: anchor });
 					replacedFirstSysItem = true;
 				}
 				continue;
@@ -1212,9 +1245,9 @@ export function packContextIntoToolDescription(
 		}
 		nextInput.push(...tailSlice);
 		if (replacedInstructions) {
-			out.instructions = PACKED_SYSTEM_ANCHOR;
+			out.instructions = anchor;
 		} else if (!replacedFirstSysItem) {
-			nextInput.unshift({ role: "system", content: PACKED_SYSTEM_ANCHOR });
+			nextInput.unshift({ role: "system", content: anchor });
 		}
 		out.input = nextInput;
 		out.tools = upsertCarrierTool(out.tools, "openai-responses", description);

@@ -12,6 +12,11 @@ export type UiLocale = "zh" | "en";
 
 let current: UiLocale = "zh";
 
+/** 当前实例语言（跟随 config.uiLanguage） */
+export function getUiLocale(): UiLocale {
+	return current;
+}
+
 /** 非法值当没写：保持 zh */
 export function setUiLocale(v: unknown): void {
 	current = v === "en" ? "en" : "zh";
@@ -24,20 +29,28 @@ function fill(template: string, vars?: TVars): string {
 	return template.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars && vars[k] != null ? String(vars[k]) : m));
 }
 
-/** 同前端 t()：键＝中文原文；占位符 `{name}`；英文条目 `a|b` 按 n 选单复数；缺条目回落中文 */
-export function t(zh: string, vars?: TVars): string {
+/** 按指定 locale 翻译（未传则跟随当前实例 locale）；缺条目回落中文 */
+export function tFor(locale: UiLocale | undefined, zh: string, vars?: TVars): string {
+	const eff = locale ?? current;
 	let out = zh;
-	if (current === "en") {
+	if (eff === "en") {
 		const hit = en[zh];
 		if (hit !== undefined) {
 			out = hit;
-			if (out.includes("|")) {
-				const n = vars ? (typeof vars.n === "number" ? vars.n : Object.values(vars).find((v) => typeof v === "number")) : undefined;
-				const [one, many] = out.split("|");
-				out = n === 1 ? one : (many ?? one);
+			if (out.includes("|") && vars) {
+				const n = typeof vars.n === "number" ? vars.n : Object.values(vars).find((v) => typeof v === "number");
+				const parts = out.split("|");
+				if (n !== undefined && parts.length === 2) {
+					out = n === 1 ? parts[0]! : parts[1]!;
+				}
 			}
 		}
 	}
 	return fill(out, vars);
+}
+
+/** 同前端 t()：键＝中文原文；占位符 `{name}`；英文条目 `a|b` 按 n 选单复数；缺条目回落中文 */
+export function t(zh: string, vars?: TVars): string {
+	return tFor(current, zh, vars);
 }
 

@@ -11,6 +11,7 @@
  * 4. 超过 1200 字正常正文后的尾部截断不判为整轮拒答，原样交还 agent-session 断点续写。
  */
 
+import { t } from "../i18n/index.ts";
 import type { RelayPolicyConfig } from "../types.ts";
 import type { PresetRelayMeta } from "./preset-relay-meta.ts";
 import {
@@ -416,7 +417,7 @@ export function wrapRelayStreamFn(origStreamFn: StageStreamFn, cfg: RelayStreamW
 						isOpenAiSafetyFieldRejected(finalMsg.errorMessage)
 					) {
 						disableOpenAiSafetyField = true;
-						cfg.onRecoveryActivity?.("网关不支持 safety_settings，已自动剥除并重发…");
+						cfg.onRecoveryActivity?.(t("网关不支持 safety_settings，已自动剥除并重发…"));
 						i--;
 						continue;
 					}
@@ -463,7 +464,10 @@ export function wrapRelayStreamFn(origStreamFn: StageStreamFn, cfg: RelayStreamW
 					const nextStrat = strategies[i + 1]!;
 					recoveryEpoch += 1;
 					cfg.onRecoveryActivity?.(
-						`检测到拦截（${verdict.reason ?? (forcedToolErrored ? "forced-tool-rejected" : "empty")}），切换「${nextStrat.label}」自动恢复…`,
+						t("检测到拦截（{reason}），切换「{strategy}」自动恢复…", {
+							reason: verdict.reason ?? (forcedToolErrored ? "forced-tool-rejected" : "empty"),
+							strategy: nextStrat.label,
+						}),
 					);
 				}
 
@@ -593,7 +597,7 @@ export function wrapSideRelayStreamFn(origStreamFn: StageStreamFn, cfg: SideRela
 						isOpenAiSafetyFieldRejected(finalMsg.errorMessage)
 					) {
 						disableOpenAiSafetyField = true;
-						cfg.onRecoveryActivity?.("旁路通道：网关不支持 safety_settings，已自动剥除重发…");
+						cfg.onRecoveryActivity?.(t("旁路通道：网关不支持 safety_settings，已自动剥除重发…"));
 						continue;
 					}
 
@@ -614,7 +618,7 @@ export function wrapSideRelayStreamFn(origStreamFn: StageStreamFn, cfg: SideRela
 
 					overrideShield = "scramble";
 					seedEpoch += 1;
-					cfg.onRecoveryActivity?.(`旁路通道检测到拦截（${verdict.reason ?? "refusal"}），切换强混淆重试…`);
+					cfg.onRecoveryActivity?.(t("旁路通道检测到拦截（{reason}），切换强混淆重试…", { reason: verdict.reason ?? "refusal" }));
 				}
 
 				finish(

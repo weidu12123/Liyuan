@@ -180,6 +180,8 @@ export interface RpConfig {
 	relayPolicy?: RelayPolicyConfig;
 	/** 本机工具总开关：开则 bash/读写等回到工具底座；本机开发默认开，分发默认关 */
 	backendControl?: boolean;
+	/** Turbo 模式：完全开放 Agent 权限（免除沙箱越界询问、命令询问与写入门禁确认） */
+	turboMode?: boolean;
 	/** 决策门禁档位（PLAN-PHASE4 柱 1）：ask=关键剧情决策点停笔询问用户；silent=不问，等同旧行为。默认 silent */
 	creationMode?: "ask" | "silent";
 	/**

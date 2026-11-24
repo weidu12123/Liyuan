@@ -6,6 +6,7 @@
  */
 
 import { applyMacros } from "./card.ts";
+import { getUiLocale } from "./i18n/index.ts";
 import type { CharacterCard, RpConfig } from "./types.ts";
 
 /** 开场白正文（首条 firstMes 或用户选中的备选开场白；宏已替换） */
@@ -13,5 +14,6 @@ export function buildGreeting(card: CharacterCard, config: RpConfig): string {
 	const pool = [card.firstMes, ...card.alternateGreetings];
 	const idx = config.greetingIndex ?? 0;
 	const mes = (idx >= 0 && idx < pool.length ? pool[idx] : "") || card.firstMes;
-	return `【开场 · ${card.name}】\n${applyMacros(mes, { charName: card.name, userName: config.userName })}`;
+	const head = getUiLocale() === "en" ? `[Opening · ${card.name}]` : `【开场 · ${card.name}】`;
+	return `${head}\n${applyMacros(mes, { charName: card.name, userName: config.userName })}`;
 }

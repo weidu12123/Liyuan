@@ -237,6 +237,9 @@ export function modelsForRuntime(models: AgentModelEntry[]): AgentModelEntry[] {
 			continue;
 		}
 		const copy: AgentModelEntry = { ...m };
+		if (!("input" in copy)) {
+			copy.input = ["text", "image"];
+		}
 		if (!("thinkingLevel" in copy) && Array.isArray(copy.thinkingLevels) && copy.thinkingLevels.length > 0) {
 			copy.thinkingLevel = copy.thinkingLevels.find((lv) => lv !== "off") ?? copy.thinkingLevels[0];
 		}
@@ -250,7 +253,9 @@ export function modelsForRuntime(models: AgentModelEntry[]): AgentModelEntry[] {
  * 条目 → 运行时模型：把条目自身的 thinkingLevelMap 与 reasoning 标记补回运行时模型对象。
  * 纯函数：不改入参，无差异时原样返回同一引用。
  */
-export function applyEntryThinkingMap<M extends { reasoning?: boolean; thinkingLevelMap?: Record<string, unknown> }>(
+export function applyEntryThinkingMap<
+	M extends { reasoning?: boolean; thinkingLevelMap?: Record<string, unknown>; maxTokens?: number; contextWindow?: number },
+>(
 	base: M,
 	entry?: AgentModelEntry | null,
 ): M {
@@ -263,10 +268,17 @@ export function applyEntryThinkingMap<M extends { reasoning?: boolean; thinkingL
 			typeof entry.thinkingLevel === "string" ||
 			(Array.isArray(entry.thinkingLevels) && entry.thinkingLevels.length > 0) ||
 			hasMap);
-	if (!hasMap && !needsReasoning) return base;
+	const entryMaxTokens = typeof entry.maxTokens === "number" && entry.maxTokens > 0 ? Math.floor(entry.maxTokens) : undefined;
+	const entryContextWindow =
+		typeof entry.contextWindow === "number" && entry.contextWindow > 0 ? Math.floor(entry.contextWindow) : undefined;
+	const needsMaxTokens = entryMaxTokens !== undefined && entryMaxTokens !== base.maxTokens;
+	const needsContextWindow = entryContextWindow !== undefined && entryContextWindow !== base.contextWindow;
+	if (!hasMap && !needsReasoning && !needsMaxTokens && !needsContextWindow) return base;
 	return {
 		...base,
 		...(needsReasoning ? { reasoning: true } : {}),
+		...(needsMaxTokens ? { maxTokens: entryMaxTokens } : {}),
+		...(needsContextWindow ? { contextWindow: entryContextWindow } : {}),
 		...(hasMap
 			? { thinkingLevelMap: { ...(base.thinkingLevelMap ?? {}), ...(rawMap as Record<string, unknown>) } }
 			: {}),

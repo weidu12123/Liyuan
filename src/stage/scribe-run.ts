@@ -14,6 +14,7 @@
 import { applyPatch, canonicalizeCharacterKeys, saveState } from "../state.ts";
 import { buildScribeTurnPrompt, parseScribeResult } from "../scribe.ts";
 import { applyMvuPatch } from "../mvu.ts";
+import { t } from "../i18n/index.ts";
 import type { WorldState } from "../types.ts";
 
 /** 场记快照的会话树条目类型（CustomEntry，不进 LLM 上下文） */
@@ -46,7 +47,7 @@ interface ScribeRunInput {
 	mvuRules?: string;
 }
 
-type ScribeRunOutcome =
+export type ScribeRunOutcome =
 	| { kind: "skipped"; reason: string }
 	| { kind: "stale" }
 	| { kind: "failed"; error: string }
@@ -76,7 +77,7 @@ export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput):
 		// 短响应直接给全文（多半是格式跑偏）；长响应给尾部（多半是 maxTokens 截断）
 		const flat = resp.trim().replace(/\s+/g, " ");
 		const detail = flat.length <= 400 ? flat : `…${flat.slice(-160)}`;
-		return { kind: "failed", error: `输出不可解析（${resp.length} 字）：${detail}` };
+		return { kind: "failed", error: t("输出不可解析（{chars} 字）：{detail}", { chars: resp.length, detail }) };
 	}
 	// 三个补丁都空才算无变化——账本没动但树/面板动了也要记（如只是面板上的一个计数变了）
 	const mvuHasChanges = !!parsed.mvuPatch && Object.keys(parsed.mvuPatch).length > 0;
@@ -87,7 +88,7 @@ export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput):
 
 	// R9 叶守卫：调用期间树动过（swipe/rewind/切线）→ 整体丢弃
 	if (deps.getLeafId() !== leafBefore) {
-		deps.onActivity?.("记账已丢弃（本拍期间切换了分支）");
+		deps.onActivity?.(t("记账已丢弃（本拍期间切换了分支）"));
 		return { kind: "stale" };
 	}
 
@@ -123,22 +124,22 @@ export async function runScribeTurn(deps: ScribeRunDeps, input: ScribeRunInput):
 			// 缓存写失败不影响树上快照（账本权威在树，磁盘只是缓存）
 		}
 	}
-	if (result.applied.length > 0) deps.onActivity?.(`记账 ${summarizeApplied(result.applied)}`);
+	if (result.applied.length > 0) deps.onActivity?.(t("记账 {summary}", { summary: summarizeApplied(result.applied) }));
 	return { kind: "applied", state: result.state, applied: result.applied };
 }
 
-/** 过程条用的记账摘要：条数 + 前两条中文化字段名 */
+/** 过程条用的记账摘要：条数 + 前两条本地化字段名 */
 function summarizeApplied(applied: string[]): string {
 	const label = (s: string): string => {
-		if (s.startsWith("time")) return "时间";
-		if (s.startsWith("location")) return "地点";
+		if (s.startsWith("time")) return t("时间");
+		if (s.startsWith("location")) return t("地点");
 		if (s.startsWith("characters.")) return s.slice("characters.".length).split(" ")[0];
 		if (s.startsWith("flags.")) return s.slice("flags.".length).split(" ")[0];
-		if (s.startsWith("inventory")) return "物品";
-		if (s.startsWith("plot_threads")) return "剧情线";
+		if (s.startsWith("inventory")) return t("物品");
+		if (s.startsWith("plot_threads")) return t("剧情线");
 		return s.split(" ")[0];
 	};
 	const names = [...new Set(applied.map(label))];
-	const shown = names.slice(0, 3).join("、");
-	return names.length > 3 ? `${shown} 等 ${names.length} 项` : shown;
+	const shown = names.slice(0, 3).join(t("、"));
+	return names.length > 3 ? t("{shown} 等 {n} 项", { shown, n: names.length }) : shown;
 }

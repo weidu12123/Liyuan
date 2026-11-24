@@ -9,6 +9,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { getUiLocale } from "./i18n/index.ts";
 import { readJsonFile } from "./jsonio.ts";
 import { formatMvuTree } from "./mvu.ts";
 
@@ -72,15 +73,31 @@ export function writePanel(
 	panels: PanelMap,
 	input: { name: string; kind: string; content: string },
 ): PanelWriteResult {
+	const en = getUiLocale() === "en";
 	const name = input.name.trim();
-	if (!name) return { ok: false, error: "面板名不能为空" };
+	if (!name) return { ok: false, error: en ? "Panel name cannot be empty" : "面板名不能为空" };
 	if (!PANEL_KINDS.includes(input.kind as PanelKind)) {
-		return { ok: false, error: `kind 必须是 ${PANEL_KINDS.join(" / ")} 之一，收到「${input.kind}」` };
+		return {
+			ok: false,
+			error: en
+				? `kind must be one of ${PANEL_KINDS.join(" / ")}, received "${input.kind}"`
+				: `kind 必须是 ${PANEL_KINDS.join(" / ")} 之一，收到「${input.kind}」`,
+		};
 	}
 	const content = input.content;
-	if (!content.trim()) return { ok: false, error: "content 不能为空（收起面板请用 panel_close）" };
+	if (!content.trim()) {
+		return {
+			ok: false,
+			error: en ? "content cannot be empty (use panel_close to archive a panel)" : "content 不能为空（收起面板请用 panel_close）",
+		};
+	}
 	if (content.length > PANEL_MAX_CHARS) {
-		return { ok: false, error: `content 过大（${content.length} 字符，上限 ${PANEL_MAX_CHARS}），请精简` };
+		return {
+			ok: false,
+			error: en
+				? `content is too large (${content.length} chars, limit ${PANEL_MAX_CHARS}); please trim it`
+				: `content 过大（${content.length} 字符，上限 ${PANEL_MAX_CHARS}），请精简`,
+		};
 	}
 	const prev = panels[name];
 	const next: PanelMap = {
@@ -101,13 +118,21 @@ export function writePanel(
 type PanelCloseResult = { ok: true; panels: PanelMap } | { ok: false; error: string };
 
 export function closePanel(panels: PanelMap, rawName: string): PanelCloseResult {
+	const en = getUiLocale() === "en";
 	const name = rawName.trim();
 	const prev = panels[name];
 	if (!prev) {
 		const known = activePanels(panels).map((p) => p.name);
-		return { ok: false, error: `没有名为「${name}」的面板${known.length ? `（现有：${known.join("、")}）` : ""}` };
+		return {
+			ok: false,
+			error: en
+				? `No panel named "${name}"${known.length ? ` (existing: ${known.join(", ")})` : ""}`
+				: `没有名为「${name}」的面板${known.length ? `（现有：${known.join("、")}）` : ""}`,
+		};
 	}
-	if (prev.archived) return { ok: false, error: `面板「${name}」已是归档状态` };
+	if (prev.archived) {
+		return { ok: false, error: en ? `Panel "${name}" is already archived` : `面板「${name}」已是归档状态` };
+	}
 	return { ok: true, panels: { ...panels, [name]: { ...prev, archived: true, updatedAt: Date.now() } } };
 }
 
@@ -115,7 +140,7 @@ export function closePanel(panels: PanelMap, rawName: string): PanelCloseResult 
 export function formatPanelIndex(panels: PanelMap): string | null {
 	const active = activePanels(panels);
 	if (active.length === 0) return null;
-	return active.map((p) => `${p.name}(${p.kind})`).join("、");
+	return active.map((p) => `${p.name}(${p.kind})`).join(getUiLocale() === "en" ? ", " : "、");
 }
 
 /** 单面板注入正文上限（字符）；超长截断并提示 panel_read */
@@ -142,6 +167,7 @@ export function formatPanelSnapshot(
 	const active = activePanels(panels);
 	if (active.length === 0) return null;
 
+	const en = getUiLocale() === "en";
 	const parts: string[] = [];
 	let used = 0;
 	for (const p of active) {
@@ -150,13 +176,21 @@ export function formatPanelSnapshot(
 		let body = hasData ? formatMvuTree(tree) : p.content;
 		let clipped = false;
 		if (body.length > maxPer) {
-			body = `${body.slice(0, maxPer)}\n…（已截断，完整内容用 panel_read）`;
+			body = en
+				? `${body.slice(0, maxPer)}\n…(truncated; use panel_read for full content)`
+				: `${body.slice(0, maxPer)}\n…（已截断，完整内容用 panel_read）`;
 			clipped = true;
 		}
-		const head = `### ${p.name}（${hasData ? "当前数据" : p.kind}${clipped ? "，截断" : ""}）`;
+		const head = en
+			? `### ${p.name} (${hasData ? "current data" : p.kind}${clipped ? ", truncated" : ""})`
+			: `### ${p.name}（${hasData ? "当前数据" : p.kind}${clipped ? "，截断" : ""}）`;
 		const block = `${head}\n${body}`;
 		if (used + block.length > maxTotal) {
-			parts.push(`### ${p.name}（${p.kind}）\n…（注入篇幅已满，用 panel_read 查看全文）`);
+			parts.push(
+				en
+					? `### ${p.name} (${p.kind})\n…(injection budget reached; use panel_read for full content)`
+					: `### ${p.name}（${p.kind}）\n…（注入篇幅已满，用 panel_read 查看全文）`,
+			);
 			break;
 		}
 		parts.push(block);

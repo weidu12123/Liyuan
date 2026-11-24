@@ -6,9 +6,11 @@
  */
 
 import { join } from "node:path";
+import { isContextOverflow } from "@liyuan/ai";
 import { isRetryableAssistantError } from "@liyuan/ai/compat";
 
 import { applyProjectedSamplers } from "../samplers.ts";
+import { getUiLocale, t } from "../i18n/index.ts";
 import { getStageConnection, type StageHooks, type StageToolResult } from "./bridge.ts";
 import { DraftStore, draftDirectory, listDrafts } from "./draft-store.ts";
 import { applyDraftRevisions, DRAFT_REVISION_TYPE } from "./draft-projection.ts";
@@ -65,7 +67,7 @@ import {
 	type CompactOutcome,
 	type RpSummaryData,
 } from "./compact.ts";
-import { runScribeTurn, STATE_ENTRY_TYPE } from "./scribe-run.ts";
+import { runScribeTurn, STATE_ENTRY_TYPE, type ScribeRunOutcome } from "./scribe-run.ts";
 import { seedMvuIfNeeded, findMvuRules } from "../mvu.ts";
 import {
 	compileStagePromptTemplates,
@@ -135,6 +137,8 @@ export interface StageModelLike {
 	provider?: string;
 	api?: unknown;
 	baseUrl?: string;
+	maxTokens?: number;
+	contextWindow?: number;
 	[k: string]: unknown;
 }
 
@@ -244,9 +248,15 @@ interface SideTextStat {
 /** 旁路回执的人话（活动条与服务端日志共用一份措辞） */
 function sideStatLine(s: SideTextStat): string {
 	const who = s.entry && s.entry !== s.model ? `${s.entry}（${s.model}）` : s.model;
-	return `${s.kind === "scribe" ? "记账" : "压缩"}旁路 ${who}｜${
-		s.thinking ? `档 ${s.thinking}` : "未发思考档"
-	}｜思考 ${s.thinkChars} 字｜${(s.ms / 1000).toFixed(1)}s`;
+	const kindLabel = s.kind === "scribe" ? t("记账旁路") : t("压缩旁路");
+	const thinkSlot = s.thinking ? t("档 {level}", { level: s.thinking }) : t("未发思考档");
+	return t("{kind} {who}｜{thinkSlot}｜思考 {chars} 字｜{sec}s", {
+		kind: kindLabel,
+		who,
+		thinkSlot,
+		chars: s.thinkChars,
+		sec: (s.ms / 1000).toFixed(1),
+	});
 }
 
 /** 由 pi 会话独占消息持久化与内存历史。 */
@@ -717,7 +727,7 @@ export class StageEngine {
 		const sm = this.#deps.getSession().sessionManager;
 		const branch = sm.getBranch() as Array<{ id: string; type: string; customType?: string; data?: { draftId?: string; version?: number } }>;
 		if (ws.sessionId !== sm.getSessionId() || !branch.some((e) => e.id === ws.entryId) ||
-			(ws.revision && !branch.some((e) => e.id === ws.revision!.requestId))) throw new Error("修订所属会话或分支已切换；回到原分支后再同步。");
+			(ws.revision && !branch.some((e) => e.id === ws.revision!.requestId))) throw new Error(t("修订所属会话或分支已切换；回到原分支后再同步。"));
 		const exists = branch.some(
 			(e) => e.type === "custom" && e.customType === DRAFT_REVISION_TYPE && e.data?.draftId === ws.id && e.data.version === ws.version,
 		);
@@ -743,13 +753,13 @@ export class StageEngine {
 	restoreDraft(id: string, version: number, expectedVersion: number): TurnWorkspace {
 		if (this.#busy) {
 			const active = this.#workspace;
-			if (!active || active.ws.id !== id || active.ws.phase !== "waiting") throw new Error("请在等待回答或本拍结束后恢复稿件。");
+			if (!active || active.ws.id !== id || active.ws.phase !== "waiting") throw new Error(t("请在等待回答或本拍结束后恢复稿件。"));
 			restoreDraftVersion(active.ws, active.deps, version, expectedVersion);
 			this.#deps.events?.onWorkspace?.(active.ws);
 			return structuredClone(active.ws);
 		}
 		const ws = this.getWorkspaces().find((w) => w.id === id);
-		if (!ws) throw new Error("当前分支没有这份稿件。");
+		if (!ws) throw new Error(t("当前分支没有这份稿件。"));
 		const sm = this.#deps.getSession().sessionManager;
 		const store = new DraftStore(draftDirectory(this.#deps.cwd, sm.getSessionDir?.(), sm.getSessionId()), id);
 		const current = store.read()!;
@@ -896,7 +906,7 @@ export class StageEngine {
 			...mcpTools,
 			...authoringTools(config.language, cardDeps),
 		];
-		const nativeNames = config.backendControl === false ? [] : [...AUTHORING_NATIVE_TOOLS];
+		const nativeNames = config.backendControl === false && !config.turboMode ? [] : [...AUTHORING_NATIVE_TOOLS];
 		const readNames = new Set([...unifiedStageToolNames(readDeps), "world_state_get", "skill_read"]);
 		const mcpNames = mcpStageToolNames(this.#deps.mcp);
 		const mediaNames = this.#deps.media ? mediaStageToolNames(mediaOpts) : new Set<string>();
@@ -950,7 +960,7 @@ export class StageEngine {
 			endInfo = await this.#turn(userText, directorNote);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			ev.onNotify?.("error", `本拍开演失败：${msg}`);
+			ev.onNotify?.("error", t("本拍开演失败：{msg}", { msg }));
 			endInfo = { aborted: false, error: msg };
 		} finally {
 			this.#busy = false;
@@ -970,9 +980,9 @@ export class StageEngine {
 		// agent 轮＝原始过程回放、沙箱内原生工具、稿子工具、项目状态块（docs/PLAN-AGENT-MODE.md §四）
 		const agentTurn = mode === "agent";
 		const connection = getStageConnection(sm.getSessionId());
-		if (!connection) throw new Error("RP 扩展尚未绑定当前 pi 会话。");
+		if (!connection) throw new Error(t("RP 扩展尚未绑定当前 pi 会话。"));
 		const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
-		if (agentTurn && !chatDir) throw new Error("agent 模式只在 cards/ 的子项目里可用。");
+		if (agentTurn && !chatDir) throw new Error(t("agent 模式只在 cards/ 的子项目里可用。"));
 
 		// ---- 全流程文字留档 ----
 		// 前端能看到的每一个字、每一次工具调用/回执、每一次注入，按时序全记。
@@ -999,7 +1009,7 @@ export class StageEngine {
 
 		const model = this.#deps.getModel();
 		if (!model) {
-			ev.onNotify?.("error", "尚未配置剧情模型——请先在「连接」面板选择模型。");
+			ev.onNotify?.("error", t("尚未配置剧情模型——请先在「连接」面板选择模型。"));
 			return { aborted: false, error: "no-model" };
 		}
 
@@ -1027,7 +1037,7 @@ export class StageEngine {
 		const chatMemoryIndex = readChatMemoryIndex(chatDir);
 		const lastUserText = userText ?? contextText([...branch].reverse().find((e) => e.type === "message" && e.message?.role === "user")?.message?.content);
 		if (!lastUserText.trim()) {
-			ev.onNotify?.("error", "没有可开演的用户输入。");
+			ev.onNotify?.("error", t("没有可开演的用户输入。"));
 			return { aborted: false, error: "no-user-input" };
 		}
 
@@ -1140,14 +1150,24 @@ export class StageEngine {
 			const mediaTools = this.#deps.media ? mediaStageTools(config.language, mediaOpts) : [];
 			const askEnabled = !!this.#deps.askUser;
 			const baseWriteTools = writeTools(config.language).filter((t) => t.name !== "ask" || askEnabled);
+			const en = getUiLocale() === "en";
 			const carrierTools: StageTool[] =
 				config.relayPolicy?.contextPackMode === "tool-desc"
 					? [{
 							name: CARRIER_TOOL_NAME,
-							description: "本轮设定与历史参考资料（静态只读 JSON 载体，无需调用）。",
+							description: en
+								? "Reference settings and history for this turn (static read-only JSON carrier; do not invoke)."
+								: "本轮设定与历史参考资料（静态只读 JSON 载体，无需调用）。",
 							parameters: {
 								type: "object",
-								properties: { ack: { type: "string", description: "可选只读占位字段，本工具无需调用" } },
+								properties: {
+									ack: {
+										type: "string",
+										description: en
+											? "Optional read-only placeholder field; this tool does not need to be called."
+											: "可选只读占位字段，本工具无需调用",
+									},
+								},
 							},
 						}]
 					: [];
@@ -1160,7 +1180,7 @@ export class StageEngine {
 				...mcpTools,
 			];
 			cardDeps = { ...readDeps, ...this.#deps.authoring };
-			nativeNames = config.backendControl === false ? [] : session.getAllTools().map((t) => t.name).filter((n) => AUTHORING_NATIVE_TOOLS.includes(n));
+			nativeNames = config.backendControl === false && !config.turboMode ? [] : session.getAllTools().map((t) => t.name).filter((n) => AUTHORING_NATIVE_TOOLS.includes(n));
 			storyDir = agentTurn ? storyDirectory(chatDir!) : undefined;
 			const agentTools: StageTool[] = agentTurn ? [
 				...carrierTools,
@@ -1225,7 +1245,9 @@ export class StageEngine {
 			const tailText = endsWithUser ? `${injection}\n\n${history[history.length - 1].text}` : injection;
 			const summaryCombined = [summary, residentSummary].filter(Boolean).join("\n\n");
 			const summaryText = summaryCombined
-				? `【前情提要】以下是更早剧情的接力摘要，是既定事实：\n\n${summaryCombined}`
+				? en
+					? `[Recap] Continuity summary of earlier story beats (established fact):\n\n${summaryCombined}`
+					: `【前情提要】以下是更早剧情的接力摘要，是既定事实：\n\n${summaryCombined}`
 				: undefined;
 
 			const timeline = applyHistoryInjections(past, tailText, fragments, {
@@ -1334,7 +1356,7 @@ export class StageEngine {
 				for (const d of agentMedia) session.appendMessage({ role: "toolResult", toolName: d.toolName, toolCallId: d.toolCallId, content: [{ type: "text", text: d.text }], details: d.details, isError: false, timestamp: Date.now() });
 				sm.flush();
 			}
-			if (errored && !aborted) ev.onNotify?.("error", `本轮失败：${errored}`);
+			if (errored && !aborted) ev.onNotify?.("error", t("本轮失败：{error}", { error: errored }));
 			return { mode: liyuanMode, aborted, entryId, ...(errored ? { error: errored } : {}) };
 		};
 
@@ -1345,17 +1367,17 @@ export class StageEngine {
 				const info = finishAuthoring();
 				// 轮末落检查点（docs/PLAN-AGENT-CODING.md §4.2）：正文/ 有改动才落；纯讨论一轮什么都不发生。
 				const turnId = requestId();
-				const message = `${lastUserText.replace(/\s+/g, " ").trim().slice(0, 60)}${info.aborted ? "（已中止）" : ""}`;
+				const message = `${lastUserText.replace(/\s+/g, " ").trim().slice(0, 60)}${info.aborted ? t("（已中止）") : ""}`;
 				let checkpoint: ReturnType<StoryHistory["commit"]>;
 				try { checkpoint = new StoryHistory(chatDir!).commit({ author: "agent", message, ...(turnId ? { turnId } : {}), ...(info.aborted ? { aborted: true } : {}) }); }
-				catch (err) { ev.onNotify?.("warning", `稿子检查点未落下：${err instanceof Error ? err.message : String(err)}`); }
+				catch (err) { ev.onNotify?.("warning", t("稿子检查点未落下：{msg}", { msg: err instanceof Error ? err.message : String(err) })); }
 				if (checkpoint) {
 					const { files: _files, ...lite } = checkpoint;
 					sm.appendCustomEntry(STORY_CHECKPOINT_TYPE, lite);
 					sm.flush();
 					const added = checkpoint.changed.added.map((name) => { try { return { name, text: readFileSync(join(storyDir!, name), "utf8") }; } catch { return { name, text: "" }; } }).filter((f) => f.text.trim());
 					info.checkpoint = { id: checkpoint.id, changed: checkpoint.changed, added };
-					ev.onActivity?.(`已保存检查点：${describeChange(checkpoint.changed)}`);
+					ev.onActivity?.(t("已保存检查点：{detail}", { detail: describeChange(checkpoint.changed) }));
 					// 旁路链挂在检查点上（§七）：场记只对新增文件跑；前情压缩按文件、按字数到期。
 					await this.#afterCheckpoint({ model, auth: { apiKey, headers }, materials, sm, ev, added, aborted: info.aborted, storyDir: storyDir! });
 				}
@@ -1461,17 +1483,25 @@ export class StageEngine {
 			}
 
 			if (errored && !aborted) {
-				ev.onNotify?.("error", `生成失败：${errored}`);
+				const cw = typeof model.contextWindow === "number" ? model.contextWindow : 0;
+				if (final && isContextOverflow(final as never, cw > 0 ? cw : undefined)) {
+					const c = await this.#compact(model, { apiKey, headers }, 0, MANUAL_MIN_COMPACT_CHARS, undefined, true);
+					if (c.kind === "compacted") {
+						ev.onNotify?.("warning", t("上下文已超限，已自动压缩早期剧情（{turns} 拍 → 摘要 {summaryChars} 字），请重试发送。", { turns: c.turns, summaryChars: c.summary.length }));
+						return { aborted: false, error: errored, entryId };
+					}
+				}
+				ev.onNotify?.("error", t("生成失败：{error}", { error: errored }));
 				return { aborted: false, error: errored, entryId };
 			}
 
 			// 模型停手但无正文：如实通知，保持今天的空拍行为。
 			if (!errored && !aborted && !finalText) {
-				ev.onNotify?.("warning", "本拍模型未交出任何正文——请重试或更换模型。");
+				ev.onNotify?.("warning", t("本拍模型未交出任何正文——请重试或更换模型。"));
 				return { aborted: false, error: "no-draft" };
 			}
 			if (!aborted && !errored && finalText && !ws.sealed) {
-				ev.onNotify?.("warning", "稿件已保存，本拍尚未收笔。");
+				ev.onNotify?.("warning", t("稿件已保存，本拍尚未收笔。"));
 				return { aborted: false, error: "unsealed-draft", entryId };
 			}
 
@@ -1496,15 +1526,15 @@ export class StageEngine {
 				try {
 					const saved = this.#deps.storeSave(sm.getSessionId(), want);
 					if (saved) {
-						ev.onActivity?.(`已钉档「${saved.name}」（${saved.worldlineName}）`);
+						ev.onActivity?.(t("已钉档「{name}」（{worldline}）", { name: saved.name, worldline: saved.worldlineName }));
 						sm.flush();
 					} else {
-						ev.onNotify?.("warning", `存档「${want}」未能钉下（无当前叶位）。`);
+						ev.onNotify?.("warning", t("存档「{name}」未能钉下（无当前叶位）。", { name: want }));
 					}
 				} catch (err) {
 					// 存档失败不该动摇已经写好的一拍
 					console.error("[stage] 钉档失败", err);
-					ev.onNotify?.("warning", `存档「${want}」失败：${err instanceof Error ? err.message : String(err)}`);
+					ev.onNotify?.("warning", t("存档「{name}」失败：{msg}", { name: want, msg: err instanceof Error ? err.message : String(err) }));
 				}
 			}
 			this.#pendingSave = null;
@@ -1694,7 +1724,7 @@ export class StageEngine {
 							if (!ws.draft.trim() && text.trim() && ws.mode === "write") {
 								const result = runWriteTool(ws, wsDeps, "draft_write", { content: text }, true);
 								ws.strayText = "";
-								ev.onActivity?.(result.ok ? "直出正文已代收为 draft_write" : "直出正文代收失败");
+								ev.onActivity?.(result.ok ? t("直出正文已代收为 draft_write") : t("直出正文代收失败"));
 							}
 						}
 					}
@@ -1708,7 +1738,7 @@ export class StageEngine {
 				let blockReason = name === CARRIER_TOOL_NAME
 					? undefined
 					: !hooks.toolNames.includes(name)
-						? "此工具在当前会话模式不可用。"
+						? (getUiLocale() === "en" ? "This tool is not available in the current session mode." : "此工具在当前会话模式不可用。")
 						: agentTurn
 							? undefined
 							: workspaceToolBlock(ws, name, tools.find((t) => t.name === name)?.mode);
@@ -1722,7 +1752,8 @@ export class StageEngine {
 					}
 					blockReason = await sandboxGate(name, input);
 				}
-				return { toolName: name, lastUserText, creationMode: loadStageConfig(cwd).creationMode, ...(blockReason ? { blockReason } : {}) };
+				const curCfg = loadStageConfig(cwd);
+				return { toolName: name, lastUserText, creationMode: curCfg.turboMode ? "silent" : curCfg.creationMode, ...(blockReason ? { blockReason } : {}) };
 			},
 			toolResult: (name, content, input) => {
 				const nextContent = filterSandboxToolContent(name, input ?? {}, content, sandboxScope(cwd, config, chatDir ?? undefined));
@@ -1780,14 +1811,21 @@ export class StageEngine {
 					endInfo = await finish();
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					ev.onNotify?.("error", `本拍收尾失败：${message}`);
+					ev.onNotify?.("error", t("本拍收尾失败：{msg}", { msg: message }));
 					endInfo = { aborted: this.#abort?.signal.aborted === true, error: message };
 				}
 			},
 			execute: async (name, id, input, signal) => {
 				if (name === CARRIER_TOOL_NAME) {
 					return {
-						content: [{ type: "text", text: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续执行当前轮任务。" }],
+						content: [
+							{
+								type: "text",
+								text: getUiLocale() === "en"
+									? "The reference material above is already included in this request's tool description; no need to call this tool again — please continue with the current turn."
+									: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续执行当前轮任务。",
+							},
+						],
 					};
 				}
 				if (agentTurn) {
@@ -1905,13 +1943,82 @@ export class StageEngine {
 	}
 
 	/**
+	 * 手动补跑一次场记记账（/scribe 与状态栏「刷新状态」按钮共用）。
+	 * 扮演模式取分支最近一拍正文，agent 模式取最近修改的一章正文；复用 #scribe（同叶守卫、同旁路模型与 maxTokens）。
+	 */
+	async rescribeNow(): Promise<ScribeRunOutcome> {
+		if (this.#busy) return { kind: "skipped", reason: "busy" };
+		const model = this.#deps.getModel();
+		if (!model) return { kind: "failed", error: "尚未配置剧情模型" };
+		this.#busy = true;
+		try {
+			const { apiKey, headers } = await this.#deps.getAuth(model);
+			const sm = this.#deps.getSession().sessionManager;
+			const ev = this.#deps.events ?? {};
+			const materials = loadStageMaterials(this.#deps.cwd);
+			const branch = sm.getBranch() as BranchEntryLike[];
+			const state = stateFromBranch(branch);
+			const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
+			const isAgent = Boolean(chatDir && chatModeOfSessionDir(sm.getSessionDir?.()) === "agent");
+			let userText = "";
+			let assistantText = "";
+			if (isAgent && chatDir) {
+				const files = listStoryFiles(storyDirectory(chatDir));
+				const latest = files[files.length - 1];
+				if (latest) {
+					try {
+						assistantText = readFileSync(join(storyDirectory(chatDir), latest.name), "utf8").trim();
+					} catch {
+						assistantText = "";
+					}
+				}
+			} else {
+				const { history } = rebuildHistory(branch, materials.promptRules, {
+					charName: materials.card.name,
+					userName: materials.config.userName,
+				});
+				for (let i = history.length - 1; i >= 0; i--) {
+					if (history[i]!.role === "assistant" && history[i]!.text.trim()) {
+						assistantText = prepareScribeAssistantText(history[i]!.text, materials.promptRules, {
+							charName: materials.card.name,
+							userName: materials.config.userName,
+						});
+						for (let j = i - 1; j >= 0; j--) {
+							if (history[j]!.role === "user") {
+								userText = history[j]!.text;
+								break;
+							}
+						}
+						break;
+					}
+				}
+			}
+			if (!assistantText.trim()) return { kind: "skipped", reason: "no-text" };
+			return await this.#scribe({
+				model,
+				auth: { apiKey, headers },
+				materials,
+				sm,
+				ev,
+				state,
+				userText,
+				assistantText,
+			});
+		} catch (err) {
+			return { kind: "failed", error: err instanceof Error ? err.message : String(err) };
+		} finally {
+			this.#busy = false;
+		}
+	}
+
+	/**
 	 * 场记记账（封笔后的旁路，扮演与 agent 共用）。触发是结构信号——扮演＝本拍有正文，agent＝写入了一章；
 	 * 场记读「已写出的正文＋当前账本」出 patch，判断在模型、落账由 harness 死板执行（叶守卫在 runScribeTurn 内）。
 	 */
 	async #scribe(o: {
 		model: StageModelLike; auth: { apiKey?: string; headers?: Record<string, string | null> }; materials: StageMaterials;
 		sm: StageSessionManager; ev: StageEvents; state: WorldState; userText: string; assistantText: string;
-	}): Promise<void> {
+	}): Promise<ScribeRunOutcome> {
 		const { model, auth, materials, sm, ev, state } = o;
 		// MVU 卡：开演前若树还没建（首拍/老会话），从卡的初值声明懒建——世界书 [initvar] 优先，
 		// 没有就退到卡自带脚本里 Zod schema 的 prefault（见 seedMvuIfNeeded）。规则喂给场记当参考。
@@ -1940,8 +2047,8 @@ export class StageEngine {
 			: seededState;
 		const r = await runScribeTurn(
 			{
-				// 2048：账本+名录随剧情增长，patch 可能很长；1024 实测会截断出半截 JSON（8/03）
-				sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, 2048, "scribe"),
+				// 不传硬编码上限，优先遵循连接配置中模型条目的 maxTokens（未配则回落 8192），避免思考模型或长账本被 2048 截断
+				sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, undefined, "scribe"),
 				appendStateEntry: (s) => sm.appendCustomEntry(STATE_ENTRY_TYPE, s),
 				getLeafId: () => sm.getLeafId(),
 				stateFile: this.#deps.getStateFile?.(sm.getSessionId()),
@@ -1956,7 +2063,10 @@ export class StageEngine {
 				mvuRules,
 			},
 		);
-		if (r.kind === "failed") console.error(`[stage-scribe] 记账跳过：${r.error}`);
+		if (r.kind === "failed") {
+			console.error(`[stage-scribe] 记账跳过：${r.error}`);
+			ev.onActivity?.(t("记账跳过：{error}", { error: r.error.length > 120 ? `${r.error.slice(0, 120)}…` : r.error }));
+		}
 		/**
 		 * 场记这拍没落账（无变化/解析失败/切了分支），新声明的面板数据就没人写下来——
 		 * 而 panel_write 不会再调一次，那棵树会永久丢失、面板永远显示不出值。所以补一笔。
@@ -1972,6 +2082,7 @@ export class StageEngine {
 			}
 		}
 		sm.flush();
+		return r;
 	}
 
 	/**
@@ -2011,20 +2122,21 @@ export class StageEngine {
 			});
 			if (!plan) return { kind: "skipped", reason: opts?.force ? "nothing-to-compact" : "not-due" };
 			const leafBefore = sm.getLeafId();
-			const startDetail = `正在压缩讨论（${plan.turns} 轮 · 约 ${plan.tokensBefore} token）…`;
+			const startDetail = t("正在压缩讨论（{turns} 轮 · 约 {tokens} token）…", { turns: plan.turns, tokens: plan.tokensBefore });
 			ev.onActivity?.(startDetail);
 			ev.onCompaction?.({ state: "start", kind: "discussion", detail: startDetail });
 			const prompt = buildDiscussionSummaryPrompt({ conversationText: plan.conversationText, ...(plan.previousSummary ? { previousSummary: plan.previousSummary } : {}) });
-			const resp = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, 4096, "compact");
+			const resp = await this.#sideText(model, prompt.systemPrompt, prompt.userText, auth, undefined, "compact");
 			if (typeof resp !== "string" || !resp.trim()) {
-				const error = typeof resp === "string" ? "摘要为空" : resp.error;
+				const error = typeof resp === "string" ? t("摘要为空") : resp.error;
 				console.error(`[stage-discussion] 压缩跳过：${error}`);
-				ev.onCompaction?.({ state: "end", kind: "discussion", ok: false, detail: `讨论压缩失败：${error}` });
+				ev.onCompaction?.({ state: "end", kind: "discussion", ok: false, detail: t("讨论压缩失败：{error}", { error }) });
 				return { kind: "failed", error };
 			}
 			if (sm.getLeafId() !== leafBefore) {
-				ev.onActivity?.("讨论压缩已丢弃（期间切换了分支）");
-				ev.onCompaction?.({ state: "end", kind: "discussion", ok: false, detail: "讨论压缩已丢弃（期间切换了分支）" });
+				const staleMsg = t("讨论压缩已丢弃（期间切换了分支）");
+				ev.onActivity?.(staleMsg);
+				ev.onCompaction?.({ state: "end", kind: "discussion", ok: false, detail: staleMsg });
 				return { kind: "stale" };
 			}
 			const summary = resp.trim();
@@ -2038,14 +2150,14 @@ export class StageEngine {
 			if (real && plan.estimatedTokens > 0 && estAfter < plan.estimatedTokens) {
 				this.#ctxOverride = { sessionId: sm.getSessionId(), tokens: Math.max(1, Math.round(real * (estAfter / plan.estimatedTokens))) };
 			}
-			const doneDetail = `讨论已压缩：${plan.turns} 轮 → 摘要 ${summary.length} 字`;
+			const doneDetail = t("讨论已压缩：{turns} 轮 → 摘要 {summaryChars} 字", { turns: plan.turns, summaryChars: summary.length });
 			ev.onActivity?.(doneDetail);
 			ev.onCompaction?.({ state: "end", kind: "discussion", ok: true, detail: doneDetail });
 			return { kind: "compacted", summary, turns: plan.turns, chars: plan.conversationText.length };
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.error(`[stage-discussion] 压缩异常：${msg}`);
-			ev.onCompaction?.({ state: "end", kind: "discussion", ok: false, detail: `讨论压缩异常：${msg}` });
+			ev.onCompaction?.({ state: "end", kind: "discussion", ok: false, detail: t("讨论压缩异常：{msg}", { msg }) });
 			return { kind: "failed", error: msg };
 		}
 	}
@@ -2057,6 +2169,7 @@ export class StageEngine {
 		everyNTurns: number,
 		minChars?: number,
 		keepRecentBeats?: number,
+		forcePressure?: boolean,
 	): Promise<CompactOutcome> {
 		const ev = this.#deps.events ?? {};
 		const sm = this.#deps.getSession().sessionManager;
@@ -2066,10 +2179,33 @@ export class StageEngine {
 			// agent 子项目：planCompaction 按稿子文件计划（docs/PLAN-AGENT-CODING.md §七）
 			const chatDir = chatDirOfSessionDir(sm.getSessionDir?.());
 			const agentStoryDir = chatDir && chatModeOfSessionDir(sm.getSessionDir?.()) === "agent" ? storyDirectory(chatDir) : undefined;
+			// 扮演模式被动吃紧判定：仅取最新一份摘要条目之后的真实 prompt usage，避免刚压完被旧 usage 连续误触发
+			let contextPressure: { usedTokens: number; contextWindow: number } | undefined;
+			if (agentStoryDir === undefined) {
+				const contextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : 0;
+				if (forcePressure) {
+					const win = contextWindow > 0 ? contextWindow : 128000;
+					contextPressure = { usedTokens: win, contextWindow: win };
+				} else if (contextWindow > 0) {
+					let lastSumIdx = -1;
+					for (let i = branch.length - 1; i >= 0; i--) {
+						const e = branch[i];
+						if (e?.type === "compaction" || (e?.type === "custom" && e?.customType === SUMMARY_ENTRY_TYPE)) {
+							lastSumIdx = i;
+							break;
+						}
+					}
+					const sinceSummary = lastSumIdx >= 0 ? branch.slice(lastSumIdx + 1) : branch;
+					const usedTokens = promptTokensOfMessages(authoringHistory(sinceSummary));
+					if (usedTokens && usedTokens > 0) {
+						contextPressure = { usedTokens, contextWindow };
+					}
+				}
+			}
 			const c = await runCompaction(
 				{
-					// 4096：摘要要装下前情/人物/伏笔/事实账五节，且要合并上一份摘要
-					sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, 4096, "compact"),
+					// 优先遵循连接配置中模型条目的 maxTokens（未配则回落 8192）
+					sideText: (sp, ut) => this.#sideText(model, sp, ut, auth, undefined, "compact"),
 					appendSummaryEntry: (data: RpSummaryData) => sm.appendCustomEntry(SUMMARY_ENTRY_TYPE, data),
 					getLeafId: () => sm.getLeafId(),
 					archive: this.#deps.archiveCompacted
@@ -2089,6 +2225,7 @@ export class StageEngine {
 					...(keepRecentBeats !== undefined ? { keepRecentBeats } : {}),
 					...(agentStoryDir ? { storyDir: agentStoryDir } : {}),
 					...(chatDir ? { previousSummaryFallback: readChatSummary(chatDir) } : {}),
+					...(contextPressure ? { contextPressure } : {}),
 				},
 			);
 			if (c.kind === "failed") console.error(`[stage-compact] 压缩跳过：${c.error}`);
@@ -2129,13 +2266,20 @@ export class StageEngine {
 	): Promise<StageToolResult> {
 		if (name === CARRIER_TOOL_NAME) {
 			return {
-				content: [{ type: "text", text: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续执行当前轮任务。" }],
+				content: [
+					{
+						type: "text",
+						text: getUiLocale() === "en"
+							? "The reference material above is already included in this request's tool description; no need to call this tool again — please continue with the current turn."
+							: "上述资料已完整附在当前请求工具说明中，无需重复调用，请继续执行当前轮任务。",
+					},
+				],
 			};
 		}
 		const { ws, ev } = o;
 		let result: ToolRunResult | MediaStageResult;
 		if (name === "ask" && this.#deps.askUser) {
-			const question = String(args.question ?? "").trim() || "请你定夺";
+			const question = String(args.question ?? "").trim() || t("请你定夺");
 			const options = Array.isArray(args.options) ? args.options.map((value) => String(value).trim()).filter(Boolean) : [];
 			recordSegment(ws, { kind: "tool", activity: { kind: "tool_start", name, detail: question } });
 			commitWorkspace(ws, o.wsDeps, { ...structuredClone(ws), phase: "waiting" });
@@ -2143,22 +2287,28 @@ export class StageEngine {
 			const answer = await this.#deps.askUser(question, options, signal);
 			ws.lookups++;
 			if (answer === undefined) {
-				ev.onActivity?.(`ask「${question.slice(0, 24)}」· 用户停止`);
-				recordSegment(ws, { kind: "tool", activity: { kind: "tool_end", name, detail: "用户停止——笔还给用户" } });
+				ev.onActivity?.(t("ask「{q}」· 用户停止", { q: question.slice(0, 24) }));
+				recordSegment(ws, { kind: "tool", activity: { kind: "tool_end", name, detail: t("用户停止——笔还给用户") } });
 				o.stop();
 				return { content: [] };
 			}
 			commitWorkspace(ws, o.wsDeps, { ...structuredClone(ws), phase: ws.mode === "explore" ? "exploring" : "writing",
 				choices: [...(ws.choices ?? []), { question, answer }] });
-			result = { text: `用户已作答：「${answer}」。当前稿件版本 v${ws.version}。`, activity: `ask「${question.slice(0, 24)}」· 用户作答` };
+			const en = getUiLocale() === "en";
+			result = {
+				text: en ? `User answered: "${answer}". Current draft version v${ws.version}.` : `用户已作答：「${answer}」。当前稿件版本 v${ws.version}。`,
+				activity: t("ask「{q}」· 用户作答", { q: question.slice(0, 24) }),
+			};
 		} else {
 			if (name === "panel_write" || name === "panel_close") ws.panelWrites++;
+			const en = getUiLocale() === "en";
+			const unknown = { text: en ? `Unknown tool "${name}".` : `未知工具「${name}」。`, isError: true };
 			result = name === "previous_draft_read" || name === "previous_draft_edit"
 				? o.previousDraft.run(ws, o.wsDeps, name, args)
 				: o.mcpNames.has(name)
-					? ((await runMcpStageTool(this.#deps.mcp!, name, args, signal)) ?? { text: `未知工具「${name}」。`, isError: true })
+					? ((await runMcpStageTool(this.#deps.mcp!, name, args, signal)) ?? unknown)
 					: o.mediaNames.has(name)
-						? ((await runMediaStageTool(this.#deps.cwd, name, args)) ?? { text: `未知工具「${name}」。`, isError: true })
+						? ((await runMediaStageTool(this.#deps.cwd, name, args)) ?? unknown)
 						: o.readNames.has(name)
 							? await this.#runReadTool(o, o.readDeps, name, args)
 							: runWriteTool(ws, o.wsDeps, name, args);
@@ -2202,27 +2352,54 @@ export class StageEngine {
 		signal?: AbortSignal,
 	): Promise<StageToolResult> {
 		if (name === "ask" && this.#deps.askUser) {
-			const question = String(input.question ?? "").trim() || "请你定夺";
+			const question = String(input.question ?? "").trim() || t("请你定夺");
 			const options = Array.isArray(input.options) ? input.options.map((v) => String(v).trim()).filter(Boolean) : [];
 			const answer = await this.#deps.askUser(question, options, signal);
 			if (answer === undefined) {
-				o.onActivity?.(`ask「${question.slice(0, 24)}」· 用户停止`);
+				o.onActivity?.(t("ask「{q}」· 用户停止", { q: question.slice(0, 24) }));
 				o.onAskStop();
 				return { content: [] };
 			}
-			o.onActivity?.(`ask「${question.slice(0, 24)}」· 用户作答`);
-			return { content: [{ type: "text", text: `用户已作答：「${answer}」。` }] };
+			o.onActivity?.(t("ask「{q}」· 用户作答", { q: question.slice(0, 24) }));
+			return { content: [{ type: "text", text: getUiLocale() === "en" ? `User answered: "${answer}".` : `用户已作答：「${answer}」。` }] };
 		}
 		if (o.allowScreenshot && name === "screenshot" && this.#deps.screenshot) {
+			const en = getUiLocale() === "en";
 			const file = typeof input.file === "string" && input.file.trim() ? input.file.trim() : undefined;
 			const shot = await this.#deps.screenshot(file, signal);
-			if (!shot) return { content: [{ type: "text", text: "没有截到画面：没有打开的页面，或页面没有在限时内回报。请让用户在浏览器里打开梨园后重试。" }], isError: true };
-			o.onActivity?.(`截图${file ? `「${file}」` : "（整页正文）"} · ${shot.width}×${shot.height}`);
-			return { content: [{ type: "text", text: `已截取${file ? `「${file}」` : "整页正文"}的当前画面（${shot.width}×${shot.height}）。` }, { type: "image", data: shot.png, mimeType: "image/png" }] };
+			if (!shot) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: en
+								? "No screenshot captured: no page is open, or the page did not respond in time. Ask the user to open Liyuan in their browser and retry."
+								: "没有截到画面：没有打开的页面，或页面没有在限时内回报。请让用户在浏览器里打开梨园后重试。",
+						},
+					],
+					isError: true,
+				};
+			}
+			o.onActivity?.(
+				file
+					? t("截图「{file}」 · {w}×{h}", { file, w: shot.width, h: shot.height })
+					: t("截图（整页正文） · {w}×{h}", { w: shot.width, h: shot.height }),
+			);
+			return {
+				content: [
+					{
+						type: "text",
+						text: en
+							? `Captured current view of ${file ? `"${file}"` : "the full manuscript"} (${shot.width}×${shot.height}).`
+							: `已截取${file ? `「${file}」` : "整页正文"}的当前画面（${shot.width}×${shot.height}）。`,
+					},
+					{ type: "image", data: shot.png, mimeType: "image/png" },
+				],
+			};
 		}
 		if (o.mcpNames.has(name)) {
 			const result = await runMcpStageTool(this.#deps.mcp!, name, input, signal);
-			return { content: [{ type: "text", text: result?.text ?? "MCP 工具不可用。" }], isError: result?.isError ?? !result };
+			return { content: [{ type: "text", text: result?.text ?? (getUiLocale() === "en" ? "MCP tool unavailable." : "MCP 工具不可用。") }], isError: result?.isError ?? !result };
 		}
 		if (name === "skill_read" || o.readNames.has(name)) {
 			const result = await runStageTool(o.readDeps, name, input, o.language);
@@ -2230,14 +2407,27 @@ export class StageEngine {
 			return { content: [{ type: "text", text: result.text }], isError: result.isError };
 		}
 		if (o.mediaNames.has(name)) {
-			const result = (await runMediaStageTool(this.#deps.cwd, name, input)) ?? { text: `未知工具「${name}」。`, isError: true };
+			const result = (await runMediaStageTool(this.#deps.cwd, name, input)) ?? {
+				text: getUiLocale() === "en" ? `Unknown tool "${name}".` : `未知工具「${name}」。`,
+				isError: true,
+			};
 			if (result.details && result.isError !== true) o.onMedia?.({ toolName: name, toolCallId: id, details: result.details, text: result.text });
 			if (result.activity) o.onActivity?.(result.activity);
 			return { content: [{ type: "text", text: result.text }], ...(result.details ? { details: result.details } : {}), ...(result.isError ? { isError: true } : {}) };
 		}
 		const result = await runAuthoringTool(name, input, o.language, o.cardDeps);
 		if (result?.activity) o.onActivity?.(result.activity);
-		return result ? { content: [{ type: "text", text: result.text }], details: result.details, isError: result.isError } : { content: [{ type: "text", text: `当前${o.modeLabel}模式没有此工具。` }], isError: true };
+		return result
+			? { content: [{ type: "text", text: result.text }], details: result.details, isError: result.isError }
+			: {
+					content: [
+						{
+							type: "text",
+							text: getUiLocale() === "en" ? `This tool is not available in ${o.modeLabel} mode.` : `当前${o.modeLabel}模式没有此工具。`,
+						},
+					],
+					isError: true,
+				};
 	}
 
 	/**
@@ -2482,7 +2672,7 @@ export class StageEngine {
 		systemPrompt: string,
 		userText: string,
 		auth: { apiKey?: string; headers?: Record<string, string | null> },
-		maxTokens = 8192,
+		maxTokens?: number,
 		kind: SideTextStat["kind"] = "scribe",
 		reasoning: string | undefined = "off",
 	): Promise<string | { error: string }> {
@@ -2511,10 +2701,18 @@ export class StageEngine {
 		 * 没配旁路条目时才回落调用点的默认（历史行为：off）。
 		 */
 		const level = side ? side.thinking : reasoning;
+		const modelMaxTokens =
+			typeof chosen.maxTokens === "number" && Number.isFinite(chosen.maxTokens) && chosen.maxTokens > 0
+				? Math.floor(chosen.maxTokens)
+				: undefined;
+		const resolvedMaxTokens =
+			typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+				? Math.floor(maxTokens)
+				: (modelMaxTokens ?? 8192);
 		const options: Record<string, unknown> = {
 			apiKey: sideAuth.apiKey,
 			headers: sideAuth.headers,
-			maxTokens,
+			maxTokens: resolvedMaxTokens,
 			signal: this.#abort?.signal,
 			...(level !== undefined ? { reasoning: level } : {}),
 		};

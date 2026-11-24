@@ -12,6 +12,7 @@
  * 执行依赖注入（检索函数），因此本模块可离线单测。
  */
 
+import { getUiLocale, t } from "../i18n/index.ts";
 import { runUnifiedStageTool, unifiedStageTools } from "../tools/adapters/stage.ts";
 import type { LoreDeps, LoreHitLike } from "../tools/lore.ts";
 import type { MemoryDeps, MemoryHitLike } from "../tools/memory.ts";
@@ -58,42 +59,45 @@ const STR = { type: "string" } as const;
  * deps 给出时按注入情况过滤统一层工具（依赖缺失的不上清单，见 adapters/stage.ts）。
  */
 export function stageTools(language: string, deps?: StageToolDeps): StageTool[] {
+	const en = getUiLocale() === "en";
 	return [
 		// 世界书族（M-D1/M-D2）与向量库族（M-D3）已迁入统一工具层：一份实现多面共用
 		...unifiedStageTools(language, deps),
 		{
 			name: "world_state_get",
 			mode: "read",
-			description: "读取当前世界状态账本（时间/地点/人物好感与状态/物品归属/标记/剧情线）。拿不准既定事实时调用。",
+			description: en
+				? "Read the current world-state ledger (time, location, character affinities and status, item ownership, flags, plot threads). Call whenever unsure about established facts."
+				: "读取当前世界状态账本（时间/地点/人物好感与状态/物品归属/标记/剧情线）。拿不准既定事实时调用。",
 			parameters: { type: "object", properties: {}, required: [] },
 		},
 	];
 }
 
-/**
- * skill 读取工具：按名读取 skill 全文。**标准 agent skill 形态**（8/23 用户定案：
- * 「回归最本初的模样，对梨园与 Claude Code 一般无二」）——列表给 `名字：描述`，模型看描述
- * 自己决定读不读，读了才把全文加载进当拍。
- *
- * ⚠ 描述**必须带上**：此前只给名字（`可读：ask判断`），模型无从判断何时该读，实测 8/19
- * 之后零调用。description 是它唯一的判断依据（frontmatter 里必填，扫描时早就解析了，
- * 只是没传过来）。
- *
- * 关键性质：工具结果**不落历史**（rebuildHistory 只留定稿正文）——内容只活在当拍，
- * 谢幕即蒸发＝按需加载、用完即走。skills 为空时不要注册本工具（不凭空点名）。
- */
 export function skillReadTool(_language: string, skills: Array<{ name: string; description: string }>): StageTool {
+	const en = getUiLocale() === "en";
 	return {
 		name: "skill_read",
 		mode: "read",
-		description:
-			`按名读取一个 skill 的全文。可读：\n` +
-			skills.map((s) => `- ${s.name}：${s.description}`).join("\n"),
+		description: en
+			? `Read the full text of a skill by name. Available:\n` +
+				skills.map((s) => `- ${s.name}: ${s.description}`).join("\n")
+			: `按名读取一个 skill 的全文。可读：\n` +
+				skills.map((s) => `- ${s.name}：${s.description}`).join("\n"),
 		parameters: {
 			type: "object",
 			properties: {
-				name: { type: "string", enum: skills.map((s) => s.name), description: "要读取的 skill 名" },
-				file: { type: "string", description: "包内引用文件的相对路径；省略读取 SKILL.md。只读取文本，不执行代码。" },
+				name: {
+					type: "string",
+					enum: skills.map((s) => s.name),
+					description: en ? "Name of the skill to read" : "要读取的 skill 名",
+				},
+				file: {
+					type: "string",
+					description: en
+						? "Relative path to a reference file inside the skill pack; omit to read SKILL.md. Read-only text, never executed."
+						: "包内引用文件的相对路径；省略读取 SKILL.md。只读取文本，不执行代码。",
+				},
 				start: { type: "integer", minimum: 0 },
 				end: { type: "integer", minimum: 0 },
 			},
@@ -107,73 +111,133 @@ export function skillReadTool(_language: string, skills: Array<{ name: string; d
  * 记账归封笔后的场记旁路（scribe-run.ts），台上零世界写入工具。
  */
 export function writeTools(_language: string): StageTool[] {
-	const version = { type: "integer", minimum: 0, description: "最近读取/写入回执的版本；空稿初始为 0。版本冲突时重新读取。" };
+	const en = getUiLocale() === "en";
+	const version = {
+		type: "integer",
+		minimum: 0,
+		description: en
+			? "Version from the latest read/write receipt; starts at 0 for an empty draft. Re-read on version conflict."
+			: "最近读取/写入回执的版本；空稿初始为 0。版本冲突时重新读取。",
+	};
 	// Gateways may pad objects with no required fields. Surplus root keys have no effect;
 	// declared fields, nested plan items, and all versioned writes still undergo native validation.
 	const schema = (properties: Record<string, unknown>, required: string[]) => ({ type: "object", properties, required, ...(required.length ? { additionalProperties: false } : {}) });
 	return [
 		{
 			name: "draft_write", mode: "write",
-			description: "创建或全量替换本拍稿件，内容即时向用户展示并持久保存。写入不等于收笔；局部修改用 draft_edit，续写用 draft_append，完成用 draft_seal。简单回应也可直接输出。",
-			parameters: schema({ version, content: { ...STR, description: "完整稿件原文，保留所有格式与空白" } }, ["version", "content"]),
+			description: en
+				? "Create or replace this beat's draft in full; content is shown to the user immediately and saved persistently. Writing does not seal the beat — use draft_edit for targeted edits, draft_append to continue, and draft_seal when finished. Brief responses can also be output directly."
+				: "创建或全量替换本拍稿件，内容即时向用户展示并持久保存。写入不等于收笔；局部修改用 draft_edit，续写用 draft_append，完成用 draft_seal。简单回应也可直接输出。",
+			parameters: schema(
+				{
+					version,
+					content: {
+						...STR,
+						description: en ? "Complete draft text preserving all formatting and whitespace" : "完整稿件原文，保留所有格式与空白",
+					},
+				},
+				["version", "content"],
+			),
 		},
 		{
 			name: "draft_append", mode: "write",
-			description: "在当前稿件末尾续写一段并展示。默认与上文隔一个空行；separator 可指定精确连接字符。不会收笔。",
-			parameters: schema({ version, content: STR, separator: { ...STR, description: "默认两个换行；允许空串" } }, ["version", "content"]),
+			description: en
+				? "Append a passage to the end of the current draft and display it. Separated from prior text by a blank line by default; pass separator for exact joining. Does not seal the beat."
+				: "在当前稿件末尾续写一段并展示。默认与上文隔一个空行；separator 可指定精确连接字符。不会收笔。",
+			parameters: schema(
+				{
+					version,
+					content: STR,
+					separator: { ...STR, description: en ? "Default two newlines; empty string allowed" : "默认两个换行；允许空串" },
+				},
+				["version", "content"],
+			),
 		},
 		{
-			name: "draft_read", mode: "read", description: "读取本拍稿件与版本。start/end 是从 0 开始的 UTF-16 字符偏移，end 不含；省略即全文。返回的 content 是精确原文。",
+			name: "draft_read", mode: "read",
+			description: en
+				? "Read this beat's current draft and version. start/end are 0-based UTF-16 code unit offsets (end exclusive); omit for full text. Returns exact raw content."
+				: "读取本拍稿件与版本。start/end 是从 0 开始的 UTF-16 字符偏移，end 不含；省略即全文。返回的 content 是精确原文。",
 			parameters: schema({ start: { type: "integer", minimum: 0 }, end: { type: "integer", minimum: 0 } }, []),
 		},
 		{
-			name: "draft_search", mode: "read", description: "在本拍稿件中按字面检索。hits 保留原文标点和空白，可直接用作 draft_edit.old；返回版本及命中总数。",
+			name: "draft_search", mode: "read",
+			description: en
+				? "Search literally inside this beat's draft. Returned hits preserve original punctuation and whitespace and can be used directly as draft_edit.old; returns version and total match count."
+				: "在本拍稿件中按字面检索。hits 保留原文标点和空白，可直接用作 draft_edit.old；返回版本及命中总数。",
 			parameters: schema({ query: STR, limit: { type: "integer", minimum: 1, maximum: 50 } }, ["query"]),
 		},
 		{
-			name: "draft_edit", mode: "write", description: "按唯一原文引用批量修改当前稿件。全部引用都基于同一版本；任一处缺失、重复、重叠或版本冲突则整批不改。允许首尾空白/等长标点的有限匹配，回执报告匹配级别。",
+			name: "draft_edit", mode: "write",
+			description: en
+				? "Apply batch edits to the current draft by unique literal quotes. All quotes target the same version; if any quote is missing, ambiguous, overlapping, or stale, the whole batch is rejected unchanged. Allows limited trimming/punctuation fallback and reports match level in the receipt."
+				: "按唯一原文引用批量修改当前稿件。全部引用都基于同一版本；任一处缺失、重复、重叠或版本冲突则整批不改。允许首尾空白/等长标点的有限匹配，回执报告匹配级别。",
 			parameters: schema({ version, edits: { type: "array", minItems: 1, items: schema({ old: STR, new: STR }, ["old", "new"]) } }, ["version", "edits"]),
 		},
 		{
-			name: "draft_seal", mode: "write", description: "完整正文与所需格式内容都写入后，最后单独调用，将本拍当前版本收笔并交给定稿与场记流程。不检查文风、字数或计划完成度；收笔后不能再改本拍稿件。",
+			name: "draft_seal", mode: "write",
+			description: en
+				? "Call alone as the final step once complete story prose and required formatting are written, sealing this beat's current version for delivery and the scribe pass. Does not judge style, length, or plan completion; once sealed, this beat's draft can no longer be modified."
+				: "完整正文与所需格式内容都写入后，最后单独调用，将本拍当前版本收笔并交给定稿与场记流程。不检查文风、字数或计划完成度；收笔后不能再改本拍稿件。",
 			parameters: schema({ version }, ["version"]),
 		},
 		{
-			name: "previous_draft_read", mode: "read", description: "读取当前分支上一拍已定稿回复的精确原文与版本，供回改。省略 start/end 即全文；偏移为从 0 开始的 UTF-16 字符，end 不含。不能选更早的拍次。",
+			name: "previous_draft_read", mode: "read",
+			description: en
+				? "Read the exact text and version of the previous finalized reply on the current branch for in-place revision. Omit start/end for full text; offsets are 0-based UTF-16 code units (end exclusive). Cannot target earlier beats."
+				: "读取当前分支上一拍已定稿回复的精确原文与版本，供回改。省略 start/end 即全文；偏移为从 0 开始的 UTF-16 字符，end 不含。不能选更早的拍次。",
 			parameters: schema({ start: { type: "integer", minimum: 0 }, end: { type: "integer", minimum: 0 } }, []),
 		},
 		{
-			name: "previous_draft_edit", mode: "write", description: "按 previous_draft_read 的版本和唯一原文引用，原位修订上一拍回复；未引用部分保留，任一冲突则整批不改。只修正文，不重算账本或记忆；本拍已有新稿时不可用。单独调用，成功即结束本次请求，界面显示修后的原回复。",
+			name: "previous_draft_edit", mode: "write",
+			description: en
+				? "Revise the previous beat's reply in place using the version and unique quotes from previous_draft_read; unquoted parts stay intact, and any conflict rejects the whole batch. Edits prose only without recalculating ledger or memory; unavailable once a new draft exists for this beat. Call alone — success ends this request and updates the displayed prior reply."
+				: "按 previous_draft_read 的版本和唯一原文引用，原位修订上一拍回复；未引用部分保留，任一冲突则整批不改。只修正文，不重算账本或记忆；本拍已有新稿时不可用。单独调用，成功即结束本次请求，界面显示修后的原回复。",
 			parameters: schema({ version, edits: { type: "array", minItems: 1, items: schema({ old: STR, new: STR }, ["old", "new"]) } }, ["version", "edits"]),
 		},
 		{
-			name: "beat_plan", mode: "write", description: "按需要列出或调整本拍短计划。steps 是完整新清单，用稳定 id 更新/勾选/取消；省略 steps 则保留。mode=explore 只允许读取、提问和计划，mode=write 开放写入。计划可随正文与用户回答修改，简单回应无需计划。空参数读取现计划。",
+			name: "beat_plan", mode: "write",
+			description: en
+				? "Optionally outline or update a short plan for this beat. steps replaces the whole list using stable ids to update/check/cancel; omit steps to keep existing ones. mode=explore allows only reading, asking, and planning; mode=write opens writing. Plans may evolve with prose and user answers; skip for brief replies. Pass empty args to read the current plan."
+				: "按需要列出或调整本拍短计划。steps 是完整新清单，用稳定 id 更新/勾选/取消；省略 steps 则保留。mode=explore 只允许读取、提问和计划，mode=write 开放写入。计划可随正文与用户回答修改，简单回应无需计划。空参数读取现计划。",
 			parameters: schema({ mode: { type: "string", enum: ["explore", "write"] }, steps: { type: "array", maxItems: 20, items: schema({ id: STR, text: STR, status: { type: "string", enum: ["pending", "in_progress", "done", "cancelled"] } }, ["text"]) } }, []),
 		},
 		{
 			name: "ask",
 			mode: "read",
-			description:
-				"剧情共创决策（P7 接回）：把该由用户拍板的选择交给用户。两种触发：\n" +
-				"① **主动触发**（随时，含第 1 轮）：用户输入本身在求方向/递笔（「接下来去找谁」「怎么办」" +
-				"「给个选项」「让我选」）——这不需要上文支撑，直接问。\n" +
-				"② **未定变量**（任何一拍）：用户这句输入引出的未定变量——取不同值这拍走向会" +
-				"明显分岔（如：买下用户的人性格温和还是残暴，决定整拍怎么演）、且卡与世界书查不到——" +
-				"先问用户定下来再演。一次一问，多个变量只问最关键的。" +
-				"判断是**动态的**：变量不因「新」而重要——新人物的性格/身份不是全都要问，洞府里不是每件资源" +
-				"都值得问；不分岔的自己顺着演，不事事上报。禁止代写用户身份的完整档案、禁止替用户定重大变量。\n" +
-				`给出 2~4 个具体、可落地、彼此不同的选项，用户作答后按答案继续演。\n` +
-				"用户点了停止 = 笔还给用户，本拍就此收束。\n" +
-				"**选择框分流**：用户预设自带选择框格式（如 <w2g>）时，岔路与回合末选项**按预设格式写进正文**，" +
-				"不要调本工具；只有预设没有选择框格式时才用 ask。",
+			description: en
+				? "Co-author decision fork: hand a choice that belongs to the user over to them. Two triggers:\n" +
+					"1. **Explicit request** (any turn, including turn 1): the user asks for direction or options ('who should I visit next', 'what should I do', 'give me choices') — ask directly.\n" +
+					"2. **Undecided branching variable** (any turn): an unestablished variable introduced by this turn whose value significantly forks the entire beat and cannot be found in the card or lorebook — ask first, then play out the scene. Ask one question at a time for only the single most consequential variable.\n" +
+					"Judge dynamically: a detail is not important merely because it is new — keep non-branching details flowing without asking about everything. Never fabricate a full user backstory or decide major variables on the user's behalf.\n" +
+					"Provide 2–4 concrete, actionable, mutually distinct options, then continue based on the user's answer.\n" +
+					"If the user clicks stop, control returns to the user and this beat ends.\n" +
+					"**Choice-box routing**: if the user's preset already defines an in-text choice box format (such as <w2g>), write turn-end choices in that preset format inside the prose instead of calling ask; use ask only when no preset choice-box format applies."
+				: "剧情共创决策（P7 接回）：把该由用户拍板的选择交给用户。两种触发：\n" +
+					"① **主动触发**（随时，含第 1 轮）：用户输入本身在求方向/递笔（「接下来去找谁」「怎么办」" +
+					"「给个选项」「让我选」）——这不需要上文支撑，直接问。\n" +
+					"② **未定变量**（任何一拍）：用户这句输入引出的未定变量——取不同值这拍走向会" +
+					"明显分岔（如：买下用户的人性格温和还是残暴，决定整拍怎么演）、且卡与世界书查不到——" +
+					"先问用户定下来再演。一次一问，多个变量只问最关键的。" +
+					"判断是**动态的**：变量不因「新」而重要——新人物的性格/身份不是全都要问，洞府里不是每件资源" +
+					"都值得问；不分岔的自己顺着演，不事事上报。禁止代写用户身份的完整档案、禁止替用户定重大变量。\n" +
+					`给出 2~4 个具体、可落地、彼此不同的选项，用户作答后按答案继续演。\n` +
+					"用户点了停止 = 笔还给用户，本拍就此收束。\n" +
+					"**选择框分流**：用户预设自带选择框格式（如 <w2g>）时，岔路与回合末选项**按预设格式写进正文**，" +
+					"不要调本工具；只有预设没有选择框格式时才用 ask。",
 			parameters: {
 				type: "object",
 				properties: {
-					question: { ...STR, description: "要交给用户定夺的问题（一句话说清当前局面）" },
+					question: {
+						...STR,
+						description: en
+							? "Question for the user to decide (one sentence summarizing the situation)"
+							: "要交给用户定夺的问题（一句话说清当前局面）",
+					},
 					options: {
 						type: "array",
-						description: "2~4 个具体选项（可落地、彼此不同）",
-						items: { ...STR, description: "一个选项" },
+						description: en ? "2–4 concrete, mutually distinct options" : "2~4 个具体选项（可落地、彼此不同）",
+						items: { ...STR, description: en ? "One option" : "一个选项" },
 					},
 				},
 				required: ["question", "options"],
@@ -206,23 +270,32 @@ export async function runStageTool(
 	if (unified) return unified;
 
 	if (name === "skill_read") {
+		const en = getUiLocale() === "en";
 		const skillName = typeof args.name === "string" ? args.name.trim() : "";
 		let text: string | undefined;
 		try { text = skillName ? deps.getSkill?.(skillName, typeof args.file === "string" ? args.file : undefined, args.start as number | undefined, args.end as number | undefined) : undefined; }
 		catch (e) { return { text: e instanceof Error ? e.message : String(e), isError: true }; }
 		if (!text) {
-			return { text: `没有名为「${skillName}」的 skill。按已有理解直接动笔即可。` };
+			return {
+				text: en
+					? `No skill named "${skillName}". Proceed based on your existing understanding.`
+					: `没有名为「${skillName}」的 skill。按已有理解直接动笔即可。`,
+			};
 		}
 		return {
-			text: `【skill·${skillName}】\n\n${text}`,
-			activity: `读 skill「${skillName}」`,
+			text: en ? `[skill · ${skillName}]\n\n${text}` : `【skill·${skillName}】\n\n${text}`,
+			activity: t("读 skill「{name}」", { name: skillName }),
 		};
 	}
 
 	if (name === "world_state_get") {
 		const s = deps.getState();
-		return { text: `${deps.formatState(s)}\n\nRAW:\n${JSON.stringify(s)}`, activity: "查账本" };
+		return { text: `${deps.formatState(s)}\n\nRAW:\n${JSON.stringify(s)}`, activity: t("查账本") };
 	}
 
-	return { text: `未知工具 ${name}——本拍可用：lorebook_search / memory_search / world_state_get。` };
+	return {
+		text: getUiLocale() === "en"
+			? `Unknown tool ${name} — available this beat: lorebook_search / memory_search / world_state_get.`
+			: `未知工具 ${name}——本拍可用：lorebook_search / memory_search / world_state_get。`,
+	};
 }

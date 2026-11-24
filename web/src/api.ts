@@ -54,7 +54,7 @@ function invalidateAfterWrite(writePath: string): void {
 		{ test: /^\/api\/agent-/, prefixes: ["/api/agent-config", "/api/agent-profiles", "/api/models"] },
 		{ test: /^\/api\/models/, prefixes: ["/api/models", "/api/agent-config"] },
 		{ test: /^\/api\/channels/, prefixes: ["/api/models", "/api/agent-config", "/api/agent-profiles"] },
-		{ test: /^\/api\/config/, prefixes: ["/api/config"] },
+		{ test: /^\/api\/config/, prefixes: ["/api/config", "/api/commands", "/api/rules"] },
 		{ test: /^\/api\/chats/, prefixes: ["/api/chats"] },
 		{ test: /^\/api\/backup/, prefixes: [] },
 		{ test: /^\/api\/upload/, prefixes: ["/api/uploads"] },
@@ -324,6 +324,7 @@ export interface RpConfigView {
 	preset?: string;
 	disabledLore?: string[];
 	backendControl?: boolean;
+	turboMode?: boolean;
 	creationMode?: "ask" | "silent";
 	btwName?: string;
 	btwAvatar?: string;

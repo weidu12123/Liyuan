@@ -74,7 +74,7 @@ function modelFromJson(providerId, definition, providerConfig, defaults) {
         // A configured thinking level, including off, needs reasoning controls to be sent.
         reasoning: definition.reasoning ?? definition.thinkingLevel !== undefined,
         thinkingLevelMap: definition.thinkingLevelMap,
-        input: (definition.input ?? ["text"]),
+        input: (definition.input ?? ["text", "image"]),
         cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: definition.contextWindow ?? 128000,
         maxTokens: definition.maxTokens ?? 16384,

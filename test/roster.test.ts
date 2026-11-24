@@ -60,3 +60,69 @@ test("名录编辑：roster 非对象/子表非对象告警忽略", () => {
 	const r2 = applyPatch(defaultState(), { roster: { items: ["x"] } });
 	assert.ok(r2.warnings.some((w) => w.includes("roster.items 需要对象")));
 });
+
+test("在场位置归一：转场时原在场旧角色跟随当前场景，不误标为已离场；显式离场保持原位", () => {
+	// 模拟旧存档：角色 at 曾被写成第一夜的 location
+	let s = applyPatch(defaultState(), {
+		time: "第一夜",
+		location: "伊利里欧庄园·庭院",
+		characters: {
+			丹妮莉丝: { status: "同行", at: "伊利里欧庄园·庭院" },
+			乔拉: { status: "护卫", at: "伊利里欧庄园·庭院" },
+			伊利里欧: { status: "留在书房", at: "书房" },
+		},
+	}).state;
+	// at 与当前 location 相同应归一为空串
+	assert.equal(s.characters["丹妮莉丝"]!.at, "");
+	assert.equal(s.characters["伊利里欧"]!.at, "书房");
+
+	// 兼容未归一的旧档（手动构造 c.at === prevLocation）
+	s.characters["乔拉"]!.at = "伊利里欧庄园·庭院";
+	s = applyPatch(s, { time: "第二日", location: "潘托斯集市" }).state;
+	assert.equal(s.characters["丹妮莉丝"]!.at, "", "原本在场角色转场后仍在场");
+	assert.equal(s.characters["乔拉"]!.at, "", "旧档中 at === prevLocation 的角色转场后自动跟随");
+	assert.equal(s.characters["伊利里欧"]!.at, "书房", "原本就不在场的角色保持原去向");
+});
+
+test("名录容量：places 上限收紧为 30，超出丢最旧", () => {
+	let s = defaultState();
+	for (let i = 0; i < 40; i++) {
+		s = applyPatch(s, { location: `地点${i}` }).state;
+	}
+	const places = Object.keys(s.roster?.places ?? {});
+	assert.equal(places.length, 30);
+	assert.ok(!places.includes("地点0"));
+	assert.ok(places.includes("地点39"));
+});
+
+test("名录合并：支持合并地点/人物/事件重复条目并同步迁移活跃引用", () => {
+	let s = applyPatch(defaultState(), {
+		time: "第一夜",
+		location: "红堡·大厅",
+		characters: {
+			Daenerys: { affinity: 10, status: "观察" },
+			"Daenerys Targaryen": { affinity: 15, status: "微笑" },
+		},
+		plot_threads: ["寻找盟友", "寻求盟友支持"],
+	}).state;
+	s = applyPatch(s, { location: "红堡大厅" }).state;
+
+	const merged = applyPatch(s, {
+		roster: {
+			merge: [
+				{ table: "places", from: "红堡·大厅", to: "红堡大厅" },
+				{ table: "characters", from: "Daenerys", to: "Daenerys Targaryen" },
+				{ table: "events", from: "寻求盟友支持", to: "寻找盟友" },
+			],
+		},
+	});
+	assert.deepEqual(merged.warnings, []);
+	assert.ok(!("红堡·大厅" in (merged.state.roster?.places ?? {})));
+	assert.ok("红堡大厅" in (merged.state.roster?.places ?? {}));
+	assert.ok(!("Daenerys" in merged.state.characters));
+	assert.ok(!("Daenerys" in (merged.state.roster?.characters ?? {})));
+	assert.ok("Daenerys Targaryen" in merged.state.characters);
+	assert.deepEqual(merged.state.plot_threads, ["寻找盟友"]);
+	assert.ok(!("寻求盟友支持" in (merged.state.roster?.events ?? {})));
+});
+

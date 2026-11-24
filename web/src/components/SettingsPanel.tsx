@@ -735,6 +735,8 @@ export function SettingsPanel({
 	const [maxLore, setMaxLore] = useState(3);
 	const [compactEvery, setCompactEvery] = useState(30);
 	const [backendControl, setBackendControl] = useState(true);
+	const [turboMode, setTurboMode] = useState(false);
+	const [turboConfirmOpen, setTurboConfirmOpen] = useState(false);
 	const [askMode, setAskMode] = useState(false);
 	const [dirty, setDirty] = useState(false);
 
@@ -744,6 +746,7 @@ export function SettingsPanel({
 			setMaxLore(data.config.maxLoreInjections);
 			setCompactEvery(data.config.compactEveryNTurns ?? 30);
 			setBackendControl(data.config.backendControl !== false);
+			setTurboMode(data.config.turboMode === true);
 			setAskMode(data.config.creationMode === "ask");
 			setDirty(false);
 		}
@@ -760,7 +763,8 @@ export function SettingsPanel({
 				scanDepth,
 				maxLoreInjections: maxLore,
 				compactEveryNTurns: compactEvery,
-				backendControl,
+				backendControl: turboMode ? true : backendControl,
+				turboMode,
 				creationMode: askMode ? "ask" : "silent",
 			});
 			reload();
@@ -825,9 +829,10 @@ export function SettingsPanel({
 						<div className="toggle-row">
 							<span>{t("后端操控（bash / 文件等通用工具）")}</span>
 							<Toggle
-								checked={backendControl}
+								checked={backendControl || turboMode}
 								onChange={(v) => {
 									setBackendControl(v);
+									if (!v && turboMode) setTurboMode(false);
 									touch();
 								}}
 							/>
@@ -835,6 +840,78 @@ export function SettingsPanel({
 						<div className="field-hint">
 							{t("开启后 agent 能操作本机（调用你的其他项目、查资料）；全部调用都会显示在过程条。仅在自己的设备上开启。")}
 						</div>
+						<div className="toggle-row" style={{ marginTop: 8 }}>
+							<span>{t("Turbo 模式（完全开放权限）")}</span>
+							<Toggle
+								checked={turboMode}
+								onChange={(v) => {
+									if (v) {
+										setTurboConfirmOpen(true);
+									} else {
+										setTurboMode(false);
+										touch();
+									}
+								}}
+							/>
+						</div>
+						<div className="field-hint">
+							{t("开启后完全放开沙箱目录隔离、命令执行询问与设定写入门禁，agent 可无需确认直接执行所有文件与终端操作。")}
+						</div>
+						{turboConfirmOpen && (
+							<div className="card-lore-modal" role="dialog" aria-modal="true" aria-label={t("开启 Turbo 模式")} onClick={() => setTurboConfirmOpen(false)}>
+								<div className="card-lore-dialog" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+									<div className="card-lore-head">
+										<span className="card-lore-title">{t("确认开启 Turbo 模式？")}</span>
+									</div>
+									<div className="card-lore-body" style={{ padding: "14px 16px", lineHeight: 1.65 }}>
+										<div>
+											{t("开启 Turbo 模式后，Agent 将获得完全操作权限：")}
+										</div>
+										<ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+											<li>{t("跨目录读写文件不再受项目沙箱限制，也不再弹出授权确认；")}</li>
+											<li>{t("执行任意 bash 终端命令不再询问、不受黑名单拦截；")}</li>
+											<li>{t("写入或修改世界书、记忆库无需口令确认直接放行。")}</li>
+										</ul>
+										<div style={{ marginTop: 10, color: "var(--danger, #c44)", fontWeight: 600 }}>
+											{t("请仅在完全信任当前角色卡/提示词且在个人设备上时开启。确认开启并立即保存吗？")}
+										</div>
+									</div>
+									<div className="card-lore-foot" style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px" }}>
+										<button
+											type="button"
+											className="drawer-btn"
+											onClick={() => setTurboConfirmOpen(false)}
+										>
+											{t("取消")}
+										</button>
+										<button
+											type="button"
+											className="drawer-btn save-btn"
+											disabled={busy}
+											onClick={() => {
+												setTurboConfirmOpen(false);
+												setTurboMode(true);
+												setBackendControl(true);
+												void run(async () => {
+													await apiPut("/api/config", {
+														greeting: true,
+														scanDepth,
+														maxLoreInjections: maxLore,
+														compactEveryNTurns: compactEvery,
+														backendControl: true,
+														turboMode: true,
+														creationMode: askMode ? "ask" : "silent",
+													});
+													reload();
+												}, t("已开启 Turbo 模式"));
+											}}
+										>
+											{t("确认开启")}
+										</button>
+									</div>
+								</div>
+							</div>
+						)}
 						{onOpenDenylist && (
 							<>
 								<div className="access-actions" style={{ marginTop: 6 }}>

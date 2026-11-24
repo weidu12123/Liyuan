@@ -32,6 +32,7 @@ import { listStoryFiles } from "./story-history.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { storyBranch } from "../conversation-mode.ts";
+import { t } from "../i18n/index.ts";
 import type { WorldState } from "../types.ts";
 
 export { SUMMARY_ENTRY_TYPE };
@@ -64,8 +65,17 @@ export interface CompactPlan {
 	previousSummary?: string;
 }
 
+export interface ContextPressure {
+	/** 本拍最近一次真实 prompt 侧 token 占用 */
+	usedTokens: number;
+	/** 当前模型上下文窗口上限 */
+	contextWindow: number;
+	/** 预留输出/安全空间（缺省取 min(16384, floor(contextWindow * 0.25))） */
+	reserveTokens?: number;
+}
+
 interface PlanCompactionOptions {
-	/** 每 N 个叙事拍压缩一次；<=0 关闭 */
+	/** 每 N 个叙事拍压缩一次；<=0 表示关闭固定拍数触发（仍允许 contextPressure 被动触发） */
 	everyNTurns: number;
 	userName: string;
 	charName: string;
@@ -77,6 +87,8 @@ interface PlanCompactionOptions {
 	storyDir?: string;
 	/** 项目级跨会话前情兜底（当前会话尚无 rp-summary 时合并 `<子项目>/前情提要.md`） */
 	previousSummaryFallback?: string;
+	/** 上下文吃紧被动触发信息（usedTokens > contextWindow - reserveTokens 时不受 everyNTurns 限制） */
+	contextPressure?: ContextPressure;
 }
 
 /**
@@ -112,7 +124,9 @@ export function historyTokens(branch: BranchEntryLike[]): number {
 
 /**
  * 压缩判定 + 切点计算（纯函数）。
- * 触发条件：分支上「活着的」叙事拍数 ≥ 保留拍数 + 周期，且可裁正文够长。
+ * 触发条件满足其一即可：
+ * 1) 固定拍数：everyNTurns > 0 且分支上「活着的」叙事拍数 ≥ 保留拍数 + 周期；
+ * 2) 被动吃紧：contextPressure 超过 contextWindow − reserveTokens（即使 everyNTurns = 0 也生效）。
  * 返回 null = 本拍不压缩。
  */
 export function planCompaction(branch: BranchEntryLike[], opts: PlanCompactionOptions): CompactPlan | null {
@@ -120,34 +134,52 @@ export function planCompaction(branch: BranchEntryLike[], opts: PlanCompactionOp
 	branch = applyDraftRevisions(storyBranch(branch), { omitEditRequests: true });
 	const keep = opts.keepRecentBeats ?? KEEP_RECENT_BEATS;
 	const minChars = opts.minChars ?? MIN_COMPACT_CHARS;
-	if (!Number.isFinite(opts.everyNTurns) || opts.everyNTurns <= 0) return null;
 
 	// 已被上一份摘要覆盖的前缀不再参与
 	const active = activeSummary(branch);
 	const live = active ? branch.slice(active.cut) : branch;
 
-	// 拍的边界 = 用户消息；最近 keep 拍原样保留
+	// 拍的边界 = 用户消息（含导入会话的 rp-import）；最近 keep 拍原样保留
 	const beatStarts: number[] = [];
 	for (let i = 0; i < live.length; i++) {
 		const e = live[i];
-		if (e.type === "message" && e.message?.role === "user") beatStarts.push(i);
+		if (
+			(e.type === "message" && e.message?.role === "user") ||
+			(e.type === "custom_message" && e.customType === "rp-import")
+		) {
+			beatStarts.push(i);
+		}
 	}
-	if (beatStarts.length < keep + opts.everyNTurns) return null;
 
-	const cutAt = beatStarts[beatStarts.length - keep];
+	const turnDue = Number.isFinite(opts.everyNTurns) && opts.everyNTurns > 0 && beatStarts.length >= keep + opts.everyNTurns;
+	let pressureDue = false;
+	if (opts.contextPressure && opts.contextPressure.usedTokens > 0 && opts.contextPressure.contextWindow > 0) {
+		const cw = opts.contextPressure.contextWindow;
+		const reserve = opts.contextPressure.reserveTokens ?? Math.min(16384, Math.floor(cw * 0.25));
+		pressureDue = opts.contextPressure.usedTokens > cw - reserve;
+	}
+	if (!turnDue && !pressureDue) return null;
+
+	// 常规固定周期守住 keep 拍；仅因上下文吃紧被动触发且活拍不足 keep+1 时，退让保留拍数（至少留 1 拍、裁 1 拍），防死锁
+	const effectiveKeep =
+		turnDue || beatStarts.length > keep ? keep : Math.max(1, Math.min(keep, beatStarts.length - 1));
+	if (beatStarts.length <= effectiveKeep) return null;
+
+	const cutAt = beatStarts[beatStarts.length - effectiveKeep];
 	if (cutAt <= 0) return null;
 	const covered = live.slice(0, cutAt);
 	const coversThroughId = covered[covered.length - 1]?.id;
 	if (!coversThroughId) return null; // 无 id 的条目（异常树）不敢下刀
 
 	const conversationText = serializeForSummary(covered, opts.userName, opts.charName);
-	if (conversationText.length < minChars) return null;
+	const effectiveMinChars = pressureDue ? Math.min(minChars, MANUAL_MIN_COMPACT_CHARS) : minChars;
+	if (conversationText.length < effectiveMinChars) return null;
 
 	const prev = active?.summary || opts.previousSummaryFallback?.trim() || undefined;
 	return {
 		coversThroughId,
 		covered,
-		turns: beatStarts.length - keep,
+		turns: beatStarts.length - effectiveKeep,
 		conversationText,
 		...(prev ? { previousSummary: prev } : {}),
 	};
@@ -226,6 +258,8 @@ interface CompactRunInput {
 	storyDir?: string;
 	/** 项目级跨会话前情兜底（当前会话尚无 rp-summary 时合并 `<子项目>/前情提要.md`） */
 	previousSummaryFallback?: string;
+	/** 上下文吃紧被动触发信息 */
+	contextPressure?: ContextPressure;
 }
 
 export type CompactOutcome =
@@ -247,6 +281,7 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 		minChars: input.minChars,
 		...(input.storyDir !== undefined ? { storyDir: input.storyDir } : {}),
 		...(input.previousSummaryFallback ? { previousSummaryFallback: input.previousSummaryFallback } : {}),
+		...(input.contextPressure ? { contextPressure: input.contextPressure } : {}),
 	});
 	if (!plan) return { kind: "skipped", reason: "not-due" };
 
@@ -255,8 +290,8 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 	// agent 压的是「章」（正文文件，本就不在上下文里，产物只是【前情提要】的刷新）。
 	const fileMode = plan.coveredFiles !== undefined;
 	const startDetail = fileMode
-		? `正在刷新前情提要（${plan.turns} 章 · ${plan.conversationText.length} 字）…`
-		: `正在压缩前情（${plan.turns} 拍 · ${plan.conversationText.length} 字）…`;
+		? t("正在刷新前情提要（{turns} 章 · {chars} 字）…", { turns: plan.turns, chars: plan.conversationText.length })
+		: t("正在压缩前情（{turns} 拍 · {chars} 字）…", { turns: plan.turns, chars: plan.conversationText.length });
 	deps.onActivity?.(startDetail);
 	deps.onCompaction?.({ state: "start", detail: startDetail });
 
@@ -269,19 +304,27 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 	});
 	const resp = await deps.sideText(prompt.systemPrompt, prompt.userText);
 	if (typeof resp !== "string") {
-		deps.onCompaction?.({ state: "end", ok: false, detail: `${fileMode ? "前情提要刷新" : "压缩"}失败：${resp.error}` });
+		const failDetail = fileMode
+			? t("前情提要刷新失败：{error}", { error: resp.error })
+			: t("压缩失败：{error}", { error: resp.error });
+		deps.onCompaction?.({ state: "end", ok: false, detail: failDetail });
 		return { kind: "failed", error: resp.error };
 	}
 	const summary = resp.trim();
 	if (!summary) {
-		deps.onCompaction?.({ state: "end", ok: false, detail: `${fileMode ? "前情提要刷新" : "压缩"}失败：摘要为空` });
-		return { kind: "failed", error: "摘要为空" };
+		const emptyErr = t("摘要为空");
+		const failDetail = fileMode
+			? t("前情提要刷新失败：{error}", { error: emptyErr })
+			: t("压缩失败：{error}", { error: emptyErr });
+		deps.onCompaction?.({ state: "end", ok: false, detail: failDetail });
+		return { kind: "failed", error: emptyErr };
 	}
 
 	// R9 叶守卫：调用期间树动过（swipe/rewind/切线）→ 整体丢弃
 	if (deps.getLeafId() !== leafBefore) {
-		deps.onActivity?.("压缩已丢弃（本拍期间切换了分支）");
-		deps.onCompaction?.({ state: "end", ok: false, detail: "压缩已丢弃（本拍期间切换了分支）" });
+		const staleMsg = t("压缩已丢弃（本拍期间切换了分支）");
+		deps.onActivity?.(staleMsg);
+		deps.onCompaction?.({ state: "end", ok: false, detail: staleMsg });
 		return { kind: "stale" };
 	}
 
@@ -302,8 +345,8 @@ export async function runCompaction(deps: CompactRunDeps, input: CompactRunInput
 		...(plan.coveredFiles ? { coveredFiles: plan.coveredFiles } : {}),
 	});
 	const doneDetail = fileMode
-		? `前情提要已刷新：${plan.turns} 章 ${plan.conversationText.length} 字 → 摘要 ${summary.length} 字`
-		: `前情已压缩：${plan.turns} 拍 ${plan.conversationText.length} 字 → 摘要 ${summary.length} 字`;
+		? t("前情提要已刷新：{turns} 章 {chars} 字 → 摘要 {summaryChars} 字", { turns: plan.turns, chars: plan.conversationText.length, summaryChars: summary.length })
+		: t("前情已压缩：{turns} 拍 {chars} 字 → 摘要 {summaryChars} 字", { turns: plan.turns, chars: plan.conversationText.length, summaryChars: summary.length });
 	deps.onActivity?.(doneDetail);
 	deps.onCompaction?.({ state: "end", ok: true, detail: doneDetail });
 	return { kind: "compacted", summary, turns: plan.turns, chars: plan.conversationText.length };

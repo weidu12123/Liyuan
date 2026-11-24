@@ -283,3 +283,13 @@ test("同 id 多条条目：modelsForRuntime 与 applyEntryThinkingMap 保留后
 	assert.equal(patched.reasoning, true);
 	assert.equal(bareBase.thinkingLevelMap, undefined);
 });
+
+test("modelsForRuntime：未显式配置 input 的模型默认补齐 ['text', 'image']，显式配置的原样保留", () => {
+	const runtimeModels = modelsForRuntime([
+		{ id: "gpt-5.4" },
+		{ id: "text-only-model", input: ["text"] },
+	]);
+	assert.deepEqual(runtimeModels[0]!.input, ["text", "image"]);
+	assert.deepEqual(runtimeModels[1]!.input, ["text"]);
+});
+

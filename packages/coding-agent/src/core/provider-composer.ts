@@ -161,7 +161,7 @@ function modelFromJson(
 		// A configured thinking level, including off, needs reasoning controls to be sent.
 		reasoning: definition.reasoning ?? definition.thinkingLevel !== undefined,
 		thinkingLevelMap: definition.thinkingLevelMap,
-		input: (definition.input ?? ["text"]) as ("text" | "image")[],
+		input: (definition.input ?? ["text", "image"]) as ("text" | "image")[],
 		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: definition.contextWindow ?? 128000,
 		maxTokens: definition.maxTokens ?? 16384,

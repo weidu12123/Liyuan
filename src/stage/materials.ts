@@ -10,6 +10,7 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { getUiLocale } from "../i18n/index.ts";
 import { resolveCardSpace } from "../cardspace.ts";
 
 import { loadCardFile, readCardRawJson } from "../card.ts";
@@ -232,6 +233,8 @@ function inputStamp(cwd: string, config: RpConfig): string {
 	parts.push(fileStamp(cardRulesPath(dirname(resolvePath(cwd, config.card)))));
 	// 卡档案（刀3）：生成/编辑/删除下一拍即生效
 	parts.push(fileStamp(join(dirname(resolvePath(cwd, config.card)), CARD_AGENTS_FILE)));
+	// 界面语言影响全局默认槽位中英切换，纳入指纹以便切语言立即生效
+	parts.push(`ui:${getUiLocale()}`);
 	// disabledLore 住在 config 里，已被 config 指纹覆盖
 	return parts.join("|");
 }

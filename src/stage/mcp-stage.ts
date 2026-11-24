@@ -15,6 +15,7 @@
  * 3. **hub 不由本模块创建**：宿主注入，避免引擎持有第二个 hub 实例（单例已挂 globalThis）。
  */
 
+import { getUiLocale, t } from "../i18n/index.ts";
 import {
 	parseQualifiedMcpTool,
 	parametersFromMcpSchema,
@@ -133,16 +134,19 @@ export async function runMcpStageTool(
 			.map((c) => c.text)
 			.join("\n")
 			.trim();
+		const en = getUiLocale() === "en";
 		return {
-			text: text || (r.isError ? "工具返回错误（无文本内容）" : "（无输出）"),
+			text: text || (r.isError ? (en ? "Tool returned an error (no text content)" : "工具返回错误（无文本内容）") : (en ? "(no output)" : "（无输出）")),
 			activity: `MCP ${serverId} · ${toolName}`,
 			...(r.isError ? { isError: true } : {}),
 		};
 	} catch (e) {
 		// 抛异常也要回成工具结果：让模型看到失败原因并自己决定改道，而不是整拍崩掉
 		return {
-			text: `MCP 调用失败：${e instanceof Error ? e.message : String(e)}`,
-			activity: `MCP ${serverId} · ${toolName}（失败）`,
+			text: getUiLocale() === "en"
+				? `MCP call failed: ${e instanceof Error ? e.message : String(e)}`
+				: `MCP 调用失败：${e instanceof Error ? e.message : String(e)}`,
+			activity: t("MCP {server} · {tool}（失败）", { server: serverId, tool: toolName }),
 			isError: true,
 		};
 	}

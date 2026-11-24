@@ -17,8 +17,11 @@ import ts from "typescript";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** 要扫的外壳源码 */
+/** 要扫的外壳源码（严格检查：不允许未走 t() 的中文字面量） */
 export const SCAN_ROOTS = ["web/src", "server", "src/activity-format.ts", "src/cardspace.ts"];
+
+/** 其余服务端/引擎目录：仅收集已走 t(...) 的键以核对英文存在性与防死条目（不强制扫描送模/协议字面量） */
+const EXTRA_KEY_SCAN_ROOTS = ["src"];
 
 /**
  * 内容面文件：里面的中文是给 iframe / 卡脚本的兼容层或内容处理，不是外壳（PLAN-I18N §一）。
@@ -140,26 +143,34 @@ export function readCatalogs() {
 
 export function runCheck() {
 	const files = SCAN_ROOTS.flatMap((r) => walk(r)).filter((rel) => !isContentFile(rel));
+	const strictSet = new Set(files);
 	const misses = [];
 	const usedKeys = new Set();
-	for (const rel of files) {
-		const r = scanFile(rel);
-		for (const m of r.misses) misses.push({ file: rel, ...m });
-		for (const k of r.keys) usedKeys.add(k);
-	}
-	const rows = readCatalogs();
 	// 两棵树各自核对：web 源码的键对 web 目录，服务端源码的键对 src/i18n 目录
 	const treeOf = (rel) => (rel.startsWith("web/") ? "web" : "server");
 	const usedByTree = { web: new Set(), server: new Set() };
 	const knownByTree = { web: new Set(), server: new Set() };
 	for (const rel of files) {
 		const r = scanFile(rel);
+		for (const m of r.misses) misses.push({ file: rel, ...m });
 		for (const k of r.keys) {
+			usedKeys.add(k);
 			usedByTree[treeOf(rel)].add(k);
 			knownByTree[treeOf(rel)].add(k);
 		}
 		for (const k of r.ignored) knownByTree[treeOf(rel)].add(k);
 	}
+	for (const rel of EXTRA_KEY_SCAN_ROOTS.flatMap((r) => walk(r))) {
+		if (strictSet.has(rel) || rel.startsWith("src/i18n/")) continue;
+		const r = scanFile(rel);
+		for (const k of r.keys) {
+			usedKeys.add(k);
+			usedByTree.server.add(k);
+			knownByTree.server.add(k);
+		}
+		for (const k of r.ignored) knownByTree.server.add(k);
+	}
+	const rows = readCatalogs();
 	const byKey = { web: new Map(), server: new Map() };
 	for (const r of rows) {
 		const tree = treeOf(r.file);

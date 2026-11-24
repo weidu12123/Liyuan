@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import { cardAuthoringDirectory } from "./card-authoring.ts";
 import { loadCardConfig, resolveCardSpace, saveCardConfig } from "./cardspace.ts";
+import { getUiLocale } from "./i18n/index.ts";
 import { type DenylistRule, matchDenylist, normalizeCommand, readDenylistRules } from "./bash-denylist.ts";
 import type { ConversationEntry } from "./conversation-mode.ts";
 import { mountedLorebookPaths } from "./lorebook.ts";
@@ -52,6 +53,9 @@ export const SANDBOX_GRANT_TYPE = "liyuan-sandbox";
 const TOOL_VERB: Record<NativeToolName, string> = {
 	read: "读取", grep: "搜索", find: "查找", ls: "列出", edit: "修改", write: "写入", bash: "执行命令",
 };
+const TOOL_VERB_EN: Record<NativeToolName, string> = {
+	read: "read", grep: "search", find: "find in", ls: "list", edit: "edit", write: "write", bash: "run command",
+};
 
 interface SandboxScope {
 	cwd: string;
@@ -65,6 +69,8 @@ interface SandboxScope {
 	readRoots: string[];
 	/** 命令黑名单规则（`<agentDir>/BASH_DENYLIST.txt`，用户可见可改）；空表＝不拦 */
 	denyRules: DenylistRule[];
+	/** Turbo 模式：完全开放权限 */
+	turboMode?: boolean;
 }
 
 export interface SandboxGrants {
@@ -172,7 +178,7 @@ export function grantUnit(cwd: string, target: string): string {
 
 export function sandboxScope(
 	cwd: string,
-	config: { card: string; lorebook?: string; lorebooks?: string[] },
+	config: { card: string; lorebook?: string; lorebooks?: string[]; turboMode?: boolean },
 	chatDir?: string,
 ): SandboxScope {
 	const cardAbs = resolve(cwd, config.card);
@@ -202,6 +208,7 @@ export function sandboxScope(
 		roots: roots.map(realExisting),
 		readRoots: readRoots.map(realExisting),
 		denyRules: readDenylistRules(),
+		turboMode: config.turboMode === true,
 	};
 }
 
@@ -269,14 +276,21 @@ export function harnessManagedPath(cardDir: string | undefined, target: string):
 }
 
 function harnessManagedDenyReason(cwd: string, tool: NativeToolName, target: string): string {
+	const en = getUiLocale() === "en";
 	const name = basename(target);
 	if (name === CHAT_PANELS_FILE) {
-		return `${display(cwd, target)} 由梨园面板系统管理，原生 ${tool} 不能直接修改；请使用 panel_write / panel_close 工具。`;
+		return en
+			? `${display(cwd, target)} is managed by Liyuan's panel system and cannot be modified directly with ${tool}; use panel_write / panel_close instead.`
+			: `${display(cwd, target)} 由梨园面板系统管理，原生 ${tool} 不能直接修改；请使用 panel_write / panel_close 工具。`;
 	}
 	if (name === CHAT_STATE_FILE) {
-		return `${display(cwd, target)} 由梨园世界状态系统管理，原生 ${tool} 不能直接修改；请使用 world_state_update 工具。`;
+		return en
+			? `${display(cwd, target)} is managed by Liyuan's world-state system and cannot be modified directly with ${tool}; use world_state_update instead.`
+			: `${display(cwd, target)} 由梨园世界状态系统管理，原生 ${tool} 不能直接修改；请使用 world_state_update 工具。`;
 	}
-	return `${display(cwd, target)} 属于梨园管理的数据（快照仓 / 会话树 / 内部状态），原生 ${tool} 不能写。`;
+	return en
+		? `${display(cwd, target)} is managed internally by Liyuan (snapshots / session tree / internal state) and cannot be written with ${tool}.`
+		: `${display(cwd, target)} 属于梨园管理的数据（快照仓 / 会话树 / 内部状态），原生 ${tool} 不能写。`;
 }
 
 /**
@@ -284,15 +298,20 @@ function harnessManagedDenyReason(cwd: string, tool: NativeToolName, target: str
  */
 function bashChatEscapeReason(command: string, scope: SandboxScope): string | undefined {
 	if (!scope.chatDir) return undefined;
+	const en = getUiLocale() === "en";
 	if (/(?:^|[\s"'=/\\])\.\.(?:[\s"'/\\]|$)/.test(command)) {
-		return "已拦截：bash 仅限在当前项目资产目录内操作，禁止通过 .. 访问上级或外部目录；外部操作请使用专用工具。";
+		return en
+			? "Blocked: bash is restricted to the current project asset directory; traversing outside via '..' is not allowed. Use dedicated tools for external resources."
+			: "已拦截：bash 仅限在当前项目资产目录内操作，禁止通过 .. 访问上级或外部目录；外部操作请使用专用工具。";
 	}
 	if (
 		/(?:^|[\s"'=/\\])(?:AGENTS\.md|卡\.json|补充设定集\.json|liyuan\.config\.json|面板\.json|世界状态\.json|世界线\.json|对话\.json)(?:[\s"'/\\]|$)/.test(
 			command,
 		)
 	) {
-		return "已拦截：禁止通过 bash 直接操作角色卡或梨园托管的状态文件；请使用 card_project / panel_write / world_state_update 等专用工具。";
+		return en
+			? "Blocked: direct bash access to character card or Liyuan-managed state files is forbidden; use dedicated tools such as card_project / panel_write / world_state_update."
+			: "已拦截：禁止通过 bash 直接操作角色卡或梨园托管的状态文件；请使用 card_project / panel_write / world_state_update 等专用工具。";
 	}
 	let stripped = command;
 	for (const allowed of [
@@ -304,7 +323,9 @@ function bashChatEscapeReason(command: string, scope: SandboxScope): string | un
 		if (allowed && allowed !== ".") stripped = stripped.split(allowed).join("");
 	}
 	if (/(?:^|[\s"'=/\\])(?:cards|assets)[\\/]/.test(stripped)) {
-		return "已拦截：bash 仅限在当前项目资产目录内操作，禁止直接读写外部卡目录或公共资产库；请使用 card_project 等专用工具。";
+		return en
+			? "Blocked: bash is restricted to the current project asset directory; reading/writing external card folders or shared asset libraries directly is forbidden. Use dedicated tools such as card_project."
+			: "已拦截：bash 仅限在当前项目资产目录内操作，禁止直接读写外部卡目录或公共资产库；请使用 card_project 等专用工具。";
 	}
 	return undefined;
 }
@@ -327,12 +348,21 @@ function allowedByPrefix(command: string, prefixes: string[]): boolean {
 }
 
 export function sandboxVerdict(tool: string, input: Record<string, unknown>, scope: SandboxScope, grants: SandboxGrants): SandboxVerdict {
+	if (scope.turboMode) return { kind: "allow" };
+	const en = getUiLocale() === "en";
 	const access = NATIVE_TOOL_ACCESS[tool as NativeToolName];
 	if (!access) return { kind: "allow" };
 	if (access === "bash") {
 		const command = String(input.command ?? "");
 		const hit = matchDenylist(command, scope.denyRules);
-		if (hit) return { kind: "deny", reason: `已拦截：命中命令黑名单「${hit.raw}」，梨园不允许执行。如确有需要，请向用户说明。` };
+		if (hit) {
+			return {
+				kind: "deny",
+				reason: en
+					? `Blocked: matched command denylist rule "${hit.raw}". Liyuan does not permit running it. Explain to the user if truly needed.`
+					: `已拦截：命中命令黑名单「${hit.raw}」，梨园不允许执行。如确有需要，请向用户说明。`,
+			};
+		}
 		if (scope.chatDir) {
 			const escapeReason = bashChatEscapeReason(command, scope);
 			if (escapeReason) return { kind: "deny", reason: escapeReason };
@@ -342,16 +372,28 @@ export function sandboxVerdict(tool: string, input: Record<string, unknown>, sco
 	}
 	const target = realExisting(sandboxTarget(tool, input, scope)!);
 	if (isOtherChatPath(scope.cardDir, scope.chatDir, target)) {
-		return { kind: "deny", reason: `${display(scope.cwd, target)} 属于其他独立项目，当前项目无权访问。` };
+		return {
+			kind: "deny",
+			reason: en
+				? `${display(scope.cwd, target)} belongs to another project and cannot be accessed from the current project.`
+				: `${display(scope.cwd, target)} 属于其他独立项目，当前项目无权访问。`,
+		};
 	}
 	if (isLegacyCardMemoryPath(scope.cardDir, target)) {
-		const hint = scope.chatDir ? display(scope.cwd, join(scope.chatDir, CHAT_DOCS_MEMORY_DIR)) : "当前项目的 记忆/ 目录";
-		return { kind: "deny", reason: `${display(scope.cwd, target)} 是已废除的旧版卡级记忆目录；当前项目的记忆与大纲资产请访问 ${hint}。` };
+		const hint = scope.chatDir ? display(scope.cwd, join(scope.chatDir, CHAT_DOCS_MEMORY_DIR)) : (en ? "the current project's 记忆/ directory" : "当前项目的 记忆/ 目录");
+		return {
+			kind: "deny",
+			reason: en
+				? `${display(scope.cwd, target)} is a deprecated card-level memory directory; access the current project's memory and outline assets under ${hint}.`
+				: `${display(scope.cwd, target)} 是已废除的旧版卡级记忆目录；当前项目的记忆与大纲资产请访问 ${hint}。`,
+		};
 	}
 	if (access === "write" && basename(target) === "AGENTS.md") {
 		return {
 			kind: "deny",
-			reason: `${display(scope.cwd, target)} 是梨园根据角色卡自动生成的只读档案，原生 ${tool} 不能直接修改；修改角色卡请使用 card_project 工具，编写本项目局部守则请修改 APPEND_SYSTEM.md。`,
+			reason: en
+				? `${display(scope.cwd, target)} is a read-only handbook generated from the character card and cannot be edited directly with ${tool}; use card_project to edit the card, or edit APPEND_SYSTEM.md for local project rules.`
+				: `${display(scope.cwd, target)} 是梨园根据角色卡自动生成的只读档案，原生 ${tool} 不能直接修改；修改角色卡请使用 card_project 工具，编写本项目局部守则请修改 APPEND_SYSTEM.md。`,
 		};
 	}
 	if (access === "write" && harnessManagedPath(scope.cardDir, target)) {
@@ -364,7 +406,9 @@ export function sandboxVerdict(tool: string, input: Record<string, unknown>, sco
 	if (access === "write" && scope.chatDir) {
 		return {
 			kind: "deny",
-			reason: `${display(scope.cwd, target)} 位于当前项目资产目录之外，原生 ${tool} 仅限在当前项目资产目录（${display(scope.cwd, scope.chatDir)}）内使用；修改角色卡、开场白、世界书或脚本请使用 card_project 等专用工具。`,
+			reason: en
+				? `${display(scope.cwd, target)} is outside the current project asset directory; native ${tool} is restricted to ${display(scope.cwd, scope.chatDir)}. Use dedicated tools like card_project to edit character cards, greetings, lorebooks, or scripts.`
+				: `${display(scope.cwd, target)} 位于当前项目资产目录之外，原生 ${tool} 仅限在当前项目资产目录（${display(scope.cwd, scope.chatDir)}）内使用；修改角色卡、开场白、世界书或脚本请使用 card_project 等专用工具。`,
 		};
 	}
 	return { kind: "ask", tool: tool as NativeToolName, target, unit: grantUnit(scope.cwd, target) };
@@ -398,6 +442,7 @@ export function filterSandboxResultText(
 	text: string,
 	scope: SandboxScope,
 ): string {
+	if (scope.turboMode) return text;
 	if (tool !== "ls" && tool !== "find" && tool !== "grep") return text;
 	if (!scope.cardDir) return text;
 	const searchBase = sandboxTarget(tool, input, scope);
@@ -540,42 +585,49 @@ const display = (cwd: string, p: string): string => {
 };
 
 export function describeAsk(v: Exclude<SandboxVerdict, { kind: "allow" } | { kind: "deny" }>, scope: SandboxScope): AskCard {
+	const en = getUiLocale() === "en";
 	const always = scope.cardDir !== undefined;
 	if (v.kind === "ask-bash") {
 		const prefix = commandPrefix(v.command);
 		return {
-			question: `请求执行命令（bash 不受卡目录限制）：\n${v.command}`,
+			question: en
+				? `Request to run command (bash is not restricted to the card folder):\n${v.command}`
+				: `请求执行命令（bash 不受卡目录限制）：\n${v.command}`,
 			options: [
-				{ label: "允许一次", action: "once" },
-				...(always && prefix ? [{ label: `以后不再问「${prefix}」（本卡）`, action: "always" as const }] : []),
-				{ label: "拒绝", action: "deny" },
+				{ label: en ? "Allow once" : "允许一次", action: "once" },
+				...(always && prefix
+					? [{ label: en ? `Always allow "${prefix}" (this card)` : `以后不再问「${prefix}」（本卡）`, action: "always" as const }]
+					: []),
+				{ label: en ? "Deny" : "拒绝", action: "deny" },
 			],
-			denied: "用户拒绝执行该命令。",
+			denied: en ? "User declined to run this command." : "用户拒绝执行该命令。",
 			grant: { bashPrefix: prefix },
 		};
 	}
 	const root = realExisting(scope.cwd);
-	const unitText = v.unit === root ? "整个工程根（含其他卡）"
-		: v.unit === realExisting(cardsRoot(scope.cwd)) ? "整个卡库（含其他卡）"
-		: display(scope.cwd, v.unit);
-	const verb = TOOL_VERB[v.tool];
+	const unitText = v.unit === root
+		? (en ? "entire project root (including other cards)" : "整个工程根（含其他卡）")
+		: v.unit === realExisting(cardsRoot(scope.cwd))
+			? (en ? "entire card library (including other cards)" : "整个卡库（含其他卡）")
+			: display(scope.cwd, v.unit);
+	const verb = (en ? TOOL_VERB_EN : TOOL_VERB)[v.tool];
 	const target = display(scope.cwd, v.target);
 	return {
-		question: `请求${verb}：${target}\n范围：${unitText}`,
+		question: en ? `Request to ${verb}: ${target}\nScope: ${unitText}` : `请求${verb}：${target}\n范围：${unitText}`,
 		options: [
-			{ label: "允许一次", action: "once" },
-			{ label: "本会话允许", action: "session" },
-			...(always ? [{ label: "永久允许（本卡）", action: "always" as const }] : []),
-			{ label: "拒绝", action: "deny" },
+			{ label: en ? "Allow once" : "允许一次", action: "once" },
+			{ label: en ? "Allow for this session" : "本会话允许", action: "session" },
+			...(always ? [{ label: en ? "Always allow (this card)" : "永久允许（本卡）", action: "always" as const }] : []),
+			{ label: en ? "Deny" : "拒绝", action: "deny" },
 		],
-		denied: `用户拒绝了本次${verb}：${target}。`,
+		denied: en ? `User declined to ${verb}: ${target}.` : `用户拒绝了本次${verb}：${target}。`,
 		grant: { dir: v.unit },
 	};
 }
 
 interface SandboxGateDeps {
 	cwd: string;
-	config: { card: string; lorebook?: string; lorebooks?: string[] };
+	config: { card: string; lorebook?: string; lorebooks?: string[]; turboMode?: boolean };
 	chatDir?: string;
 	sessionGrants: () => SandboxGrants;
 	rememberSession: (grant: SandboxGrant) => void;
@@ -626,14 +678,19 @@ export function createSandboxGate(deps: SandboxGateDeps): (tool: string, input: 
 			deps.log?.(`${tool} ${display(scope.cwd, sandboxTarget(tool, input, scope) ?? "")} → deny`);
 			return v.reason;
 		}
+		const en = getUiLocale() === "en";
 		const card = describeAsk(v, scope);
-		if (!deps.ask) return `${card.denied}卡目录之外的访问需要用户批准，当前环境无法询问。`;
+		if (!deps.ask) {
+			return en
+				? `${card.denied} Access outside the card folder requires user approval, which cannot be requested in this environment.`
+				: `${card.denied}卡目录之外的访问需要用户批准，当前环境无法询问。`;
+		}
 		const answer = await deps.ask(card.question, card.options.map((o) => o.label));
 		const action = card.options.find((o) => o.label === answer)?.action ?? (answer === undefined ? "stop" : "deny");
 		deps.log?.(`${tool} ${v.kind === "ask-bash" ? v.command : display(scope.cwd, v.target)} → ${action}`);
 		if (action === "stop") {
 			deps.onStop();
-			return "用户已停止。";
+			return en ? "Stopped by user." : "用户已停止。";
 		}
 		if (action === "deny") return card.denied;
 		if (action === "session") deps.rememberSession(card.grant);

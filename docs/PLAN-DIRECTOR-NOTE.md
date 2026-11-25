@@ -81,10 +81,10 @@ regenerate(directorNote?: string)                      // engine.ts:744
 - 2026-10-16：**刀 1 落地（已随 `b5a1b74` 提交）**。
   - 改：`src/stage/assemble.ts`（`directorNote` 选项＋末块）、`src/stage/engine.ts`（`performTurn`/`regenerate`/`#run`/`#turn` 加参＋队列随行）、`server/main.ts`（`pendingDirectorNote` 暂存＋`/note` 拦截＋3 个消费点＋`bindSession` 清空）、`src/commands.ts`（RP_COMMANDS 加 `note`）、`src/i18n/en/server.ts`（3 条）。
   - 单测：`test/stage-assemble.test.ts` 一条（有备注→末块且其余逐字一致；空白/无备注→不出块）；`test/stage-engine.test.ts` 两条（送模含备注且树不含、一次即焚；regenerate 路径同）。全量 858 项 856 过（**2 项既有实卡红**：cardfront-pipeline、mvu）；i18n-check 干净；对触及文件跑了 tsc，无新增诊断（报错全在未动的旧行上）。
-  - **CLI 实弹**（隔离实例＋捕获代理→api.weidu.my，模型 gemini-3.8-flash-high）：`/note 让她傲娇一点…`→「我推开门，走进茶棚。」→ 抓包末条 user 消息＝【世界状态】…【语言】→**【导演备注】→原话**（位置正确）；`/note 更冷淡一些…`→`/reroll` 同样成立；不武装的下一拍请求无该块（一次即焚）；**会话树 30 条 0 条含「导演备注」**，user 条目只有两句原话；场记旁路（msgs=2）从不带备注。
+  - **CLI 实弹**（隔离实例＋捕获代理→<upstream-proxy>，模型 gemini-3.8-flash-high）：`/note 让她傲娇一点…`→「我推开门，走进茶棚。」→ 抓包末条 user 消息＝【世界状态】…【语言】→**【导演备注】→原话**（位置正确）；`/note 更冷淡一些…`→`/reroll` 同样成立；不武装的下一拍请求无该块（一次即焚）；**会话树 30 条 0 条含「导演备注」**，user 条目只有两句原话；场记旁路（msgs=2）从不带备注。
   - 观察（实弹）：带备注与不带的成品对比，重 roll 那拍明显更冷淡（「声音平得像…」「收起你的铜板」），无客服腔、无角色「听见导演」——观察项未触发。
 - 2026-10-16：**刀 2 落地（已随 `b5a1b74` 提交）**。
   - 改：`web/src/App.tsx`（备注按钮＋备注行＋`sendNotes` 接线四处生成动作）、`web/src/components/Messages.tsx`（备注小气泡）、`web/src/app.css`（备注行/气泡样式＋composer-box flex-wrap）、`web/src/i18n/en/app.ts`＋`messages.ts`（6 条）、`src/stage/engine.ts`（落树处记 `details.rpNotes`）、`server/wire.ts`（`WireMsg.notes` 投影）。
   - 单测：`stage-engine` 两条扩断言（回复记 rpNotes、无备注不记；重 roll 变体记自己的备注）；`wire` 一条（投影＋空白/坏值过滤）。全量 859 项 857 过（2 项既有实卡红）；i18n-check 干净；web typecheck 无新增诊断、构建过（dist 已更新）。
-  - **真浏览器验收**（隔离实例＋本地假模型 stub，真 Chrome；上游 api.weidu.my 当刻网络不通，改走确定性 stub）：备注行 UI 正常 → 发送后**用户气泡下出现备注小气泡**；带备注「生成」重 roll → 气泡变成新备注（挂在变体上）；**刷新后气泡仍在**（树上重放）；无备注的第三拍不新增气泡。抓包：三条生成请求 `【导演备注】` 在场（首拍/重 roll）、第三拍无、场记旁路从无；**会话树 22 条 0 条正文含备注**，user 条只有原话，assistant `rpNotes` = 各自备注。
+  - **真浏览器验收**（隔离实例＋本地假模型 stub，真 Chrome；上游 <upstream-proxy> 当刻网络不通，改走确定性 stub）：备注行 UI 正常 → 发送后**用户气泡下出现备注小气泡**；带备注「生成」重 roll → 气泡变成新备注（挂在变体上）；**刷新后气泡仍在**（树上重放）；无备注的第三拍不新增气泡。抓包：三条生成请求 `【导演备注】` 在场（首拍/重 roll）、第三拍无、场记旁路从无；**会话树 22 条 0 条正文含备注**，user 条只有原话，assistant `rpNotes` = 各自备注。
   - 未做：`swipe next` 末条触发的再生成不带备注（导航与生成同键，不猜；带备注重 roll 走「生成」按钮）。

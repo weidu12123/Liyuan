@@ -228,6 +228,7 @@ const mustAbsent = [
 	".liyuan-memory",
 	".liyuan-state",
 	".liyuan-uploads",
+	"assets/personas",
 	"CLAUDE.md",
 	"AGENTS.md",
 	"start.bat",

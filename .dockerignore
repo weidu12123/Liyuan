@@ -24,6 +24,10 @@ liyuan.agent.json
 liyuan.agent.meta.json
 liyuan-preset.json
 .liyuan-personas.json
+.liyuan-mcp.json
+.mcp.json
+.claude
+.superpowers
 liyuan-profiles
 # compose 的宿主挂载目录：用户数据，绝不进镜像
 data
@@ -35,6 +39,7 @@ data
 cards
 assets/ab-test
 assets/import-test
+assets/gen
 assets/personas
 assets/presets
 # 资料保护（刀3）：快照对象仓与回收站是宿主上的用户数据，绝不进镜像
@@ -42,6 +47,16 @@ assets/.vault
 assets/.回收站
 # 预设→skill 装载期生成物（用户数据）：只随 volume 走，不进镜像
 skills/预设-*
+# 研发临时文件与桌面构建目录
+_*
+liyuan-design*
+导出*
+scratch
+summaries
+output
+persist
+artifacts
+desktop
 test
 docs
 scripts

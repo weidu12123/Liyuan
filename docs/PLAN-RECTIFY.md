@@ -12,7 +12,7 @@
 
 **问题二（预设污染）**：预设＝酒馆唯一可编程槽里「用散文写的装配程序」，其内容为旧执行环境（无状态/无工具/每轮重发/一次生成）而写；梨园每造一个真机制，预设里就多一层违禁品。定案：分拣五去向——留驻（破限/边界，原文直通）、迁 skill（文风/方法论）、退场（COT/变量协议/自检/摘要/假对话）、数据化（状态栏/点评类输出模块→输出合约）、参数（samplers 照旧）。分拣机制从识别器换成装载期一次性模型声明。
 
-**问题三（skill 设计）**：经实地解剖（superpowers / ui-ux-pro-max / SoftwareCopyright-Skill / codex 官方文档 / agentskills.io 标准，材料在 `E:\silly-agent\_skill-research`）：采标准原样；三级渐进披露；触发走结构钩子（梨园的 harness 优势——断点送索引，不学 superpowers 的说服力轰炸）；场面包＝触发表＋核心写法＋示范段＋反模式表；写包走 TDD（无 skill 基线→写→复测→堵漏）。
+**问题三（skill 设计）**：经实地解剖（superpowers / ui-ux-pro-max / SoftwareCopyright-Skill / codex 官方文档 / agentskills.io 标准）：采标准原样；三级渐进披露；触发走结构钩子（梨园的 harness 优势——断点送索引，不学 superpowers 的说服力轰炸）；场面包＝触发表＋核心写法＋示范段＋反模式表；写包走 TDD（无 skill 基线→写→复测→堵漏）。
 
 ---
 

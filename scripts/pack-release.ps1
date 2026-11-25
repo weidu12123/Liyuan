@@ -189,7 +189,7 @@ function Stage-Clean {
     # 卡＝工作空间：cards/<卡文件夹>/ 整棵是用户私有数据（卡本体 + 卡级配置 +
     # 每个子项目的会话/账本/世界线）。漏掉这一行 = 把用户的卡打进公开发布包。
     "cards",
-    "gen", "presets",
+    "gen", "presets", "personas",
     # 资料保护（刀3）：快照对象仓与回收站都是用户数据（可能含卡/世界书正文），绝不随包
     ".vault", ".回收站", "assets/.vault", "assets/.回收站"
   )
@@ -250,15 +250,16 @@ function Stage-Clean {
   # Standalone lorebooks: strip all (Qingwu embeds its own character_book)
   $lore = Join-Path $dest "assets\lorebooks"
   if (Test-Path $lore) {
-    Get-ChildItem $lore -File | Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $lore -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   }
 
-  # User presets: never ship. assets/presets/ is personal/community data (and
-  # gitignored), already excluded via /XD above — this is belt-and-suspenders
-  # against future edits removing that exclusion. Runtime mkdirSync's the dir.
-  $presets = Join-Path $dest "assets\presets"
-  if (Test-Path $presets) {
-    Remove-Item $presets -Recurse -Force -ErrorAction SilentlyContinue
+  # User presets & custom persona avatars: never ship. Both are personal data
+  # (and gitignored), already excluded via /XD above — belt-and-suspenders.
+  foreach ($userAssetDir in @("presets", "personas")) {
+    $p = Join-Path $dest "assets\$userAssetDir"
+    if (Test-Path $p) {
+      Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+    }
   }
 
   # 资料保护（刀3）：快照对象仓与回收站二次防御清除
@@ -412,6 +413,9 @@ if not any(n.endswith('server/mcp/vision-server.mjs') for n in names):
     errors.append('MISSING server/mcp/vision-server.mjs (builtin vision MCP would not ship)')
 if not any(n.endswith('assets/cards/default_Qingwu.json') for n in names):
     errors.append('MISSING assets/cards/default_Qingwu.json (default demo card missing)')
+for slot_en in ('assets/SYSTEM.en.md', 'assets/APPEND_SYSTEM.en.md', 'assets/AGENT_APPEND_SYSTEM.en.md', 'assets/BTW_APPEND_SYSTEM.en.md'):
+    if not any(n.endswith(slot_en) for n in names):
+        errors.append(f'MISSING {slot_en} (English built-in prompt template missing)')
 catalogs = []
 for kind in ('src', 'dist'):
     prefix = f'Liyuan/packages/ai/{kind}/providers/data/'
@@ -424,7 +428,7 @@ if catalogs[0] != catalogs[1]:
 forbidden_dirs = ['.liyuan-memory/', '.liyuan-state/', '.liyuan-uploads/', '.liyuan-lore/',
                   '.liyuan-codex/', '.liyuan-assistant/', '.liyuan-worldline/', '.liyuan-media/',
                   '.liyuan-audio/', '.liyuan-cache/', '.superpowers/', 'scratch/', 'summaries/',
-                  'output/', 'persist/', 'artifacts/', 'test/', 'assets/presets/',
+                  'output/', 'persist/', 'artifacts/', 'test/', 'assets/presets/', 'assets/personas/',
                   'assets/.vault/', 'assets/.回收站/']
 for d in forbidden_dirs:
     hits = [n for n in names if ('/' + d) in n]

@@ -1,6 +1,6 @@
 # 前端大改：回到 IDE 型 agent 的形状
 
-2026-09-09 用户定案：**大改前端**，样式回归 IDE 类 agent（参考物：CodeBuddy 手机版四张截图，本机 `E:\新建文件夹 (13)`，不进仓库）。工坊在新前端里接回（[PLAN-CARD-STUDIO.md](PLAN-CARD-STUDIO.md) 第五节），再继续功能更新。
+2026-09-09 用户定案：**大改前端**，样式回归 IDE 类 agent（参考物：CodeBuddy 手机版四张截图，不进仓库）。工坊在新前端里接回（[PLAN-CARD-STUDIO.md](PLAN-CARD-STUDIO.md) 第五节），再继续功能更新。
 
 ## 一、问题定性
 
